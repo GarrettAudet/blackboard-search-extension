@@ -648,6 +648,11 @@ function setView(view) {
   }
 }
 
+function resetToDefaultView(event) {
+  if (event) event.preventDefault();
+  setView("chat");
+}
+
 function reportError(error) {
   console.error(error);
   setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
@@ -677,6 +682,9 @@ els.refreshBtn.addEventListener("click", () => refreshAll().catch(reportError));
 els.chatViewBtn.addEventListener("click", () => setView("chat"));
 els.transcriptsViewBtn.addEventListener("click", () => setView("transcripts"));
 els.setupViewBtn.addEventListener("click", () => setView("setup"));
+[els.chatViewBtn, els.transcriptsViewBtn, els.setupViewBtn, els.refreshBtn].forEach((button) => {
+  button.addEventListener("dblclick", resetToDefaultView);
+});
 els.providerSelect.addEventListener("change", () => {
   els.modelInput.value = defaultModel(els.providerSelect.value);
 });

@@ -47,9 +47,12 @@ preparing transcript/index data.
 3. Navigate to a course/resource page.
 4. Open the extension side panel.
 5. Click `Crawl`.
-   - Leave `Seed URL` blank to use the active tab.
+   - Crawling starts from the Blackboard portal page and looks for links under
+     `My Courses`.
+   - Course links are crawled first, then sub-links, resource pages, embedded
+     videos, and file links inside those course areas are indexed.
    - Leave `Allowed URL prefix` blank for the current Blackboard site, or paste a
-     narrower folder/course prefix to keep the crawl focused.
+     narrower folder/course prefix if you need to keep the crawl focused.
 6. Use `Scan Active Tab` for a quick one-page refresh when needed.
 7. Search the indexed resources.
 8. If videos are found, import a transcript bundle:

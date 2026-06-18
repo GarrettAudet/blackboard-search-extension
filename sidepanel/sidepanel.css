@@ -395,6 +395,11 @@ input::placeholder {
   color: var(--subtle);
 }
 
+input[readonly] {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+}
+
 .setup-note {
   font-size: 12px;
 }

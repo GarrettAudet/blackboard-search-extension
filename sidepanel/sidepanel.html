@@ -101,8 +101,14 @@
           </div>
 
           <div class="form-grid">
-            <label for="seedInput">Seed URL</label>
-            <input id="seedInput" type="url" placeholder="Leave blank to use active Blackboard tab" autocomplete="off" />
+            <label for="seedInput">Start URL</label>
+            <input
+              id="seedInput"
+              type="url"
+              value="https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1"
+              readonly
+              autocomplete="off"
+            />
 
             <label for="prefixInput">Allowed URL prefix</label>
             <input id="prefixInput" type="url" placeholder="Leave blank for same Blackboard site" autocomplete="off" />
@@ -110,7 +116,7 @@
             <div class="crawl-row">
               <label>
                 <span>Max pages</span>
-                <input id="maxPagesInput" type="number" min="1" max="300" value="80" />
+                <input id="maxPagesInput" type="number" min="1" max="2000" value="500" />
               </label>
               <label>
                 <span>Delay ms</span>

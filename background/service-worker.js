@@ -1,6 +1,8 @@
 const RESOURCE_KEY = "resource_index";
 const TRANSCRIPT_KEY = "transcript_store";
 const META_KEY = "index_meta";
+const DEFAULT_CRAWL_SEED_URL =
+  "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
 
 try {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
@@ -175,15 +177,14 @@ async function scanActiveTab() {
 }
 
 async function crawlSite(payload) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const seedUrl = normalizeUrlFrom(payload.seed_url || payload.seedUrl || tab?.url || "", tab?.url || "");
+  const seedUrl = normalizeUrlFrom(payload.seed_url || payload.seedUrl || DEFAULT_CRAWL_SEED_URL, DEFAULT_CRAWL_SEED_URL);
   if (!seedUrl || !/^https?:\/\//i.test(seedUrl)) return { ok: false, error: "missing_or_invalid_seed_url" };
 
   const allowedPrefix = normalizeUrlFrom(
     payload.allowed_prefix || payload.allowedPrefix || defaultAllowedPrefix(seedUrl),
     seedUrl
   );
-  const maxPages = clampInteger(payload.max_pages || payload.maxPages, 1, 300, 80);
+  const maxPages = clampInteger(payload.max_pages || payload.maxPages, 1, 2000, 500);
   const delayMs = clampInteger(payload.delay_ms || payload.delayMs, 0, 3000, 120);
   const seedOrigin = new URL(seedUrl).origin;
   const queue = [seedUrl];
@@ -211,7 +212,8 @@ async function crawlSite(payload) {
       const page = await fetchCrawlPage(currentUrl);
       resources.push(...page.resources);
 
-      for (const candidate of page.child_urls) {
+      const candidateUrls = page.course_urls?.length && isDefaultPortalUrl(currentUrl) ? page.course_urls : page.child_urls;
+      for (const candidate of candidateUrls) {
         const childUrl = normalizeUrlFrom(candidate, page.final_url || currentUrl);
         if (!canQueuePage(childUrl, { allowedPrefix, seedOrigin, visited, queued })) continue;
         queued.add(childUrl);
@@ -279,6 +281,7 @@ function extractResourcesFromHtml(html, pageUrl) {
   const section = breadcrumbTextFromDocument(document);
   const resources = [];
   const childUrls = [];
+  const courseUrls = myCoursesUrlsFromDocument(document, pageUrl);
   const seen = new Set();
 
   function add(resource) {
@@ -364,7 +367,12 @@ function extractResourcesFromHtml(html, pageUrl) {
     });
   }
 
-  return { final_url: pageUrl, resources, child_urls: uniqueStrings(childUrls) };
+  return {
+    final_url: pageUrl,
+    resources,
+    child_urls: uniqueStrings([...courseUrls, ...childUrls]),
+    course_urls: uniqueStrings(courseUrls)
+  };
 }
 
 function extractResourcesFromHtmlFallback(html, pageUrl) {
@@ -405,7 +413,7 @@ function extractResourcesFromHtmlFallback(html, pageUrl) {
       })
     );
   }
-  return { final_url: pageUrl, resources, child_urls: uniqueStrings(urls) };
+  return { final_url: pageUrl, resources, child_urls: uniqueStrings(urls), course_urls: [] };
 }
 
 async function saveIndex(resources, transcripts) {
@@ -429,6 +437,63 @@ function defaultAllowedPrefix(seedUrl) {
   } catch (_error) {
     return seedUrl;
   }
+}
+
+function isDefaultPortalUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const defaultUrl = new URL(DEFAULT_CRAWL_SEED_URL);
+    return parsed.origin === defaultUrl.origin && parsed.pathname === defaultUrl.pathname;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function myCoursesUrlsFromDocument(document, pageUrl) {
+  const candidates = [];
+  const headingSelectors = [
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    ".moduleTitle",
+    ".module-title",
+    ".portlet-title",
+    ".moduleHeader",
+    "[id*='module']"
+  ];
+  const headings = Array.from(document.querySelectorAll(headingSelectors.join(","))).filter((node) =>
+    /^my courses$/i.test(cleanText(node.textContent, 80))
+  );
+
+  for (const heading of headings) {
+    let container = heading.closest(".module, .portlet, .moduleWrapper, .containerPortal, section, article, div") || heading.parentElement;
+    for (let depth = 0; container && depth < 5; depth += 1) {
+      const links = Array.from(container.querySelectorAll("a[href]"))
+        .map((anchor) => normalizeUrlFrom(anchor.getAttribute("href") || "", pageUrl))
+        .filter(isCourseUrl);
+      candidates.push(...links);
+      if (links.length) break;
+      container = container.parentElement;
+    }
+  }
+
+  if (!candidates.length) {
+    document.querySelectorAll("a[href]").forEach((anchor) => {
+      const url = normalizeUrlFrom(anchor.getAttribute("href") || "", pageUrl);
+      const text = cleanText(anchor.textContent || anchor.getAttribute("title") || "", 200);
+      if (isCourseUrl(url) || /class of|pre-program|course/i.test(text)) candidates.push(url);
+    });
+  }
+
+  return uniqueStrings(candidates.filter(Boolean));
+}
+
+function isCourseUrl(url) {
+  if (!url) return false;
+  return /\/webapps\/blackboard\/(execute\/launcher|content\/listContent|execute\/courseMain|course\/toc)|course_id=|course_id%3D/i.test(
+    url
+  );
 }
 
 function canQueuePage(url, options) {
