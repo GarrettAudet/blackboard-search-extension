@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Blackboard Transcript Search",
+  "version": "0.1.0",
+  "description": "Local Blackboard resource search with optional video transcript import.",
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://lms.sc.tsinghua.edu.cn/*",
+    "https://*.blackboard.com/*",
+    "https://*.bbcollab.com/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://lms.sc.tsinghua.edu.cn/*", "https://*.blackboard.com/*"],
+      "js": ["content/scraper.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "action": {
+    "default_title": "Blackboard Transcript Search"
+  }
+}

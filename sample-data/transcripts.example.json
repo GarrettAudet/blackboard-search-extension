@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "transcripts": [
+    {
+      "id": "c11-international-scholars-webinar-2026-04-28",
+      "title": "C11 International Scholars Webinar",
+      "source_hint": "April 28, 2026",
+      "video_url": "",
+      "segments": [
+        {
+          "start": "00:00:00",
+          "end": "00:00:20",
+          "text": "Welcome to the C11 International Scholars Webinar. Today we will cover visa overview, stipend, WeChat, reminders, inbound travel, health insurance, packing, and Chinese language learning."
+        },
+        {
+          "start": "00:12:04",
+          "end": "00:12:39",
+          "text": "Once you set up your Bank of China account after arrival, the stipend will be deposited into your account in RMB."
+        }
+      ]
+    }
+  ]
+}

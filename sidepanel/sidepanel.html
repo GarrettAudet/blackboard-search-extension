@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blackboard Transcript Search</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Blackboard Search</h1>
+        <p id="statusText">Loading local index...</p>
+      </div>
+      <button id="refreshBtn" class="icon-button" title="Refresh index" type="button">R</button>
+    </header>
+
+    <main>
+      <section class="toolbar" aria-label="Index controls">
+        <button id="scanBtn" type="button">Scan Active Tab</button>
+        <button id="importBtn" type="button">Import Transcripts</button>
+        <button id="clearBtn" class="secondary" type="button">Clear</button>
+        <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
+      </section>
+
+      <section class="stats" aria-label="Index statistics">
+        <div><strong id="resourceCount">0</strong><span>resources</span></div>
+        <div><strong id="videoCount">0</strong><span>videos</span></div>
+        <div><strong id="transcriptCount">0</strong><span>transcripts</span></div>
+      </section>
+
+      <section class="search-box" aria-label="Search">
+        <label for="queryInput">Search resources and transcripts</label>
+        <div class="search-row">
+          <input id="queryInput" type="search" placeholder="visa, banking, webinar, packing..." autocomplete="off" />
+          <button id="searchBtn" type="button">Search</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Videos">
+        <div class="panel-heading">
+          <h2>Videos</h2>
+          <span id="videoStatus"></span>
+        </div>
+        <div id="videoList" class="video-list"></div>
+      </section>
+
+      <section class="panel" aria-label="Search results">
+        <div class="panel-heading">
+          <h2>Results</h2>
+          <span id="resultCount"></span>
+        </div>
+        <div id="results" class="results"></div>
+      </section>
+    </main>
+
+    <template id="resultTemplate">
+      <article class="result-card">
+        <div class="result-topline">
+          <span class="type-pill"></span>
+          <span class="score"></span>
+        </div>
+        <h3></h3>
+        <p class="snippet"></p>
+        <p class="source"></p>
+        <a class="open-link" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+    </template>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
