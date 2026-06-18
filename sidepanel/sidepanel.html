@@ -8,18 +8,20 @@
   </head>
   <body>
     <header class="app-header">
-      <div class="brand-row">
-        <div class="brand-mark">B</div>
-        <div>
-          <h1>Blackboard Search Extension</h1>
-          <p id="statusText">Loading local index...</p>
+      <div class="header-top">
+        <div class="brand-row">
+          <div class="brand-mark">B</div>
+          <div class="brand-copy">
+            <h1>Blackboard Search Extension</h1>
+            <p id="statusText">Loading local index...</p>
+          </div>
         </div>
+        <button id="refreshBtn" class="refresh-button" title="Refresh index" type="button">Refresh</button>
       </div>
-      <nav class="header-actions" aria-label="Views and tools">
-        <button id="chatViewBtn" class="icon-button active" title="Chat" type="button">C</button>
-        <button id="transcriptsViewBtn" class="icon-button" title="Transcripts collected" type="button">T</button>
-        <button id="setupViewBtn" class="icon-button" title="Setup" type="button">S</button>
-        <button id="refreshBtn" class="icon-button" title="Refresh index" type="button">R</button>
+      <nav class="header-tabs" aria-label="Views">
+        <button id="chatViewBtn" class="tab-button active" type="button">Chat</button>
+        <button id="transcriptsViewBtn" class="tab-button" type="button">Library</button>
+        <button id="setupViewBtn" class="tab-button" type="button">Setup</button>
       </nav>
     </header>
 
@@ -37,7 +39,7 @@
           <input
             id="queryInput"
             type="search"
-            placeholder="Ask about Blackboard resources..."
+            placeholder="Ask about your Blackboard resources..."
             autocomplete="off"
           />
           <button id="searchBtn" class="send-button" title="Ask" type="submit">Ask</button>
