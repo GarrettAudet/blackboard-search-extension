@@ -1,12 +1,12 @@
-# SC Blackboard Assistant
+# Blackboard Search Extension
 
-SC Blackboard Assistant is an independent local Chrome extension for crawling
-Blackboard, searching resources, importing video transcripts, and answering
-questions with a user-provided API key. It is not a fork of another extension. It
-follows the same general personal-search pattern: each user logs into Blackboard
-in Chrome, the extension indexes what their browser can already see, and
-everything stays in the user's browser storage except the matched snippets sent
-to the selected API provider for synthesized answers.
+Blackboard Search Extension is an independent local Chrome extension for
+crawling Blackboard, searching resources, importing video transcripts, and
+answering questions with a user-provided API key. It is not a fork of another
+extension. It follows the same general personal-search pattern: each user logs
+into Blackboard in Chrome, the extension indexes what their browser can already
+see, and everything stays in the user's browser storage except the matched
+snippets sent to the selected API provider for synthesized answers.
 
 This repo is intentionally separate from the WhatsApp bot. The extension can be
 used as a standalone personal search tool or as an admin ingestion helper for

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "SC Blackboard Assistant",
+  "name": "Blackboard Search Extension",
   "version": "0.2.0",
   "description": "Integrated Blackboard crawling, resource search, transcript search, and API-powered Q&A.",
   "permissions": ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"],
@@ -27,6 +27,6 @@
     "default_path": "sidepanel/sidepanel.html"
   },
   "action": {
-    "default_title": "SC Blackboard Assistant"
+    "default_title": "Blackboard Search Extension"
   }
 }
