@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Blackboard Transcript Search",
-  "version": "0.1.0",
-  "description": "Local Blackboard resource search with optional video transcript import.",
+  "name": "SC Blackboard Assistant",
+  "version": "0.2.0",
+  "description": "Integrated Blackboard crawling, resource search, transcript search, and API-powered Q&A.",
   "permissions": ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"],
   "host_permissions": [
     "https://lms.sc.tsinghua.edu.cn/*",
@@ -27,6 +27,6 @@
     "default_path": "sidepanel/sidepanel.html"
   },
   "action": {
-    "default_title": "Blackboard Transcript Search"
+    "default_title": "SC Blackboard Assistant"
   }
 }
