@@ -194,7 +194,7 @@ async function scanActiveTab() {
 
 async function storeContent(payload) {
   const resourceId = cleanText(payload.resource_id || payload.resourceId || "", 120);
-  const content = cleanText(payload.content || payload.text || "", 20000);
+  const content = cleanBodyText(payload.content || payload.text || "", 20000);
   if (!resourceId || !content) return { ok: false, error: "missing_resource_or_content" };
 
   const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY]);
@@ -474,7 +474,7 @@ function pruneContentStore(contentStore, resources) {
   return Object.fromEntries(
     Object.entries(contentStore || {})
       .filter(([id, text]) => resourceIds.has(id) && String(text || "").trim())
-      .map(([id, text]) => [id, cleanText(text, 20000)])
+      .map(([id, text]) => [id, cleanBodyText(text, 20000)])
   );
 }
 
@@ -605,10 +605,82 @@ function extractMainTextFromDocument(document, limit = 10000) {
       if (root) break;
     }
     if (!root) root = clone.body || clone.documentElement;
-    return cleanText(root?.textContent || "", limit);
+    return cleanBodyText(readableTextFromNode(root), limit);
   } catch (_error) {
     return "";
   }
+}
+
+function readableTextFromNode(root) {
+  if (!root) return "";
+  const blockTags = new Set([
+    "ADDRESS",
+    "ARTICLE",
+    "ASIDE",
+    "BLOCKQUOTE",
+    "BR",
+    "DD",
+    "DIV",
+    "DL",
+    "DT",
+    "FIELDSET",
+    "FIGCAPTION",
+    "FIGURE",
+    "FOOTER",
+    "FORM",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HEADER",
+    "HR",
+    "LI",
+    "MAIN",
+    "NAV",
+    "OL",
+    "P",
+    "PRE",
+    "SECTION",
+    "TABLE",
+    "TBODY",
+    "TD",
+    "TFOOT",
+    "TH",
+    "THEAD",
+    "TR",
+    "UL"
+  ]);
+  const parts = [];
+
+  function walk(node) {
+    if (!node) return;
+    if (node.nodeType === 3) {
+      const text = String(node.nodeValue || "").replace(/\s+/g, " ").trim();
+      if (text) parts.push(text);
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName;
+    if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") return;
+    if (tag === "IMG") {
+      const alt = cleanText(node.getAttribute("alt") || "", 160);
+      if (alt) parts.push(alt);
+      return;
+    }
+    if (tag === "A") {
+      const text = cleanText(node.textContent || node.getAttribute("href") || "", 240);
+      if (text) parts.push(text);
+      return;
+    }
+    if (blockTags.has(tag)) parts.push("\n");
+    for (const child of node.childNodes || []) walk(child);
+    if (blockTags.has(tag)) parts.push("\n");
+  }
+
+  walk(root);
+  return parts.join(" ");
 }
 
 function nearestContextFromDocument(element) {
@@ -685,7 +757,10 @@ function normalizeResource(raw) {
     page_url: normalizeUrl(raw.page_url || ""),
     page_title: cleanText(raw.page_title || "", 240),
     section: cleanText(raw.section || "", 240),
-    context: cleanText(raw.context || raw.description || "", type === "page" ? 10000 : 1800),
+    context:
+      type === "page"
+        ? cleanBodyText(raw.context || raw.description || "", 10000)
+        : cleanText(raw.context || raw.description || "", 1800),
     discovered_at: cleanText(raw.discovered_at || new Date().toISOString(), 80),
     transcript_ids: uniqueStrings(raw.transcript_ids || raw.transcriptIds || [])
   };
@@ -693,7 +768,7 @@ function normalizeResource(raw) {
 }
 
 function searchableContentFrom(resource) {
-  const content = cleanText(resource.context || "", resource.type === "page" ? 20000 : 5000);
+  const content = cleanBodyText(resource.context || "", resource.type === "page" ? 20000 : 5000);
   if (!content) return "";
   return [resource.title, resource.section, resource.page_title, content].filter(Boolean).join("\n\n");
 }
@@ -701,7 +776,7 @@ function searchableContentFrom(resource) {
 function resourceMetadataFrom(resource) {
   return {
     ...resource,
-    context: cleanText(resource.context || "", resource.type === "page" ? 900 : 500)
+    context: cleanBodyText(resource.context || "", resource.type === "page" ? 900 : 500)
   };
 }
 
@@ -820,6 +895,16 @@ function uniqueStrings(values) {
 function cleanText(value, limit = 500) {
   return String(value || "")
     .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function cleanBodyText(value, limit = 5000) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, limit);
 }

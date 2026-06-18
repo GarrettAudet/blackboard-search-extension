@@ -17,6 +17,16 @@
       .slice(0, limit);
   }
 
+  function cleanBodyText(value, limit = 10000) {
+    return String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/[ \t\f\v]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+      .slice(0, limit);
+  }
+
   function absoluteUrl(rawUrl) {
     try {
       return new URL(rawUrl, window.location.href).href;
@@ -95,7 +105,7 @@
       document.querySelector("#content") ||
       document.querySelector("[role='main']") ||
       document.body;
-    return cleanText(main && main.innerText, 10000);
+    return cleanBodyText(main && main.innerText, 10000);
   }
 
   function resourceFromUrl(rawUrl, label, type, element) {

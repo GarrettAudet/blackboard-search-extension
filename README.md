@@ -159,6 +159,7 @@ background/service-worker.js      crawler, local storage, transcript import, mat
 content/scraper.js                Blackboard page/resource/video detector
 lib/                              local parsers used for document text extraction
 sidepanel/                        search and transcript UI
+scripts/                          local regression checks
 docs/                             additional notes
 sample-data/                      example transcript bundle
 ```
@@ -174,6 +175,7 @@ Useful local validation:
 node --check background\service-worker.js
 node --check content\scraper.js
 node --check sidepanel\sidepanel.js
+node scripts\regression-check.mjs
 powershell -Command "Get-Content manifest.json | ConvertFrom-Json | Out-Null"
 ```
 
