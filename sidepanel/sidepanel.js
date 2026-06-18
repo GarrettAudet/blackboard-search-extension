@@ -590,7 +590,7 @@ function searchIndex(query) {
     .map((doc) => ({ ...doc, score: scoreDoc(query, doc) }))
     .filter((doc) => doc.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 8);
+    .slice(0, 10);
 }
 
 function buildLocalAnswer(query, results) {
@@ -780,14 +780,30 @@ function buildSearchDocs() {
   const resourceById = new Map(state.resources.map((resource) => [resource.id, resource]));
 
   for (const resource of state.resources) {
-    docs.push({
+    const baseDoc = {
       kind: resource.type || "resource",
       title: resource.title || "Untitled resource",
-      text: [resource.context, resource.section, resource.page_title, resource.url].filter(Boolean).join(" "),
       source: [resource.section, resource.page_title].filter(Boolean).join(" - "),
       url: resource.url || resource.page_url || "",
       timestamp: ""
-    });
+    };
+    const fullText = [resource.title, resource.context, resource.section, resource.page_title, resource.url].filter(Boolean).join(" ");
+    if (resource.type === "page" && fullText.length > 1200) {
+      const chunks = chunkTextForSearch(fullText, 1400);
+      for (let index = 0; index < chunks.length; index += 1) {
+        docs.push({
+          ...baseDoc,
+          kind: "page",
+          title: chunks.length > 1 ? `${baseDoc.title} (part ${index + 1})` : baseDoc.title,
+          text: chunks[index]
+        });
+      }
+    } else {
+      docs.push({
+        ...baseDoc,
+        text: fullText
+      });
+    }
   }
 
   for (const transcript of state.transcripts) {
@@ -826,24 +842,38 @@ function renderSourceCard(result, query) {
 
 function scoreDoc(query, doc) {
   const queryTokens = expandedTokens(query);
+  const queryPhrases = expandedPhrases(query);
   const title = normalizeText(doc.title);
   const text = normalizeText(doc.text);
   const source = normalizeText(doc.source);
+  const haystack = `${title} ${source} ${text}`;
   let score = 0;
   for (const token of queryTokens) {
     if (!token) continue;
-    if (title.includes(token)) score += 12;
-    if (source.includes(token)) score += 6;
-    if (text.includes(token)) score += doc.kind === "video_transcript" ? 10 : 4;
+    const titleHits = countOccurrences(title, token);
+    const sourceHits = countOccurrences(source, token);
+    const textHits = countOccurrences(text, token);
+    score += Math.min(36, titleHits * 16);
+    score += Math.min(18, sourceHits * 8);
+    score += Math.min(doc.kind === "video_transcript" ? 30 : 20, textHits * (doc.kind === "video_transcript" ? 10 : 5));
+  }
+  for (const phrase of queryPhrases) {
+    if (!phrase) continue;
+    if (title.includes(phrase)) score += 48;
+    if (source.includes(phrase)) score += 22;
+    if (text.includes(phrase)) score += 28;
   }
   const phrase = normalizeText(query);
   if (phrase && text.includes(phrase)) score += 25;
   if (phrase && title.includes(phrase)) score += 35;
+  if (doc.kind === "page") score += pageIntentBoost(query, title, source, haystack);
   return score;
 }
 
 function expandedTokens(query) {
-  const tokens = normalizeText(query).split(" ").filter((token) => token.length > 2);
+  const tokens = normalizeText(query)
+    .split(" ")
+    .filter((token) => token.length > 1 && !STOP_WORDS.has(token));
   const extras = [];
   const synonymMap = {
     visa: ["x1", "jw202", "permit", "residence"],
@@ -855,12 +885,107 @@ function expandedTokens(query) {
     video: ["webinar", "recording", "transcript"],
     transcript: ["video", "webinar", "recording"],
     job: ["career", "internship", "resume", "interview"],
-    career: ["job", "internship", "resume", "interview"]
+    career: ["job", "internship", "resume", "interview"],
+    todo: ["to do", "task", "tasks", "action", "item", "deadline", "due", "mandatory", "survey"],
+    task: ["to do", "todo", "action", "item", "deadline", "due", "mandatory", "survey"],
+    tasks: ["to do", "todo", "task", "action", "item", "deadline", "due", "mandatory", "survey"],
+    deadline: ["due", "submit", "submission", "action", "item", "mandatory"],
+    due: ["deadline", "submit", "submission", "action", "item"],
+    survey: ["form", "questionnaire", "deadline", "mandatory", "submit"]
   };
+  if (/\bto\s*[- ]?\s*do\b/i.test(query)) {
+    extras.push("todo", "task", "tasks", "action", "item", "deadline", "due", "mandatory", "survey");
+  }
   for (const token of tokens) {
     extras.push(...(synonymMap[token] || []));
   }
-  return Array.from(new Set([...tokens, ...extras]));
+  return Array.from(new Set([...tokens, ...extras].map((token) => normalizeText(token)).filter(Boolean)));
+}
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "can",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "the",
+  "there",
+  "this",
+  "u",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "with"
+]);
+
+function expandedPhrases(query) {
+  const phrases = [];
+  const normalized = normalizeText(query);
+  if (normalized) phrases.push(normalized);
+  if (/\bto\s*[- ]?\s*do\b/i.test(query) || /\btasks?\b/i.test(query)) {
+    phrases.push("to do", "action item", "action items", "current tasks", "to do tasks");
+  }
+  return Array.from(new Set(phrases.map((phrase) => normalizeText(phrase)).filter(Boolean)));
+}
+
+function pageIntentBoost(query, title, source, haystack) {
+  let boost = 0;
+  const isTaskQuery = /\b(to\s*[- ]?\s*do|todo|tasks?|action items?|deadline|due)\b/i.test(query);
+  if (isTaskQuery) {
+    if (/\bto do\b/.test(title) || /\bto do\b/.test(source)) boost += 120;
+    if (/\b(action item|deadline|mandatory|survey|submit|due)\b/.test(haystack)) boost += 40;
+  }
+  const asksCurrent = /\b(current|latest|new|now|upcoming)\b/i.test(query);
+  if (asksCurrent && /\b(deadline|due|upcoming|current|mandatory|submit)\b/.test(haystack)) boost += 20;
+  return boost;
+}
+
+function countOccurrences(text, term) {
+  if (!text || !term) return 0;
+  let count = 0;
+  let index = text.indexOf(term);
+  while (index !== -1) {
+    count += 1;
+    index = text.indexOf(term, index + term.length);
+  }
+  return count;
+}
+
+function chunkTextForSearch(text, maxChars = 1400) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (clean.length <= maxChars) return clean ? [clean] : [];
+  const sentences = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
+  const chunks = [];
+  let buffer = "";
+  for (const sentence of sentences.map((item) => item.trim()).filter(Boolean)) {
+    if ((buffer + " " + sentence).trim().length > maxChars && buffer) {
+      chunks.push(buffer);
+      buffer = sentence;
+    } else {
+      buffer = [buffer, sentence].filter(Boolean).join(" ");
+    }
+  }
+  if (buffer) chunks.push(buffer);
+  return chunks;
 }
 
 function snippetFor(text, query, limit = 260) {

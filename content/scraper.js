@@ -95,7 +95,7 @@
       document.querySelector("#content") ||
       document.querySelector("[role='main']") ||
       document.body;
-    return cleanText(main && main.innerText, 3000);
+    return cleanText(main && main.innerText, 10000);
   }
 
   function resourceFromUrl(rawUrl, label, type, element) {
@@ -187,10 +187,22 @@
     };
   }
 
+  let scrapeTimer = null;
+  let lastPayloadKey = "";
+
   function sendScrape() {
-    chrome.runtime.sendMessage({ type: "SCRAPE_PAGE", payload: scrapePage() }, () => {
+    const payload = scrapePage();
+    const payloadKey = `${payload.page.url}|${payload.resources.length}|${payload.resources.map((item) => item.context || item.title).join("|").length}`;
+    if (payloadKey === lastPayloadKey) return;
+    lastPayloadKey = payloadKey;
+    chrome.runtime.sendMessage({ type: "SCRAPE_PAGE", payload }, () => {
       void chrome.runtime.lastError;
     });
+  }
+
+  function scheduleScrape(delay = 500) {
+    if (scrapeTimer) window.clearTimeout(scrapeTimer);
+    scrapeTimer = window.setTimeout(sendScrape, delay);
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -205,5 +217,18 @@
     return false;
   });
 
-  window.setTimeout(sendScrape, 800);
+  scheduleScrape(800);
+  window.setTimeout(sendScrape, 2500);
+  window.setTimeout(sendScrape, 6000);
+  try {
+    const observer = new MutationObserver(() => scheduleScrape(900));
+    observer.observe(document.body || document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+    window.setTimeout(() => observer.disconnect(), 15000);
+  } catch (_error) {
+    // MutationObserver may be unavailable in unusual frames.
+  }
 })();

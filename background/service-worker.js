@@ -349,11 +349,7 @@ function extractResourcesFromHtml(html, pageUrl) {
     }
   });
 
-  const pageText = cleanText(
-    (document.querySelector("main") || document.querySelector("#content") || document.querySelector("[role='main']") || document.body)
-      ?.textContent || "",
-    3000
-  );
+  const pageText = extractMainTextFromDocument(document, 10000);
   if (pageText) {
     add({
       type: "page",
@@ -537,6 +533,32 @@ function breadcrumbTextFromDocument(document) {
   return "";
 }
 
+function extractMainTextFromDocument(document, limit = 10000) {
+  try {
+    const clone = document.cloneNode(true);
+    clone.querySelectorAll("script,style,noscript,nav,header,footer,aside").forEach((node) => node.remove());
+    const selectors = [
+      "#content",
+      "#contentPanel",
+      ".contentBox",
+      ".vtbegenerated",
+      ".contentList",
+      "main",
+      "article",
+      "[role='main']"
+    ];
+    let root = null;
+    for (const selector of selectors) {
+      root = clone.querySelector(selector);
+      if (root) break;
+    }
+    if (!root) root = clone.body || clone.documentElement;
+    return cleanText(root?.textContent || "", limit);
+  } catch (_error) {
+    return "";
+  }
+}
+
 function nearestContextFromDocument(element) {
   const container = element.closest("li, article, section, div") || element;
   const titleNode = container.querySelector("h1,h2,h3,h4,.item,.title,.name");
@@ -611,7 +633,7 @@ function normalizeResource(raw) {
     page_url: normalizeUrl(raw.page_url || ""),
     page_title: cleanText(raw.page_title || "", 240),
     section: cleanText(raw.section || "", 240),
-    context: cleanText(raw.context || raw.description || "", 1200),
+    context: cleanText(raw.context || raw.description || "", raw.type === "page" ? 10000 : 1800),
     discovered_at: cleanText(raw.discovered_at || new Date().toISOString(), 80),
     transcript_ids: uniqueStrings(raw.transcript_ids || raw.transcriptIds || [])
   };
