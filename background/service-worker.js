@@ -28,6 +28,8 @@ async function handleMessage(message) {
       return clearIndex();
     case "SCAN_ACTIVE_TAB":
       return scanActiveTab();
+    case "CRAWL_SITE":
+      return crawlSite(message.payload || {});
     case "IMPORT_TRANSCRIPTS":
       return importTranscripts(message.payload || {});
     case "MANUAL_ATTACH_TRANSCRIPT":
@@ -172,6 +174,240 @@ async function scanActiveTab() {
   }
 }
 
+async function crawlSite(payload) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const seedUrl = normalizeUrlFrom(payload.seed_url || payload.seedUrl || tab?.url || "", tab?.url || "");
+  if (!seedUrl || !/^https?:\/\//i.test(seedUrl)) return { ok: false, error: "missing_or_invalid_seed_url" };
+
+  const allowedPrefix = normalizeUrlFrom(
+    payload.allowed_prefix || payload.allowedPrefix || defaultAllowedPrefix(seedUrl),
+    seedUrl
+  );
+  const maxPages = clampInteger(payload.max_pages || payload.maxPages, 1, 300, 80);
+  const delayMs = clampInteger(payload.delay_ms || payload.delayMs, 0, 3000, 120);
+  const seedOrigin = new URL(seedUrl).origin;
+  const queue = [seedUrl];
+  const queued = new Set(queue);
+  const visited = new Set();
+  const resources = [];
+  const failures = [];
+
+  emitCrawlProgress({ status: "started", pages: 0, queued: queue.length, resources: 0, current_url: seedUrl });
+
+  while (queue.length && visited.size < maxPages) {
+    const currentUrl = queue.shift();
+    if (!currentUrl || visited.has(currentUrl)) continue;
+    visited.add(currentUrl);
+
+    emitCrawlProgress({
+      status: "fetching",
+      pages: visited.size,
+      queued: queue.length,
+      resources: resources.length,
+      current_url: currentUrl
+    });
+
+    try {
+      const page = await fetchCrawlPage(currentUrl);
+      resources.push(...page.resources);
+
+      for (const candidate of page.child_urls) {
+        const childUrl = normalizeUrlFrom(candidate, page.final_url || currentUrl);
+        if (!canQueuePage(childUrl, { allowedPrefix, seedOrigin, visited, queued })) continue;
+        queued.add(childUrl);
+        queue.push(childUrl);
+      }
+    } catch (error) {
+      failures.push({
+        url: currentUrl,
+        error: String(error && error.message ? error.message : error)
+      });
+    }
+
+    if (delayMs) await sleep(delayMs);
+  }
+
+  const mergeResult = await mergeScrape({ resources });
+  const response = {
+    ok: true,
+    pages_crawled: visited.size,
+    resources_seen: resources.length,
+    resource_count: mergeResult.resource_count,
+    queued_remaining: queue.length,
+    failures: failures.slice(0, 20)
+  };
+  emitCrawlProgress({ status: "complete", pages: visited.size, queued: queue.length, resources: resources.length });
+  return response;
+}
+
+async function fetchCrawlPage(url) {
+  const response = await fetch(url, {
+    credentials: "include",
+    redirect: "follow",
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  const finalUrl = normalizeUrlFrom(response.url || url, url);
+  const contentType = response.headers.get("content-type") || "";
+  if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+    return {
+      final_url: finalUrl,
+      resources: [
+        normalizeResource({
+          type: inferType(finalUrl, finalUrl),
+          title: fileNameFromUrl(finalUrl) || finalUrl,
+          url: finalUrl,
+          page_url: finalUrl,
+          page_title: finalUrl,
+          context: contentType
+        })
+      ],
+      child_urls: []
+    };
+  }
+
+  const html = await response.text();
+  return extractResourcesFromHtml(html, finalUrl);
+}
+
+function extractResourcesFromHtml(html, pageUrl) {
+  if (typeof DOMParser === "undefined") return extractResourcesFromHtmlFallback(html, pageUrl);
+
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const pageTitle = cleanText(document.title || pageUrl, 240);
+  const section = breadcrumbTextFromDocument(document);
+  const resources = [];
+  const childUrls = [];
+  const seen = new Set();
+
+  function add(resource) {
+    if (!resource) return;
+    const normalized = normalizeResource(resource);
+    const key = `${normalized.type}|${normalized.url}|${normalized.title}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    resources.push(normalized);
+  }
+
+  document.querySelectorAll("a[href]").forEach((anchor) => {
+    const href = anchor.getAttribute("href") || "";
+    const url = normalizeUrlFrom(href, pageUrl);
+    if (!url || isIgnoredProtocol(url)) return;
+    const title = cleanText(anchor.textContent || anchor.getAttribute("title") || anchor.getAttribute("aria-label") || url, 240);
+    childUrls.push(url);
+    add({
+      type: inferType(url, title),
+      title,
+      url,
+      page_url: pageUrl,
+      page_title: pageTitle,
+      section,
+      context: nearestContextFromDocument(anchor),
+      discovered_at: new Date().toISOString()
+    });
+  });
+
+  document.querySelectorAll("video[src], video source[src], audio[src], audio source[src]").forEach((media) => {
+    const host = media.closest("video,audio") || media;
+    const rawUrl = media.getAttribute("src") || "";
+    const url = normalizeUrlFrom(rawUrl, pageUrl);
+    const title =
+      cleanText(host.getAttribute("title") || host.getAttribute("aria-label") || nearestContextFromDocument(host) || pageTitle, 240);
+    add({
+      type: media.closest("audio") ? "audio" : "video",
+      title,
+      url,
+      page_url: pageUrl,
+      page_title: pageTitle,
+      section,
+      context: nearestContextFromDocument(host),
+      discovered_at: new Date().toISOString()
+    });
+  });
+
+  document.querySelectorAll("iframe[src], embed[src], object[data]").forEach((frame) => {
+    const rawUrl = frame.getAttribute("src") || frame.getAttribute("data") || "";
+    const url = normalizeUrlFrom(rawUrl, pageUrl);
+    const title =
+      cleanText(frame.getAttribute("title") || frame.getAttribute("aria-label") || nearestContextFromDocument(frame) || pageTitle, 240);
+    const type = inferType(url, title);
+    if (type === "video_embed" || type === "video" || type === "audio") {
+      add({
+        type,
+        title,
+        url,
+        page_url: pageUrl,
+        page_title: pageTitle,
+        section,
+        context: nearestContextFromDocument(frame),
+        discovered_at: new Date().toISOString()
+      });
+    }
+  });
+
+  const pageText = cleanText(
+    (document.querySelector("main") || document.querySelector("#content") || document.querySelector("[role='main']") || document.body)
+      ?.textContent || "",
+    3000
+  );
+  if (pageText) {
+    add({
+      type: "page",
+      title: pageTitle,
+      url: pageUrl,
+      page_url: pageUrl,
+      page_title: pageTitle,
+      section,
+      context: pageText,
+      discovered_at: new Date().toISOString()
+    });
+  }
+
+  return { final_url: pageUrl, resources, child_urls: uniqueStrings(childUrls) };
+}
+
+function extractResourcesFromHtmlFallback(html, pageUrl) {
+  const title = cleanText((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || pageUrl, 240);
+  const text = cleanText(stripHtml(html), 3000);
+  const urls = [];
+  const resources = [];
+  const attrPattern = /\s(?:href|src|data)=["']([^"']+)["']/gi;
+  let match = attrPattern.exec(html);
+  while (match) {
+    const url = normalizeUrlFrom(match[1], pageUrl);
+    if (url && !isIgnoredProtocol(url)) {
+      urls.push(url);
+      resources.push(
+        normalizeResource({
+          type: inferType(url, fileNameFromUrl(url)),
+          title: fileNameFromUrl(url) || url,
+          url,
+          page_url: pageUrl,
+          page_title: title,
+          context: title,
+          discovered_at: new Date().toISOString()
+        })
+      );
+    }
+    match = attrPattern.exec(html);
+  }
+  if (text) {
+    resources.push(
+      normalizeResource({
+        type: "page",
+        title,
+        url: pageUrl,
+        page_url: pageUrl,
+        page_title: title,
+        context: text,
+        discovered_at: new Date().toISOString()
+      })
+    );
+  }
+  return { final_url: pageUrl, resources, child_urls: uniqueStrings(urls) };
+}
+
 async function saveIndex(resources, transcripts) {
   await chrome.storage.local.set({
     [RESOURCE_KEY]: resources,
@@ -183,6 +419,118 @@ async function saveIndex(resources, transcripts) {
       video_count: resources.filter(isVideoResource).length,
       last_updated: new Date().toISOString()
     }
+  });
+}
+
+function defaultAllowedPrefix(seedUrl) {
+  try {
+    const parsed = new URL(seedUrl);
+    return `${parsed.origin}/`;
+  } catch (_error) {
+    return seedUrl;
+  }
+}
+
+function canQueuePage(url, options) {
+  if (!url || isIgnoredProtocol(url)) return false;
+  if (options.visited.has(url) || options.queued.has(url)) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.origin !== options.seedOrigin) return false;
+    if (options.allowedPrefix && !url.startsWith(options.allowedPrefix)) return false;
+    if (isLikelyFileResource(parsed.pathname)) return false;
+    if (/(logout|logoff|signout|sign-out|download|calendar|gradebook)/i.test(url)) return false;
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isLikelyFileResource(pathname) {
+  return /\.(pdf|doc|docx|rtf|odt|ppt|pptx|xls|xlsx|csv|zip|rar|7z|mp4|mov|m4v|webm|avi|mkv|mp3|m4a|wav|aac|ogg|png|jpe?g|gif|webp|svg)$/i.test(
+    pathname || ""
+  );
+}
+
+function isIgnoredProtocol(url) {
+  return /^(javascript|mailto|tel|data|blob):/i.test(String(url || ""));
+}
+
+function breadcrumbTextFromDocument(document) {
+  const selectors = [
+    "[aria-label*='breadcrumb' i]",
+    ".breadcrumb",
+    "#breadcrumbs",
+    ".path",
+    ".locationPane"
+  ];
+  for (const selector of selectors) {
+    const node = document.querySelector(selector);
+    const text = cleanText(node && node.textContent, 300);
+    if (text) return text;
+  }
+  return "";
+}
+
+function nearestContextFromDocument(element) {
+  const container = element.closest("li, article, section, div") || element;
+  const titleNode = container.querySelector("h1,h2,h3,h4,.item,.title,.name");
+  const title = cleanText(titleNode && titleNode.textContent, 180);
+  const text = cleanText(container.textContent, 320);
+  return [title, text && text !== title ? text : ""].filter(Boolean).join(" - ");
+}
+
+function normalizeUrlFrom(rawUrl, baseUrl) {
+  const value = String(rawUrl || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = baseUrl ? new URL(value, baseUrl) : new URL(value);
+    ["session", "cache", "nonce", "token", "auth", "one_hash", "x-bb-session", "download"].forEach((key) =>
+      parsed.searchParams.delete(key)
+    );
+    parsed.hash = "";
+    return parsed.href;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function fileNameFromUrl(url) {
+  try {
+    const pathname = new URL(url).pathname;
+    const name = decodeURIComponent(pathname.split("/").filter(Boolean).pop() || "");
+    return cleanText(name.replace(/(\.[a-z0-9]{2,5})\1$/i, "$1"), 240);
+  } catch (_error) {
+    return "";
+  }
+}
+
+function stripHtml(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function emitCrawlProgress(payload) {
+  chrome.runtime.sendMessage({ type: "CRAWL_PROGRESS", payload }, () => {
+    void chrome.runtime.lastError;
   });
 }
 
@@ -304,6 +652,8 @@ function inferType(url, title) {
   if (/(kaltura|panopto|echo360|yuja|mediasite|bbcollab|youtube|vimeo)/.test(text)) return "video_embed";
   if (/\.pdf(\?|$)/.test(text)) return "pdf";
   if (/\.(doc|docx|rtf|odt)(\?|$)/.test(text)) return "document";
+  if (/\.(ppt|pptx)(\?|$)/.test(text)) return "slides";
+  if (/\.(xls|xlsx|csv)(\?|$)/.test(text)) return "spreadsheet";
   return "link";
 }
 

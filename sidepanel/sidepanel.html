@@ -23,6 +23,24 @@
         <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
       </section>
 
+      <section class="crawl-box" aria-label="Crawler">
+        <label for="seedInput">Seed URL</label>
+        <input id="seedInput" type="url" placeholder="Leave blank to use active Blackboard tab" autocomplete="off" />
+        <label for="prefixInput">Allowed URL prefix</label>
+        <input id="prefixInput" type="url" placeholder="Leave blank for same Blackboard site" autocomplete="off" />
+        <div class="crawl-row">
+          <label>
+            <span>Max pages</span>
+            <input id="maxPagesInput" type="number" min="1" max="300" value="80" />
+          </label>
+          <label>
+            <span>Delay ms</span>
+            <input id="delayInput" type="number" min="0" max="3000" value="120" />
+          </label>
+          <button id="crawlBtn" type="button">Crawl</button>
+        </div>
+      </section>
+
       <section class="stats" aria-label="Index statistics">
         <div><strong id="resourceCount">0</strong><span>resources</span></div>
         <div><strong id="videoCount">0</strong><span>videos</span></div>

@@ -8,9 +8,14 @@ const els = {
   statusText: document.getElementById("statusText"),
   refreshBtn: document.getElementById("refreshBtn"),
   scanBtn: document.getElementById("scanBtn"),
+  crawlBtn: document.getElementById("crawlBtn"),
   importBtn: document.getElementById("importBtn"),
   clearBtn: document.getElementById("clearBtn"),
   transcriptFile: document.getElementById("transcriptFile"),
+  seedInput: document.getElementById("seedInput"),
+  prefixInput: document.getElementById("prefixInput"),
+  maxPagesInput: document.getElementById("maxPagesInput"),
+  delayInput: document.getElementById("delayInput"),
   resourceCount: document.getElementById("resourceCount"),
   videoCount: document.getElementById("videoCount"),
   transcriptCount: document.getElementById("transcriptCount"),
@@ -46,6 +51,24 @@ async function scanActiveTab() {
   if (!response.ok) throw new Error(response.error || "Scan failed");
   await refreshIndex();
   setStatus(`Scanned active tab. Found ${response.resource_count || 0} resources on this page.`);
+}
+
+async function crawlSite() {
+  els.crawlBtn.disabled = true;
+  els.crawlBtn.textContent = "Crawling...";
+  setStatus("Starting crawl...");
+  const response = await sendMessage("CRAWL_SITE", {
+    seed_url: els.seedInput.value.trim(),
+    allowed_prefix: els.prefixInput.value.trim(),
+    max_pages: Number(els.maxPagesInput.value || 80),
+    delay_ms: Number(els.delayInput.value || 120)
+  });
+  if (!response.ok) throw new Error(response.error || "Crawl failed");
+  await refreshIndex();
+  const failureText = response.failures && response.failures.length ? ` ${response.failures.length} page(s) failed.` : "";
+  setStatus(
+    `Crawled ${response.pages_crawled} page(s), saw ${response.resources_seen} resources, stored ${response.resource_count}.${failureText}`
+  );
 }
 
 async function importTranscriptFile(file) {
@@ -294,10 +317,35 @@ function emptyNode(text) {
 function reportError(error) {
   console.error(error);
   setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
+  els.crawlBtn.disabled = false;
+  els.crawlBtn.textContent = "Crawl";
 }
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || message.type !== "CRAWL_PROGRESS") return false;
+  const payload = message.payload || {};
+  if (payload.status === "fetching") {
+    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; resources ${payload.resources}.`);
+  } else if (payload.status === "complete") {
+    setStatus(`Crawl complete. Pages ${payload.pages}; resources ${payload.resources}.`);
+    els.crawlBtn.disabled = false;
+    els.crawlBtn.textContent = "Crawl";
+  } else if (payload.status === "started") {
+    setStatus("Crawl started.");
+  }
+  return false;
+});
 
 els.refreshBtn.addEventListener("click", () => refreshIndex().catch(reportError));
 els.scanBtn.addEventListener("click", () => scanActiveTab().catch(reportError));
+els.crawlBtn.addEventListener("click", () =>
+  crawlSite()
+    .catch(reportError)
+    .finally(() => {
+      els.crawlBtn.disabled = false;
+      els.crawlBtn.textContent = "Crawl";
+    })
+);
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
 els.searchBtn.addEventListener("click", runSearch);

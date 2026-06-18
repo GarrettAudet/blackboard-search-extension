@@ -1,9 +1,10 @@
 # Blackboard Transcript Search Extension
 
-Blackboard Transcript Search is a local Chrome extension for searching Blackboard
-resources and optional video transcripts. It is designed for the personal-search
-path: each user logs into Blackboard in Chrome, the extension indexes what their
-browser can already see, and everything stays in the user's browser storage.
+Blackboard Transcript Search is an independent local Chrome extension for
+searching Blackboard resources and optional video transcripts. It is not a fork
+of another extension. It follows the same general personal-search pattern: each
+user logs into Blackboard in Chrome, the extension indexes what their browser can
+already see, and everything stays in the user's browser storage.
 
 This repo is intentionally separate from the WhatsApp bot. The extension can be
 used as a standalone personal search tool or as an admin ingestion helper for
@@ -13,6 +14,8 @@ preparing transcript/index data.
 
 - Scans the active Blackboard tab for pages, links, files, embedded videos, and
   MP4/audio resources.
+- Crawls nested Blackboard pages under an allowed URL prefix so course folders
+  and subfolders can be indexed without clicking every page manually.
 - Stores the local resource index in Chrome storage.
 - Lets the user import a prepared transcript JSON bundle.
 - Automatically attaches transcripts to discovered videos when titles, URLs, or
@@ -38,15 +41,19 @@ preparing transcript/index data.
 2. Open Blackboard and log in normally.
 3. Navigate to a course/resource page.
 4. Open the extension side panel.
-5. Click `Scan Active Tab`.
-6. Search the indexed resources.
-7. If videos are found, import a transcript bundle:
+5. Click `Crawl`.
+   - Leave `Seed URL` blank to use the active tab.
+   - Leave `Allowed URL prefix` blank for the current Blackboard site, or paste a
+     narrower folder/course prefix to keep the crawl focused.
+6. Use `Scan Active Tab` for a quick one-page refresh when needed.
+7. Search the indexed resources.
+8. If videos are found, import a transcript bundle:
    - Click `Import Transcripts`.
    - Select a JSON transcript bundle.
    - The extension auto-attaches transcripts where it can.
    - If a video still says `Transcript missing`, choose a transcript from the
      dropdown and click `Attach`.
-8. Future searches include transcript segments instantly. The MP4 does not need
+9. Future searches include transcript segments instantly. The MP4 does not need
    to be transcribed again.
 
 ## Video Transcript Workflow
@@ -101,7 +108,7 @@ Matching uses:
 
 ```text
 manifest.json                    Chrome extension manifest
-background/service-worker.js      local storage, transcript import, matching
+background/service-worker.js      crawler, local storage, transcript import, matching
 content/scraper.js                Blackboard page/resource/video detector
 sidepanel/                        search and transcript UI
 docs/                             additional notes
