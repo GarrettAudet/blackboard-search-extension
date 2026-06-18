@@ -1,8 +1,10 @@
 const SETTINGS_KEY = "assistant_settings";
+const MAX_CONTENT_CHARS = 20000;
 
 const state = {
   resources: [],
   transcripts: [],
+  contentStore: {},
   meta: {},
   settings: {
     provider: "openrouter",
@@ -60,9 +62,11 @@ async function refreshAll() {
   if (!indexResponse.ok) throw new Error(indexResponse.error || "Unable to load index");
   state.resources = indexResponse.resources || [];
   state.transcripts = indexResponse.transcripts || [];
+  state.contentStore = indexResponse.content_store || indexResponse.contentStore || {};
   state.meta = indexResponse.meta || {};
   state.settings = settings;
   render();
+  hydrateMissingSearchableContent().catch((error) => console.warn("Content hydration failed", error));
 }
 
 async function loadSettings() {
@@ -148,7 +152,8 @@ function render() {
   els.resourceCount.textContent = String(state.resources.length);
   els.videoCount.textContent = String(videos.length);
   els.transcriptCount.textContent = String(state.transcripts.length);
-  setStatus(`${state.resources.length} resources indexed`);
+  const contentCount = Object.keys(state.contentStore || {}).length;
+  setStatus(`${state.resources.length} resources indexed; ${contentCount} searchable bodies`);
   renderSettings();
   renderTranscripts();
   renderMissingVideos();
@@ -514,6 +519,229 @@ function formatDuration(ms) {
   return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
+let hydrationPromise = null;
+const hydrationFailures = new Set();
+
+async function hydrateMissingSearchableContent() {
+  if (hydrationPromise) return hydrationPromise;
+  hydrationPromise = hydrateMissingSearchableContentInner().finally(() => {
+    hydrationPromise = null;
+  });
+  return hydrationPromise;
+}
+
+async function hydrateMissingSearchableContentInner() {
+  const candidates = state.resources.filter(shouldHydrateResourceContent).slice(0, 20);
+  if (!candidates.length) return;
+
+  setStatus(`Preparing searchable text for ${candidates.length} file(s)...`);
+  let hydrated = 0;
+  let failed = 0;
+
+  for (const resource of candidates) {
+    try {
+      const content = await extractSearchableResourceText(resource);
+      if (!isUsableSearchContent(content)) {
+        failed += 1;
+        hydrationFailures.add(resource.id);
+        continue;
+      }
+      const response = await sendMessage("STORE_CONTENT", {
+        resource_id: resource.id,
+        content: clampText(content, MAX_CONTENT_CHARS)
+      });
+      if (!response.ok) throw new Error(response.error || "Content store write failed");
+      state.contentStore[resource.id] = clampText(content, MAX_CONTENT_CHARS);
+      hydrated += 1;
+    } catch (error) {
+      failed += 1;
+      hydrationFailures.add(resource.id);
+      console.warn("Could not hydrate searchable content", resource.title, error);
+    }
+  }
+
+  if (hydrated || failed) {
+    setStatus(`${hydrated} file(s) made searchable${failed ? `; ${failed} skipped` : ""}.`);
+  }
+}
+
+function shouldHydrateResourceContent(resource) {
+  if (!resource || !resource.id || !resource.url) return false;
+  if (hydrationFailures.has(resource.id)) return false;
+  if (state.contentStore && state.contentStore[resource.id]) return false;
+  const type = String(resource.type || "").toLowerCase();
+  const url = String(resource.url || "").toLowerCase();
+  return (
+    ["pdf", "document", "slides", "spreadsheet"].includes(type) ||
+    /\.(pdf|docx|pptx|xlsx)(\?|$)/i.test(url)
+  );
+}
+
+async function extractSearchableResourceText(resource) {
+  const buffer = await fetchResourceArrayBuffer(resource.url);
+  const type = String(resource.type || "").toLowerCase();
+  const url = String(resource.url || "").toLowerCase();
+  if (type === "pdf" || /\.pdf(\?|$)/i.test(url)) return extractPdfText(buffer);
+  if (type === "document" || /\.docx(\?|$)/i.test(url)) return extractDocxText(buffer);
+  if (type === "slides" || /\.pptx(\?|$)/i.test(url)) return extractPptxText(buffer);
+  if (type === "spreadsheet" || /\.xlsx(\?|$)/i.test(url)) return extractXlsxText(buffer);
+  return "";
+}
+
+async function fetchResourceArrayBuffer(url) {
+  const response = await fetch(url, {
+    credentials: "include",
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error(`Could not fetch resource: HTTP ${response.status}`);
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength && contentLength > 25 * 1024 * 1024) {
+    throw new Error("Resource is too large to extract in the browser.");
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > 25 * 1024 * 1024) {
+    throw new Error("Resource is too large to extract in the browser.");
+  }
+  return buffer;
+}
+
+async function extractPdfText(buffer) {
+  if (typeof pdfjsLib === "undefined") {
+    throw new Error("PDF parser is not available.");
+  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("lib/pdf.worker.min.js");
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const maxPages = Math.min(pdf.numPages, 25);
+  const pages = [];
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const text = textContent.items.map((item) => item.str || "").join(" ");
+    if (text.trim()) pages.push(`Page ${pageNumber}: ${text}`);
+  }
+  return normalizeExtractedContent(pages.join("\n\n"));
+}
+
+async function extractDocxText(buffer) {
+  const entries = await extractZipTextEntries(buffer, (name) =>
+    /^word\/(document|footnotes|endnotes|comments|header\d+|footer\d+)\.xml$/i.test(name)
+  );
+  return normalizeExtractedContent(entries.map(({ text }) => xmlToText(text)).join("\n\n"));
+}
+
+async function extractPptxText(buffer) {
+  const entries = await extractZipTextEntries(buffer, (name) =>
+    /^ppt\/(slides\/slide\d+|notesSlides\/notesSlide\d+)\.xml$/i.test(name)
+  );
+  return normalizeExtractedContent(
+    entries
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      .map((entry) => xmlToText(entry.text))
+      .join("\n\n")
+  );
+}
+
+async function extractXlsxText(buffer) {
+  const entries = await extractZipTextEntries(buffer, (name) =>
+    /^xl\/(sharedStrings|worksheets\/sheet\d+)\.xml$/i.test(name)
+  );
+  return normalizeExtractedContent(
+    entries
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      .map((entry) => xmlToText(entry.text))
+      .join("\n\n")
+  );
+}
+
+async function extractZipTextEntries(buffer, shouldExtract) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const decoder = new TextDecoder("utf-8");
+  const centralDirectory = findCentralDirectory(view);
+  if (!centralDirectory) throw new Error("Could not read Office document zip directory.");
+
+  const entries = [];
+  let offset = centralDirectory.offset;
+  const end = centralDirectory.offset + centralDirectory.size;
+  while (offset < end && view.getUint32(offset, true) === 0x02014b50) {
+    const compressionMethod = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+    const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + fileNameLength));
+
+    if (shouldExtract(name)) {
+      const localNameLength = view.getUint16(localHeaderOffset + 26, true);
+      const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+      const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+      const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+      const inflated = await inflateZipEntry(compressed, compressionMethod);
+      entries.push({ name, text: decoder.decode(inflated) });
+    }
+
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function findCentralDirectory(view) {
+  for (let offset = view.byteLength - 22; offset >= 0 && offset >= view.byteLength - 65558; offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      return {
+        size: view.getUint32(offset + 12, true),
+        offset: view.getUint32(offset + 16, true)
+      };
+    }
+  }
+  return null;
+}
+
+async function inflateZipEntry(bytes, compressionMethod) {
+  if (compressionMethod === 0) return bytes;
+  if (compressionMethod !== 8) throw new Error(`Unsupported zip compression method ${compressionMethod}`);
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("This browser cannot decompress Office documents.");
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function xmlToText(xml) {
+  return decodeXmlEntities(
+    String(xml || "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+function decodeXmlEntities(value) {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, number) => String.fromCodePoint(Number.parseInt(number, 10)));
+}
+
+function normalizeExtractedContent(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_CONTENT_CHARS);
+}
+
+function isUsableSearchContent(text) {
+  const words = String(text || "").toLowerCase().match(/[a-z0-9']+/g) || [];
+  if (words.length < 20) return false;
+  return new Set(words).size / words.length > 0.08;
+}
+
 function safeGroupTitle(resource, transcript) {
   const raw = resource?.section || resource?.page_title || transcript.source_hint || "Imported transcript bundle";
   const parts = String(raw)
@@ -539,12 +767,14 @@ function seedIntroMessage(force = false) {
 function summarizeAvailableTopics() {
   const resourceTypes = countBy(state.resources.map((resource) => labelForKind(resource.type || "resource")));
   const transcriptGroups = groupTranscriptsByPage().slice(0, 5).map((group) => group.title);
+  const contentCount = Object.keys(state.contentStore || {}).length;
   const typeText = Object.entries(resourceTypes)
     .slice(0, 6)
     .map(([type, count]) => `${count} ${type}`)
     .join(", ");
   const transcriptText = transcriptGroups.length ? `Transcript groups include: ${transcriptGroups.join("; ")}.` : "No transcript groups yet.";
-  return `Current index: ${typeText || "no resources yet"}. ${transcriptText}`;
+  const contentText = contentCount ? `${contentCount} resources have searchable body text.` : "No extracted document/page bodies yet.";
+  return `Current index: ${typeText || "no resources yet"}. ${contentText} ${transcriptText}`;
 }
 
 function countBy(values) {
@@ -787,13 +1017,16 @@ function buildSearchDocs() {
       url: resource.url || resource.page_url || "",
       timestamp: ""
     };
-    const fullText = [resource.title, resource.context, resource.section, resource.page_title, resource.url].filter(Boolean).join(" ");
-    if (resource.type === "page" && fullText.length > 1200) {
+    const storedContent = state.contentStore?.[resource.id] || "";
+    const fullText = [resource.title, storedContent || resource.context, resource.section, resource.page_title, resource.url]
+      .filter(Boolean)
+      .join(" ");
+    if (fullText.length > 1200) {
       const chunks = chunkTextForSearch(fullText, 1400);
       for (let index = 0; index < chunks.length; index += 1) {
         docs.push({
           ...baseDoc,
-          kind: "page",
+          kind: resource.type || "resource",
           title: chunks.length > 1 ? `${baseDoc.title} (part ${index + 1})` : baseDoc.title,
           text: chunks[index]
         });

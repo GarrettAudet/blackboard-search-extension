@@ -1,5 +1,6 @@
 const RESOURCE_KEY = "resource_index";
 const TRANSCRIPT_KEY = "transcript_store";
+const CONTENT_KEY = "content_store";
 const META_KEY = "index_meta";
 const DEFAULT_CRAWL_SEED_URL =
   "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
@@ -26,6 +27,8 @@ async function handleMessage(message) {
       return mergeScrape(message.payload || {});
     case "GET_INDEX":
       return getIndex();
+    case "STORE_CONTENT":
+      return storeContent(message.payload || {});
     case "CLEAR_INDEX":
       return clearIndex();
     case "SCAN_ACTIVE_TAB":
@@ -42,20 +45,24 @@ async function handleMessage(message) {
 }
 
 async function getIndex() {
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, META_KEY]);
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY]);
   const resources = data[RESOURCE_KEY] || [];
   const transcripts = data[TRANSCRIPT_KEY] || [];
+  const contentStore = data[CONTENT_KEY] || {};
   const meta = data[META_KEY] || { resource_count: resources.length, transcript_count: transcripts.length };
-  return { ok: true, resources, transcripts, meta };
+  return { ok: true, resources, transcripts, content_store: contentStore, meta };
 }
 
 async function clearIndex() {
   await chrome.storage.local.set({
     [RESOURCE_KEY]: [],
     [TRANSCRIPT_KEY]: [],
+    [CONTENT_KEY]: {},
     [META_KEY]: {
       resource_count: 0,
       transcript_count: 0,
+      content_count: 0,
+      content_char_count: 0,
       last_updated: new Date().toISOString()
     }
   });
@@ -64,14 +71,18 @@ async function clearIndex() {
 
 async function mergeScrape(payload) {
   const scrapedResources = Array.isArray(payload.resources) ? payload.resources : [];
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY]);
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY]);
   const currentResources = data[RESOURCE_KEY] || [];
   const transcripts = data[TRANSCRIPT_KEY] || [];
+  const contentStore = data[CONTENT_KEY] || {};
   const byId = new Map(currentResources.map((resource) => [resource.id, resource]));
 
   for (const raw of scrapedResources) {
-    const resource = normalizeResource(raw);
-    if (!resource.url && !resource.title) continue;
+    const normalized = normalizeResource(raw);
+    if (!normalized.url && !normalized.title) continue;
+    const resource = resourceMetadataFrom(normalized);
+    const content = searchableContentFrom(normalized);
+    if (content) contentStore[resource.id] = content;
     const existing = byId.get(resource.id);
     if (existing) {
       byId.set(resource.id, {
@@ -93,8 +104,13 @@ async function mergeScrape(payload) {
 
   const resources = Array.from(byId.values());
   matchTranscriptsToResources(resources, transcripts);
-  await saveIndex(resources, transcripts);
-  return { ok: true, added_or_updated: scrapedResources.length, resource_count: resources.length };
+  await saveIndex(resources, transcripts, contentStore);
+  return {
+    ok: true,
+    added_or_updated: scrapedResources.length,
+    resource_count: resources.length,
+    content_count: Object.keys(contentStore).length
+  };
 }
 
 async function importTranscripts(payload) {
@@ -174,6 +190,24 @@ async function scanActiveTab() {
       resource_count: Array.isArray(response?.resources) ? response.resources.length : 0
     };
   }
+}
+
+async function storeContent(payload) {
+  const resourceId = cleanText(payload.resource_id || payload.resourceId || "", 120);
+  const content = cleanText(payload.content || payload.text || "", 20000);
+  if (!resourceId || !content) return { ok: false, error: "missing_resource_or_content" };
+
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY]);
+  const resources = data[RESOURCE_KEY] || [];
+  const transcripts = data[TRANSCRIPT_KEY] || [];
+  const contentStore = data[CONTENT_KEY] || {};
+  if (!resources.some((resource) => resource.id === resourceId)) {
+    return { ok: false, error: "resource_not_found" };
+  }
+
+  contentStore[resourceId] = content;
+  await saveIndex(resources, transcripts, contentStore);
+  return { ok: true, resource_id: resourceId, content_length: content.length };
 }
 
 async function crawlSite(payload) {
@@ -412,18 +446,36 @@ function extractResourcesFromHtmlFallback(html, pageUrl) {
   return { final_url: pageUrl, resources, child_urls: uniqueStrings(urls), course_urls: [] };
 }
 
-async function saveIndex(resources, transcripts) {
+async function saveIndex(resources, transcripts, contentStore = null) {
+  let nextContentStore = contentStore;
+  if (!nextContentStore) {
+    const data = await chrome.storage.local.get(CONTENT_KEY);
+    nextContentStore = data[CONTENT_KEY] || {};
+  }
+  nextContentStore = pruneContentStore(nextContentStore, resources);
   await chrome.storage.local.set({
     [RESOURCE_KEY]: resources,
     [TRANSCRIPT_KEY]: transcripts,
+    [CONTENT_KEY]: nextContentStore,
     [META_KEY]: {
       resource_count: resources.length,
       transcript_count: transcripts.length,
       transcript_segment_count: transcripts.reduce((sum, transcript) => sum + transcript.segments.length, 0),
+      content_count: Object.keys(nextContentStore).length,
+      content_char_count: Object.values(nextContentStore).reduce((sum, text) => sum + String(text || "").length, 0),
       video_count: resources.filter(isVideoResource).length,
       last_updated: new Date().toISOString()
     }
   });
+}
+
+function pruneContentStore(contentStore, resources) {
+  const resourceIds = new Set(resources.map((resource) => resource.id));
+  return Object.fromEntries(
+    Object.entries(contentStore || {})
+      .filter(([id, text]) => resourceIds.has(id) && String(text || "").trim())
+      .map(([id, text]) => [id, cleanText(text, 20000)])
+  );
 }
 
 function defaultAllowedPrefix(seedUrl) {
@@ -633,11 +685,24 @@ function normalizeResource(raw) {
     page_url: normalizeUrl(raw.page_url || ""),
     page_title: cleanText(raw.page_title || "", 240),
     section: cleanText(raw.section || "", 240),
-    context: cleanText(raw.context || raw.description || "", raw.type === "page" ? 10000 : 1800),
+    context: cleanText(raw.context || raw.description || "", type === "page" ? 10000 : 1800),
     discovered_at: cleanText(raw.discovered_at || new Date().toISOString(), 80),
     transcript_ids: uniqueStrings(raw.transcript_ids || raw.transcriptIds || [])
   };
   return resource;
+}
+
+function searchableContentFrom(resource) {
+  const content = cleanText(resource.context || "", resource.type === "page" ? 20000 : 5000);
+  if (!content) return "";
+  return [resource.title, resource.section, resource.page_title, content].filter(Boolean).join("\n\n");
+}
+
+function resourceMetadataFrom(resource) {
+  return {
+    ...resource,
+    context: cleanText(resource.context || "", resource.type === "page" ? 900 : 500)
+  };
 }
 
 function normalizeTranscriptBundle(payload) {

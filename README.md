@@ -19,6 +19,11 @@ preparing transcript/index data.
 - Crawls nested Blackboard pages under an allowed URL prefix so course folders
   and subfolders can be indexed without clicking every page manually.
 - Stores the local resource index in Chrome storage.
+- Stores extracted webpage/document body text in a separate local
+  `content_store` so search ranks actual content chunks, not just filenames or
+  link cards.
+- Extracts searchable text from Blackboard webpages, PDFs, DOCX, PPTX, XLSX,
+  and imported transcript segments when available.
 - Lets the user import a prepared transcript JSON bundle.
 - Automatically attaches transcripts to discovered videos when titles, URLs, or
   source hints match.
@@ -82,6 +87,20 @@ downloads the detected media with the user's logged-in Blackboard session,
 sends that media to OpenAI, checks that the returned transcript looks usable,
 and stores the resulting searchable transcript locally.
 
+## Search Architecture
+
+The extension keeps two local indexes:
+
+- `resource_index`: lightweight inventory metadata such as title, URL, type,
+  section, and page title.
+- `content_store`: full searchable body text keyed by resource id. Blackboard
+  pages are stored here during crawl/scan. PDFs and Office files are fetched
+  with the user's logged-in session and parsed locally in Chrome when possible.
+
+The chat builds itemized retrieval chunks from `content_store` and imported
+transcript segments, scores those chunks against the user's question, and sends
+only the top relevant chunks to the selected API provider.
+
 ## Video Transcript Workflow
 
 The extension treats transcript creation as a one-time preparation step:
@@ -138,6 +157,7 @@ Matching uses:
 manifest.json                    Chrome extension manifest
 background/service-worker.js      crawler, local storage, transcript import, matching
 content/scraper.js                Blackboard page/resource/video detector
+lib/                              local parsers used for document text extraction
 sidepanel/                        search and transcript UI
 docs/                             additional notes
 sample-data/                      example transcript bundle
