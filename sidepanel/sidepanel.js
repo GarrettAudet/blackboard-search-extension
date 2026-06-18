@@ -1,12 +1,27 @@
+const SETTINGS_KEY = "assistant_settings";
+
 const state = {
   resources: [],
   transcripts: [],
-  meta: {}
+  meta: {},
+  settings: {
+    provider: "openrouter",
+    model: "openrouter/auto",
+    hasApiKey: false
+  }
 };
 
 const els = {
   statusText: document.getElementById("statusText"),
   refreshBtn: document.getElementById("refreshBtn"),
+  chatViewBtn: document.getElementById("chatViewBtn"),
+  transcriptsViewBtn: document.getElementById("transcriptsViewBtn"),
+  setupViewBtn: document.getElementById("setupViewBtn"),
+  chatView: document.getElementById("chatView"),
+  setupView: document.getElementById("setupView"),
+  transcriptsView: document.getElementById("transcriptsView"),
+  chatMessages: document.getElementById("chatMessages"),
+  chatForm: document.getElementById("chatForm"),
   scanBtn: document.getElementById("scanBtn"),
   crawlBtn: document.getElementById("crawlBtn"),
   importBtn: document.getElementById("importBtn"),
@@ -16,16 +31,21 @@ const els = {
   prefixInput: document.getElementById("prefixInput"),
   maxPagesInput: document.getElementById("maxPagesInput"),
   delayInput: document.getElementById("delayInput"),
+  providerSelect: document.getElementById("providerSelect"),
+  modelInput: document.getElementById("modelInput"),
+  apiKeyInput: document.getElementById("apiKeyInput"),
+  saveSettingsBtn: document.getElementById("saveSettingsBtn"),
+  setupState: document.getElementById("setupState"),
+  crawlState: document.getElementById("crawlState"),
   resourceCount: document.getElementById("resourceCount"),
   videoCount: document.getElementById("videoCount"),
   transcriptCount: document.getElementById("transcriptCount"),
   queryInput: document.getElementById("queryInput"),
   searchBtn: document.getElementById("searchBtn"),
-  resultCount: document.getElementById("resultCount"),
-  results: document.getElementById("results"),
   videoStatus: document.getElementById("videoStatus"),
-  videoList: document.getElementById("videoList"),
-  resultTemplate: document.getElementById("resultTemplate")
+  transcriptGroups: document.getElementById("transcriptGroups"),
+  messageTemplate: document.getElementById("messageTemplate"),
+  sourceTemplate: document.getElementById("sourceTemplate")
 };
 
 function sendMessage(type, payload = {}) {
@@ -36,20 +56,55 @@ function setStatus(message) {
   els.statusText.textContent = message;
 }
 
-async function refreshIndex() {
-  const response = await sendMessage("GET_INDEX");
-  if (!response.ok) throw new Error(response.error || "Unable to load index");
-  state.resources = response.resources || [];
-  state.transcripts = response.transcripts || [];
-  state.meta = response.meta || {};
+async function refreshAll() {
+  const [indexResponse, settings] = await Promise.all([sendMessage("GET_INDEX"), loadSettings()]);
+  if (!indexResponse.ok) throw new Error(indexResponse.error || "Unable to load index");
+  state.resources = indexResponse.resources || [];
+  state.transcripts = indexResponse.transcripts || [];
+  state.meta = indexResponse.meta || {};
+  state.settings = settings;
   render();
+}
+
+async function loadSettings() {
+  const data = await chrome.storage.local.get(SETTINGS_KEY);
+  const saved = data[SETTINGS_KEY] || {};
+  return {
+    provider: saved.provider || "openrouter",
+    model: saved.model || defaultModel(saved.provider || "openrouter"),
+    hasApiKey: Boolean(saved.apiKey),
+    apiKey: saved.apiKey || ""
+  };
+}
+
+async function saveSettings() {
+  const provider = els.providerSelect.value;
+  const model = els.modelInput.value.trim() || defaultModel(provider);
+  const apiKey = els.apiKeyInput.value.trim() || state.settings.apiKey || "";
+  await chrome.storage.local.set({
+    [SETTINGS_KEY]: {
+      provider,
+      model,
+      apiKey
+    }
+  });
+  state.settings = { provider, model, apiKey, hasApiKey: Boolean(apiKey) };
+  els.apiKeyInput.value = "";
+  renderSettings();
+  setStatus("Setup saved locally.");
+}
+
+function defaultModel(provider) {
+  if (provider === "openai") return "gpt-4.1-mini";
+  if (provider === "deepseek") return "deepseek-chat";
+  return "openrouter/auto";
 }
 
 async function scanActiveTab() {
   setStatus("Scanning active Blackboard tab...");
   const response = await sendMessage("SCAN_ACTIVE_TAB");
   if (!response.ok) throw new Error(response.error || "Scan failed");
-  await refreshIndex();
+  await refreshAll();
   setStatus(`Scanned active tab. Found ${response.resource_count || 0} resources on this page.`);
 }
 
@@ -64,7 +119,7 @@ async function crawlSite() {
     delay_ms: Number(els.delayInput.value || 120)
   });
   if (!response.ok) throw new Error(response.error || "Crawl failed");
-  await refreshIndex();
+  await refreshAll();
   const failureText = response.failures && response.failures.length ? ` ${response.failures.length} page(s) failed.` : "";
   setStatus(
     `Crawled ${response.pages_crawled} page(s), saw ${response.resources_seen} resources, stored ${response.resource_count}.${failureText}`
@@ -77,15 +132,17 @@ async function importTranscriptFile(file) {
   setStatus("Importing transcripts...");
   const response = await sendMessage("IMPORT_TRANSCRIPTS", json);
   if (!response.ok) throw new Error(response.error || "Transcript import failed");
-  await refreshIndex();
+  await refreshAll();
   setStatus(`Imported ${response.imported} transcript(s); auto-attached ${response.auto_attached}.`);
+  setView("transcripts");
 }
 
 async function clearIndex() {
   if (!confirm("Clear all indexed Blackboard resources and transcripts from this browser?")) return;
   const response = await sendMessage("CLEAR_INDEX");
   if (!response.ok) throw new Error(response.error || "Clear failed");
-  await refreshIndex();
+  await refreshAll();
+  seedIntroMessage(true);
   setStatus("Local index cleared.");
 }
 
@@ -95,103 +152,188 @@ function render() {
   els.videoCount.textContent = String(videos.length);
   els.transcriptCount.textContent = String(state.transcripts.length);
   const updated = state.meta.last_updated ? new Date(state.meta.last_updated).toLocaleString() : "not built yet";
-  setStatus(`Local index updated: ${updated}`);
-  renderVideos(videos);
-  runSearch();
+  setStatus(`${state.resources.length} resources indexed; updated ${updated}`);
+  renderSettings();
+  renderTranscripts();
+  seedIntroMessage();
 }
 
-function renderVideos(videos) {
-  els.videoList.textContent = "";
-  const ready = videos.filter((video) => (video.transcript_ids || []).length).length;
-  els.videoStatus.textContent = videos.length ? `${ready}/${videos.length} searchable` : "none found";
-  if (!videos.length) {
-    els.videoList.append(emptyNode("No video resources found yet. Open Blackboard and scan a course page."));
+function renderSettings() {
+  els.providerSelect.value = state.settings.provider || "openrouter";
+  els.modelInput.value = state.settings.model || defaultModel(els.providerSelect.value);
+  els.setupState.textContent = state.settings.hasApiKey ? "API key saved" : "local search only";
+}
+
+function renderTranscripts() {
+  const videos = state.resources.filter(isVideoResource);
+  const attached = videos.filter((video) => (video.transcript_ids || []).length).length;
+  els.videoStatus.textContent = videos.length ? `${attached}/${videos.length} videos attached` : "no videos found";
+  els.transcriptGroups.textContent = "";
+
+  const groups = groupTranscriptsByPage();
+  if (!groups.length) {
+    els.transcriptGroups.append(emptyNode("No transcripts imported yet. Import a transcript bundle after crawling Blackboard."));
     return;
   }
 
-  for (const video of videos.slice(0, 30)) {
-    const card = document.createElement("article");
-    card.className = "video-card";
+  for (const group of groups) {
+    const section = document.createElement("section");
+    section.className = "transcript-group";
 
-    const top = document.createElement("div");
-    top.className = "video-topline";
     const title = document.createElement("h3");
-    title.textContent = video.title || "Untitled video";
-    const badge = document.createElement("span");
-    const attached = video.transcript_ids || [];
-    badge.className = `video-state ${attached.length ? "ready" : "missing"}`;
-    badge.textContent = attached.length ? "Transcript ready" : "Transcript missing";
-    top.append(title, badge);
+    title.textContent = group.title;
+    section.append(title);
 
-    const meta = document.createElement("p");
-    meta.className = "video-meta";
-    meta.textContent = [video.type, video.section, video.page_title].filter(Boolean).join(" - ");
-
-    card.append(top, meta);
-    if (video.url) {
-      const link = document.createElement("a");
-      link.className = "open-link";
-      link.href = video.url;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = "Open video source";
-      card.append(link);
+    const list = document.createElement("div");
+    list.className = "transcript-list";
+    for (const item of group.items) {
+      list.append(renderTranscriptRow(item));
     }
-
-    if (!attached.length && state.transcripts.length) {
-      const row = document.createElement("div");
-      row.className = "attach-row";
-      const select = document.createElement("select");
-      for (const transcript of state.transcripts) {
-        const option = document.createElement("option");
-        option.value = transcript.id;
-        option.textContent = transcript.title || transcript.id;
-        select.append(option);
-      }
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = "Attach";
-      button.addEventListener("click", async () => {
-        const response = await sendMessage("MANUAL_ATTACH_TRANSCRIPT", {
-          resource_id: video.id,
-          transcript_id: select.value
-        });
-        if (!response.ok) throw new Error(response.error || "Attach failed");
-        await refreshIndex();
-      });
-      row.append(select, button);
-      card.append(row);
-    }
-
-    els.videoList.append(card);
+    section.append(list);
+    els.transcriptGroups.append(section);
   }
 }
 
-function runSearch() {
-  const query = els.queryInput.value.trim();
-  els.results.textContent = "";
-  if (!query) {
-    els.resultCount.textContent = "";
-    els.results.append(emptyNode("Enter a question or keyword to search local resources."));
-    return;
+function groupTranscriptsByPage() {
+  const resourceById = new Map(state.resources.map((resource) => [resource.id, resource]));
+  const groups = new Map();
+
+  for (const transcript of state.transcripts) {
+    const resources = (transcript.matched_resource_ids || [])
+      .map((id) => resourceById.get(id))
+      .filter(Boolean);
+    const primary = resources[0];
+    const groupTitle = cleanGroupTitle(primary, transcript);
+    if (!groups.has(groupTitle)) groups.set(groupTitle, []);
+    groups.get(groupTitle).push({ transcript, resource: primary });
   }
 
-  const docs = buildSearchDocs();
-  const results = docs
+  return Array.from(groups.entries())
+    .map(([title, items]) => ({
+      title,
+      items: items.sort((a, b) => String(a.transcript.title).localeCompare(String(b.transcript.title)))
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function cleanGroupTitle(resource, transcript) {
+  const raw = resource?.section || resource?.page_title || transcript.source_hint || "Imported transcript bundle";
+  const parts = String(raw)
+    .split(/\s[-–>]\s|\n|\r|\/+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts[parts.length - 1] || raw;
+}
+
+function renderTranscriptRow(item) {
+  const row = document.createElement("article");
+  row.className = "transcript-row";
+
+  const title = document.createElement("div");
+  title.className = "transcript-row-title";
+  title.textContent = item.transcript.title || "Untitled transcript";
+
+  const meta = document.createElement("div");
+  meta.className = "transcript-row-meta";
+  const segmentCount = `${(item.transcript.segments || []).length} segment(s)`;
+  meta.textContent = [item.resource?.page_title, item.transcript.source_hint, segmentCount].filter(Boolean).join(" - ");
+
+  row.append(title, meta);
+  if (item.resource?.url || item.transcript.video_url) {
+    const link = document.createElement("a");
+    link.className = "open-link";
+    link.href = item.resource?.url || item.transcript.video_url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open source";
+    row.append(link);
+  }
+  return row;
+}
+
+function seedIntroMessage(force = false) {
+  if (!force && els.chatMessages.children.length) return;
+  els.chatMessages.textContent = "";
+  const topics = summarizeAvailableTopics();
+  appendMessage(
+    "assistant",
+    `Ask questions across your indexed Blackboard resources and imported video transcripts.\n\n${topics}\n\nUse Setup to crawl Blackboard, import transcripts, and configure an API key when external AI answering is enabled.`
+  );
+}
+
+function summarizeAvailableTopics() {
+  const resourceTypes = countBy(state.resources.map((resource) => labelForKind(resource.type || "resource")));
+  const transcriptGroups = groupTranscriptsByPage().slice(0, 5).map((group) => group.title);
+  const typeText = Object.entries(resourceTypes)
+    .slice(0, 6)
+    .map(([type, count]) => `${count} ${type}`)
+    .join(", ");
+  const transcriptText = transcriptGroups.length ? `Transcript groups include: ${transcriptGroups.join("; ")}.` : "No transcript groups yet.";
+  return `Current index: ${typeText || "no resources yet"}. ${transcriptText}`;
+}
+
+function countBy(values) {
+  const counts = {};
+  for (const value of values.filter(Boolean)) counts[value] = (counts[value] || 0) + 1;
+  return counts;
+}
+
+function handleAsk(event) {
+  event.preventDefault();
+  const query = els.queryInput.value.trim();
+  if (!query) return;
+  els.queryInput.value = "";
+  appendMessage("user", query);
+  const results = searchIndex(query);
+  const answer = buildLocalAnswer(query, results);
+  appendMessage("assistant", answer, results);
+}
+
+function searchIndex(query) {
+  return buildSearchDocs()
     .map((doc) => ({ ...doc, score: scoreDoc(query, doc) }))
     .filter((doc) => doc.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 12);
+    .slice(0, 8);
+}
 
-  els.resultCount.textContent = `${results.length} shown`;
+function buildLocalAnswer(query, results) {
+  if (!state.resources.length && !state.transcripts.length) {
+    return "I do not have any local Blackboard resources indexed yet. Open Blackboard, go to Setup, and run Crawl first.";
+  }
+  if (isCapabilityQuestion(query)) return summarizeAvailableTopics();
   if (!results.length) {
-    els.results.append(emptyNode("No local matches. Try broader terms or import transcripts for video-only resources."));
-    return;
+    return "I could not find a local match in the indexed Blackboard resources or imported transcripts. Try broader terms, crawl a narrower section, or import the relevant transcript bundle.";
   }
 
-  for (const result of results) {
-    els.results.append(renderResult(result, query));
+  const top = results.slice(0, 3);
+  const lines = top.map((result, index) => {
+    const quote = snippetFor(result.text, query, 180);
+    return `${index + 1}. ${result.title}${result.timestamp ? ` (${result.timestamp})` : ""}: ${quote}`;
+  });
+
+  const modeNote = state.settings.hasApiKey
+    ? "Local retrieval found these likely sources. External API answering is not enabled in this build yet."
+    : "Local retrieval found these likely sources. Add an API key in Setup once external AI answering is enabled for synthesized answers.";
+  return `${modeNote}\n\n${lines.join("\n\n")}`;
+}
+
+function isCapabilityQuestion(query) {
+  return /\b(what can|what does|resources|topics|transcripts|videos|coverage|cover|search)\b/i.test(query);
+}
+
+function appendMessage(role, text, sources = []) {
+  const node = els.messageTemplate.content.firstElementChild.cloneNode(true);
+  node.classList.add(role);
+  node.querySelector(".message-body").textContent = text;
+  if (role === "assistant" && sources.length) {
+    const list = document.createElement("div");
+    list.className = "source-list";
+    for (const source of sources.slice(0, 5)) list.append(renderSourceCard(source, ""));
+    node.querySelector(".message-body").append(list);
   }
+  els.chatMessages.append(node);
+  node.scrollIntoView({ block: "end" });
 }
 
 function buildSearchDocs() {
@@ -218,7 +360,7 @@ function buildSearchDocs() {
         kind: "video_transcript",
         title: transcript.title || "Video transcript",
         text: segment.text || "",
-        source: matchedResource?.title || transcript.source_hint || transcript.video_url || "Imported transcript",
+        source: matchedResource?.page_title || matchedResource?.title || transcript.source_hint || transcript.video_url || "Imported transcript",
         url: matchedResource?.url || transcript.video_url || "",
         timestamp: [segment.start, segment.end].filter(Boolean).join("-")
       });
@@ -227,8 +369,8 @@ function buildSearchDocs() {
   return docs;
 }
 
-function renderResult(result, query) {
-  const node = els.resultTemplate.content.firstElementChild.cloneNode(true);
+function renderSourceCard(result, query) {
+  const node = els.sourceTemplate.content.firstElementChild.cloneNode(true);
   node.querySelector(".type-pill").textContent = labelForKind(result.kind);
   node.querySelector(".score").textContent = `score ${Math.round(result.score)}`;
   node.querySelector("h3").textContent = result.timestamp ? `${result.title} (${result.timestamp})` : result.title;
@@ -265,12 +407,16 @@ function expandedTokens(query) {
   const tokens = normalizeText(query).split(" ").filter((token) => token.length > 2);
   const extras = [];
   const synonymMap = {
-    visa: ["x1", "jw202", "permit"],
+    visa: ["x1", "jw202", "permit", "residence"],
+    permit: ["visa", "residence", "x1"],
     money: ["cash", "rmb", "bank", "banking"],
-    payment: ["alipay", "wechatpay", "cash", "card"],
+    banking: ["bank", "rmb", "payment", "cash"],
+    payment: ["alipay", "wechatpay", "cash", "card", "bank"],
     taxi: ["didi", "arrival"],
     video: ["webinar", "recording", "transcript"],
-    transcript: ["video", "webinar", "recording"]
+    transcript: ["video", "webinar", "recording"],
+    job: ["career", "internship", "resume", "interview"],
+    career: ["job", "internship", "resume", "interview"]
   };
   for (const token of tokens) {
     extras.push(...(synonymMap[token] || []));
@@ -278,15 +424,15 @@ function expandedTokens(query) {
   return Array.from(new Set([...tokens, ...extras]));
 }
 
-function snippetFor(text, query) {
+function snippetFor(text, query, limit = 260) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
   if (!clean) return "";
   const tokens = expandedTokens(query);
   const lower = clean.toLowerCase();
   const hit = tokens.map((token) => lower.indexOf(token)).filter((index) => index >= 0).sort((a, b) => a - b)[0] || 0;
-  const start = Math.max(0, hit - 90);
-  const snippet = clean.slice(start, start + 260);
-  return `${start > 0 ? "... " : ""}${snippet}${start + 260 < clean.length ? " ..." : ""}`;
+  const start = Math.max(0, hit - 60);
+  const snippet = clean.slice(start, start + limit);
+  return `${start > 0 ? "... " : ""}${snippet}${start + limit < clean.length ? " ..." : ""}`;
 }
 
 function isVideoResource(resource) {
@@ -294,9 +440,9 @@ function isVideoResource(resource) {
 }
 
 function labelForKind(kind) {
-  if (kind === "video_transcript") return "Transcript";
-  if (kind === "video_embed") return "Video";
-  return String(kind || "Resource").replace(/_/g, " ");
+  if (kind === "video_transcript") return "transcript";
+  if (kind === "video_embed") return "video";
+  return String(kind || "resource").replace(/_/g, " ");
 }
 
 function normalizeText(value) {
@@ -314,6 +460,18 @@ function emptyNode(text) {
   return node;
 }
 
+function setView(view) {
+  const map = {
+    chat: [els.chatView, els.chatViewBtn],
+    setup: [els.setupView, els.setupViewBtn],
+    transcripts: [els.transcriptsView, els.transcriptsViewBtn]
+  };
+  for (const [name, [panel, button]] of Object.entries(map)) {
+    panel.classList.toggle("active", name === view);
+    button.classList.toggle("active", name === view);
+  }
+}
+
 function reportError(error) {
   console.error(error);
   setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
@@ -326,17 +484,27 @@ chrome.runtime.onMessage.addListener((message) => {
   const payload = message.payload || {};
   if (payload.status === "fetching") {
     setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; resources ${payload.resources}.`);
+    els.crawlState.textContent = `${payload.pages} pages`;
   } else if (payload.status === "complete") {
     setStatus(`Crawl complete. Pages ${payload.pages}; resources ${payload.resources}.`);
+    els.crawlState.textContent = "complete";
     els.crawlBtn.disabled = false;
     els.crawlBtn.textContent = "Crawl";
   } else if (payload.status === "started") {
     setStatus("Crawl started.");
+    els.crawlState.textContent = "running";
   }
   return false;
 });
 
-els.refreshBtn.addEventListener("click", () => refreshIndex().catch(reportError));
+els.refreshBtn.addEventListener("click", () => refreshAll().catch(reportError));
+els.chatViewBtn.addEventListener("click", () => setView("chat"));
+els.transcriptsViewBtn.addEventListener("click", () => setView("transcripts"));
+els.setupViewBtn.addEventListener("click", () => setView("setup"));
+els.providerSelect.addEventListener("change", () => {
+  els.modelInput.value = defaultModel(els.providerSelect.value);
+});
+els.saveSettingsBtn.addEventListener("click", () => saveSettings().catch(reportError));
 els.scanBtn.addEventListener("click", () => scanActiveTab().catch(reportError));
 els.crawlBtn.addEventListener("click", () =>
   crawlSite()
@@ -348,8 +516,7 @@ els.crawlBtn.addEventListener("click", () =>
 );
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
-els.searchBtn.addEventListener("click", runSearch);
-els.queryInput.addEventListener("input", runSearch);
+els.chatForm.addEventListener("submit", handleAsk);
 els.transcriptFile.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
@@ -358,4 +525,4 @@ els.transcriptFile.addEventListener("change", (event) => {
   });
 });
 
-refreshIndex().catch(reportError);
+refreshAll().catch(reportError);

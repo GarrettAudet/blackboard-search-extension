@@ -22,7 +22,11 @@ preparing transcript/index data.
   source hints match.
 - Lets the user manually attach a transcript to a video when matching is
   ambiguous.
-- Searches normal resources and video transcript segments together.
+- Searches normal resources and video transcript segments together in a chat-like
+  local retrieval view.
+- Includes a setup screen for provider/model/API key settings. External AI
+  answering is intentionally not enabled until the extension manifest is updated
+  with explicit third-party API permissions.
 
 ## What It Does Not Do Yet
 
@@ -55,6 +59,15 @@ preparing transcript/index data.
      dropdown and click `Attach`.
 9. Future searches include transcript segments instantly. The MP4 does not need
    to be transcribed again.
+
+## API Setup
+
+The setup screen stores the selected provider, model, and API key in local Chrome
+storage. In the current build, chat answers still use local retrieval only. To
+turn on synthesized AI answers, the extension must explicitly add host
+permissions for the selected API provider. That is a privacy boundary: the user's
+question and top retrieved Blackboard snippets/transcript segments would be sent
+to that provider.
 
 ## Video Transcript Workflow
 
