@@ -24,9 +24,8 @@ preparing transcript/index data.
   ambiguous.
 - Searches normal resources and video transcript segments together in a chat-like
   local retrieval view.
-- Includes a setup screen for provider/model/API key settings. External AI
-  answering is intentionally not enabled until the extension manifest is updated
-  with explicit third-party API permissions.
+- Includes a setup screen for OpenAI, DeepSeek, or OpenRouter API settings.
+  OpenRouter users can specify the exact sub-model in the model field.
 
 ## What It Does Not Do Yet
 
@@ -63,11 +62,16 @@ preparing transcript/index data.
 ## API Setup
 
 The setup screen stores the selected provider, model, and API key in local Chrome
-storage. In the current build, chat answers still use local retrieval only. To
-turn on synthesized AI answers, the extension must explicitly add host
-permissions for the selected API provider. That is a privacy boundary: the user's
-question and top retrieved Blackboard snippets/transcript segments would be sent
-to that provider.
+storage. The chat retrieves top local Blackboard matches first, then sends the
+user's question plus those matched snippets/transcript segments to the selected
+provider for a synthesized answer.
+
+Supported providers:
+
+- OpenAI: use an OpenAI model name such as `gpt-4.1-mini`.
+- DeepSeek: use a DeepSeek model name such as `deepseek-chat`.
+- OpenRouter: use an OpenRouter route or sub-model, such as `openrouter/auto`,
+  `openai/gpt-4.1-mini`, or `deepseek/deepseek-chat`.
 
 ## Video Transcript Workflow
 

@@ -250,11 +250,12 @@ main {
 }
 
 .send-button {
-  width: 42px;
+  min-width: 42px;
   height: 42px;
-  padding: 0;
+  padding: 0 9px;
   border-radius: 999px;
-  font-size: 18px;
+  font-size: 12px;
+  font-weight: 800;
   line-height: 1;
 }
 

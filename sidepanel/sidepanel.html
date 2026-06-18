@@ -40,7 +40,7 @@
             placeholder="Ask about Blackboard resources..."
             autocomplete="off"
           />
-          <button id="searchBtn" class="send-button" title="Ask" type="submit">↑</button>
+          <button id="searchBtn" class="send-button" title="Ask" type="submit">Ask</button>
         </form>
       </section>
 
@@ -60,14 +60,14 @@
             </select>
 
             <label for="modelInput">Model</label>
-            <input id="modelInput" type="text" autocomplete="off" placeholder="openrouter/auto" />
+            <input id="modelInput" type="text" autocomplete="off" placeholder="openrouter/auto or provider/model" />
 
             <label for="apiKeyInput">API key</label>
             <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Stored locally in Chrome" />
 
             <p class="setup-note">
-              API answering is opt-in. If enabled later, only the top matched Blackboard snippets and transcript
-              segments are sent to the selected provider with your question.
+              API answering sends your question and the top matched Blackboard snippets/transcript segments to the
+              selected provider. For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.
             </p>
 
             <button id="saveSettingsBtn" type="button">Save setup</button>
