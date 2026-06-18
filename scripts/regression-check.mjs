@@ -143,6 +143,9 @@ for (const forbidden of ["ncollege", "Actions All Items", "Nothing Due Today", "
     throw new Error(`Answer contains noisy duplicate text: ${forbidden}\n\n${answer.text}`);
   }
 }
+if (/\n\s*Sources\s*:/i.test(answer.text)) {
+  throw new Error(`Answer should not include an inline Sources section.\n\n${answer.text}`);
+}
 if (!answer.text.includes("I found 2 current To Do items")) {
   throw new Error(`Expected exactly two To Do items.\n\n${answer.text}`);
 }

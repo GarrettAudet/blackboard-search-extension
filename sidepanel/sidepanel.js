@@ -901,11 +901,10 @@ function buildTaskAnswer(query, results) {
     parts.push(`Source: [${item.sourceId}]`);
     return parts.join("\n   ");
   });
-  const sourceLines = sourceRefs.map((source, index) => `[${index + 1}] ${cleanSourceTitle(source)}`);
   return {
     text: `I found ${items.length} current To Do item${items.length === 1 ? "" : "s"}:\n\n${itemLines.join(
       "\n\n"
-    )}\n\nSources:\n${sourceLines.join("\n")}`,
+    )}`,
     sources: sourceRefs
   };
 }
@@ -1165,6 +1164,8 @@ async function buildApiAnswer(query, results) {
         "If the excerpts do not answer the question, say that you could not find the answer in the indexed resources. " +
         "If a source contains concrete tasks, deadlines, requirements, links, or dates, extract and list the actual items. " +
         "Do not answer with only a count; include the details from the excerpts. " +
+        "Do not include a separate Sources section; the interface shows sources separately. " +
+        "Keep the answer complete but compact. Prefer the most relevant details over exhaustive lists. " +
         "Do not say downloaded. Refer to materials as indexed Blackboard resources or imported transcripts. " +
         "Use concise prose and cite sources like [1], [2]."
     },
@@ -1180,7 +1181,7 @@ async function buildApiAnswer(query, results) {
     model: state.settings.model || defaultModel(state.settings.provider),
     messages
   });
-  return `${response.trim()}\n\nSources:\n${formatSourceList(context)}`;
+  return stripInlineSourcesSection(response.trim());
 }
 
 async function callChatCompletion({ provider, apiKey, model, messages }) {
@@ -1192,7 +1193,7 @@ async function callChatCompletion({ provider, apiKey, model, messages }) {
       model,
       messages,
       temperature: 0.2,
-      max_tokens: 1000
+      max_tokens: 1800
     })
   });
 
@@ -1261,22 +1262,15 @@ function formatSourcesForPrompt(sources) {
     .join("\n\n");
 }
 
-function formatSourceList(sources) {
-  const seen = new Set();
-  const lines = [];
-  for (const source of sources) {
-    const key = normalizeText(`${source.title} ${source.source}`);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    lines.push(`[${source.id}] ${source.title}${source.timestamp ? ` (${source.timestamp})` : ""} - ${source.source}`);
-    if (lines.length >= 5) break;
-  }
-  return lines.join("\n");
-}
-
 function clampText(value, limit) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function stripInlineSourcesSection(text) {
+  return String(text || "")
+    .replace(/\n{2,}\s*(Sources|Resources used|References)\s*:\s*[\s\S]*$/i, "")
+    .trim();
 }
 
 function isCapabilityQuestion(query) {
@@ -1288,10 +1282,7 @@ function appendMessage(role, text, sources = []) {
   node.classList.add(role);
   node.querySelector(".message-body").textContent = text;
   if (role === "assistant" && sources.length) {
-    const list = document.createElement("div");
-    list.className = "source-list";
-    for (const source of sources.slice(0, 5)) list.append(renderSourceCard(source, ""));
-    node.querySelector(".message-body").append(list);
+    node.querySelector(".message-body").append(renderSourceDisclosure(sources));
   }
   els.chatMessages.append(node);
   node.scrollIntoView({ block: "end" });
@@ -1302,12 +1293,24 @@ function updateMessage(node, text, sources = []) {
   const body = node.querySelector(".message-body");
   body.textContent = text;
   if (sources.length) {
-    const list = document.createElement("div");
-    list.className = "source-list";
-    for (const source of sources.slice(0, 5)) list.append(renderSourceCard(source, ""));
-    body.append(list);
+    body.append(renderSourceDisclosure(sources));
   }
   node.scrollIntoView({ block: "end" });
+}
+
+function renderSourceDisclosure(sources) {
+  const displaySources = sources.slice(0, 8);
+  const details = document.createElement("details");
+  details.className = "source-disclosure";
+  const summary = document.createElement("summary");
+  summary.textContent = `Sources (${displaySources.length})`;
+  details.append(summary);
+
+  const list = document.createElement("div");
+  list.className = "source-list";
+  displaySources.forEach((source, index) => list.append(renderSourceCard(source, "", index + 1)));
+  details.append(list);
+  return details;
 }
 
 function buildSearchDocs() {
@@ -1366,13 +1369,16 @@ function buildSearchDocs() {
   return docs;
 }
 
-function renderSourceCard(result, query) {
+function renderSourceCard(result, query, citationNumber = 0) {
   const node = els.sourceTemplate.content.firstElementChild.cloneNode(true);
-  node.querySelector(".type-pill").textContent = labelForKind(result.kind);
-  node.querySelector(".score").textContent = `score ${Math.round(result.score)}`;
-  node.querySelector("h3").textContent = result.timestamp ? `${result.title} (${result.timestamp})` : result.title;
+  node.querySelector(".type-pill").textContent = citationNumber ? `[${citationNumber}] ${labelForKind(result.kind)}` : labelForKind(result.kind);
+  const score = Number.isFinite(result.score) ? `score ${Math.round(result.score)}` : "";
+  node.querySelector(".score").textContent = score;
+  node.querySelector("h3").textContent = result.timestamp
+    ? `${cleanSourceTitle(result)} (${result.timestamp})`
+    : cleanSourceTitle(result);
   node.querySelector(".snippet").textContent = snippetFor(result.text, query);
-  node.querySelector(".source").textContent = result.source || result.url || "";
+  node.querySelector(".source").textContent = compactSourceTrail(result);
   const link = node.querySelector(".open-link");
   if (result.url) {
     link.href = result.url;
@@ -1380,6 +1386,20 @@ function renderSourceCard(result, query) {
     link.remove();
   }
   return node;
+}
+
+function compactSourceTrail(result) {
+  const raw = String(result.source || result.url || "");
+  const parts = raw
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const deduped = [];
+  for (const part of parts) {
+    if (!deduped.some((existing) => normalizeText(existing) === normalizeText(part))) deduped.push(part);
+  }
+  const text = (deduped.length ? deduped.join(" - ") : raw).replace(/\s+/g, " ").trim();
+  return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
 
 function scoreDoc(query, doc) {
