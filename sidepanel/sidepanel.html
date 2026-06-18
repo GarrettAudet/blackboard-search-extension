@@ -88,62 +88,42 @@
             <p class="setup-note">
               API answering sends your question and the top matched Blackboard snippets/transcript segments to the
               selected provider. For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.
+              Video transcription currently uses OpenAI audio transcription, so select OpenAI before transcribing
+              detected videos.
             </p>
 
             <button id="saveSettingsBtn" type="button">Save setup</button>
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Index Blackboard</h2>
-            <span id="crawlState"></span>
-          </div>
-
-          <div class="form-grid">
-            <label for="seedInput">Start URL</label>
-            <input
-              id="seedInput"
-              type="url"
-              value="https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1"
-              readonly
-              autocomplete="off"
-            />
-
-            <label for="prefixInput">Allowed URL prefix</label>
-            <input id="prefixInput" type="url" placeholder="Leave blank for same Blackboard site" autocomplete="off" />
-
-            <div class="crawl-row">
-              <label>
-                <span>Max pages</span>
-                <input id="maxPagesInput" type="number" min="1" max="2000" value="500" />
-              </label>
-              <label>
-                <span>Delay ms</span>
-                <input id="delayInput" type="number" min="0" max="3000" value="120" />
-              </label>
-            </div>
-
-            <div class="button-row">
-              <button id="crawlBtn" type="button">Crawl</button>
-              <button id="scanBtn" class="secondary" type="button">Scan Active Tab</button>
-              <button id="clearBtn" class="secondary" type="button">Clear</button>
-            </div>
-          </div>
-        </section>
       </section>
 
       <section id="transcriptsView" class="view" aria-label="Transcripts collected">
         <section class="panel">
           <div class="panel-heading">
-            <h2>Transcripts Collected</h2>
+            <h2>Library</h2>
             <span id="videoStatus"></span>
           </div>
           <div class="button-row">
+            <button id="crawlBtn" type="button">Index Blackboard</button>
+            <button id="scanBtn" class="secondary" type="button">Scan Current Page</button>
             <button id="importBtn" type="button">Import Transcripts</button>
+            <button id="clearBtn" class="secondary" type="button">Clear</button>
             <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
           </div>
+          <p id="crawlState" class="panel-note">Default crawl starts at the Blackboard portal, scans My Courses, and indexes up to 1500 pages.</p>
           <div id="transcriptGroups" class="transcript-groups"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Videos Needing Transcripts</h2>
+            <span id="transcriptionStatus">idle</span>
+          </div>
+          <div class="button-row">
+            <button id="transcribeAllBtn" type="button">Transcribe All</button>
+          </div>
+          <div id="missingVideoList" class="missing-video-list"></div>
         </section>
       </section>
     </main>

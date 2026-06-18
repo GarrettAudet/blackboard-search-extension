@@ -27,10 +27,6 @@ const els = {
   importBtn: document.getElementById("importBtn"),
   clearBtn: document.getElementById("clearBtn"),
   transcriptFile: document.getElementById("transcriptFile"),
-  seedInput: document.getElementById("seedInput"),
-  prefixInput: document.getElementById("prefixInput"),
-  maxPagesInput: document.getElementById("maxPagesInput"),
-  delayInput: document.getElementById("delayInput"),
   providerSelect: document.getElementById("providerSelect"),
   modelInput: document.getElementById("modelInput"),
   apiKeyInput: document.getElementById("apiKeyInput"),
@@ -43,6 +39,9 @@ const els = {
   queryInput: document.getElementById("queryInput"),
   searchBtn: document.getElementById("searchBtn"),
   videoStatus: document.getElementById("videoStatus"),
+  transcriptionStatus: document.getElementById("transcriptionStatus"),
+  transcribeAllBtn: document.getElementById("transcribeAllBtn"),
+  missingVideoList: document.getElementById("missingVideoList"),
   transcriptGroups: document.getElementById("transcriptGroups"),
   messageTemplate: document.getElementById("messageTemplate"),
   sourceTemplate: document.getElementById("sourceTemplate")
@@ -113,10 +112,8 @@ async function crawlSite() {
   els.crawlBtn.textContent = "Crawling...";
   setStatus("Starting crawl...");
   const response = await sendMessage("CRAWL_SITE", {
-    seed_url: els.seedInput.value.trim(),
-    allowed_prefix: els.prefixInput.value.trim(),
-    max_pages: Number(els.maxPagesInput.value || 80),
-    delay_ms: Number(els.delayInput.value || 120)
+    max_pages: 1500,
+    delay_ms: 120
   });
   if (!response.ok) throw new Error(response.error || "Crawl failed");
   await refreshAll();
@@ -154,6 +151,7 @@ function render() {
   setStatus(`${state.resources.length} resources indexed`);
   renderSettings();
   renderTranscripts();
+  renderMissingVideos();
   seedIntroMessage();
 }
 
@@ -192,6 +190,93 @@ function renderTranscripts() {
     section.append(list);
     els.transcriptGroups.append(section);
   }
+}
+
+function renderMissingVideos() {
+  const missingVideos = state.resources
+    .filter(isVideoResource)
+    .filter((video) => !(video.transcript_ids || []).length)
+    .sort((a, b) => String(a.page_title || a.title).localeCompare(String(b.page_title || b.title)));
+  const directMissingVideos = missingVideos.filter(isDirectMediaResource);
+  const canTranscribe = canUseVideoTranscription();
+
+  els.missingVideoList.textContent = "";
+  els.transcribeAllBtn.disabled = !directMissingVideos.length || !canTranscribe;
+  els.transcribeAllBtn.title = canTranscribe
+    ? "Transcribe every direct audio/video file missing a transcript"
+    : "Select OpenAI in Setup and save an API key to transcribe videos";
+
+  if (!missingVideos.length) {
+    els.missingVideoList.append(emptyNode("Every detected video has an attached transcript."));
+    els.transcriptionStatus.textContent = "complete";
+    return;
+  }
+
+  els.transcriptionStatus.textContent = transcriptionReadinessLabel(missingVideos.length, directMissingVideos.length);
+
+  for (const video of missingVideos) {
+    els.missingVideoList.append(renderMissingVideoRow(video));
+  }
+}
+
+function renderMissingVideoRow(video) {
+  const isDirectMedia = isDirectMediaResource(video);
+  const row = document.createElement("article");
+  row.className = "missing-video-row";
+
+  const text = document.createElement("div");
+  text.className = "missing-video-copy";
+  const title = document.createElement("div");
+  title.className = "transcript-row-title";
+  title.textContent = video.title || "Untitled video";
+  const meta = document.createElement("div");
+  meta.className = "transcript-row-meta";
+  meta.textContent = [video.type, video.page_title, video.section].filter(Boolean).join(" - ");
+  text.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "missing-video-actions";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = isDirectMedia ? "Transcribe" : "Import needed";
+  button.disabled = !canUseVideoTranscription() || !isDirectMedia;
+  button.title = !isDirectMedia
+    ? "This looks like an embedded player, not a direct media file. Import a prepared transcript JSON for now."
+    : button.disabled
+    ? "Select OpenAI in Setup and save an API key to transcribe this video"
+    : "Transcribe and store this video locally";
+  button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
+  actions.append(button);
+  if (video.url) {
+    const link = document.createElement("a");
+    link.className = "open-link";
+    link.href = video.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open";
+    actions.append(link);
+  }
+
+  row.append(text, actions);
+  return row;
+}
+
+function canUseVideoTranscription() {
+  return Boolean(state.settings.hasApiKey && state.settings.provider === "openai");
+}
+
+function isDirectMediaResource(resource) {
+  const type = String(resource.type || "").toLowerCase();
+  const url = String(resource.url || "").toLowerCase();
+  return /^(audio|video)$/.test(type) || /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(\?|$)/i.test(url);
+}
+
+function transcriptionReadinessLabel(missingCount, directCount) {
+  if (!state.settings.hasApiKey) return `${missingCount} missing; add API key`;
+  if (state.settings.provider !== "openai") return `${missingCount} missing; choose OpenAI`;
+  if (!directCount) return `${missingCount} missing; import embedded`;
+  if (directCount === missingCount) return `${missingCount} missing`;
+  return `${missingCount} missing; ${directCount} direct`;
 }
 
 function groupTranscriptsByPage() {
@@ -249,6 +334,184 @@ function renderTranscriptRow(item) {
     row.append(link);
   }
   return row;
+}
+
+async function transcribeAllMissingVideos() {
+  const missingVideos = state.resources
+    .filter(isVideoResource)
+    .filter(isDirectMediaResource)
+    .filter((video) => !(video.transcript_ids || []).length);
+  if (!missingVideos.length) return;
+  if (!state.settings.hasApiKey) throw new Error("Add an API key in Setup before transcribing videos.");
+  if (state.settings.provider !== "openai") {
+    throw new Error("Video transcription currently requires OpenAI as the selected API provider.");
+  }
+
+  els.transcribeAllBtn.disabled = true;
+  const startedAt = Date.now();
+  let completed = 0;
+  let failed = 0;
+
+  for (const video of missingVideos) {
+    const elapsedMs = Date.now() - startedAt;
+    const averageMs = completed + failed ? elapsedMs / (completed + failed) : 0;
+    const eta = averageMs ? formatDuration(averageMs * (missingVideos.length - completed - failed)) : "calculating";
+    els.transcriptionStatus.textContent = `${completed + failed + 1}/${missingVideos.length}; ETA ${eta}`;
+    try {
+      await transcribeVideo(video, { quiet: true });
+      completed += 1;
+    } catch (error) {
+      failed += 1;
+      console.warn("Video transcription failed", video.title, error);
+    }
+  }
+
+  await refreshAll();
+  els.transcriptionStatus.textContent = `${completed} transcribed${failed ? `, ${failed} failed` : ""}`;
+  els.transcribeAllBtn.disabled = false;
+}
+
+async function transcribeVideo(video, options = {}) {
+  if (!state.settings.hasApiKey) throw new Error("Add an API key in Setup before transcribing videos.");
+  if (state.settings.provider !== "openai") {
+    throw new Error("Video transcription currently requires OpenAI as the selected API provider.");
+  }
+  if (!video.url) throw new Error("This video does not have a direct URL to fetch.");
+
+  if (!options.quiet) els.transcriptionStatus.textContent = `Downloading ${video.title || "video"}...`;
+  const media = await fetchMediaBlob(video);
+  if (!options.quiet) els.transcriptionStatus.textContent = `Transcribing ${video.title || "video"}...`;
+  const rawText = await callOpenAiTranscription(media.blob, media.fileName);
+  const text = normalizeTranscriptText(rawText);
+  assertUsableTranscript(text, video);
+
+  const transcript = {
+    id: `transcript_${video.id}_${Date.now()}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 120),
+    title: video.title || video.page_title || "Video transcript",
+    source_hint: [video.page_title, video.section].filter(Boolean).join(" - "),
+    video_url: video.url || "",
+    matched_resource_ids: [video.id],
+    segments: segmentTranscriptText(text)
+  };
+
+  const response = await sendMessage("IMPORT_TRANSCRIPTS", { transcripts: [transcript] });
+  if (!response.ok) throw new Error(response.error || "Could not save transcript locally.");
+  if (!options.quiet) {
+    await refreshAll();
+    els.transcriptionStatus.textContent = "Transcript saved locally";
+  }
+  return transcript;
+}
+
+async function fetchMediaBlob(video) {
+  const response = await fetch(video.url, {
+    credentials: "include",
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error(`Could not fetch media: HTTP ${response.status}`);
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!/^(audio|video)\//i.test(contentType)) {
+    throw new Error("This looks like an embedded video page, not a direct audio/video file. Import a transcript manually for now.");
+  }
+
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength && contentLength > 24 * 1024 * 1024) {
+    throw new Error("This media file is too large for browser-side transcription. Try importing a prepared transcript.");
+  }
+
+  const blob = await response.blob();
+  if (blob.size > 24 * 1024 * 1024) {
+    throw new Error("This media file is too large for browser-side transcription. Try importing a prepared transcript.");
+  }
+
+  return {
+    blob,
+    fileName: fileNameFromUrl(video.url, contentType)
+  };
+}
+
+async function callOpenAiTranscription(blob, fileName) {
+  const form = new FormData();
+  form.append("model", "whisper-1");
+  form.append("response_format", "json");
+  form.append("file", new File([blob], fileName, { type: blob.type || "audio/mpeg" }));
+
+  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${state.settings.apiKey}`
+    },
+    body: form
+  });
+  const text = await response.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch (_error) {
+    throw new Error(`Transcription provider returned non-JSON response: ${text.slice(0, 160)}`);
+  }
+  if (!response.ok) {
+    throw new Error(json.error?.message || text || `Transcription failed with HTTP ${response.status}`);
+  }
+  return json.text || "";
+}
+
+function normalizeTranscriptText(value) {
+  return String(value || "")
+    .replace(/\[(music|applause|silence|inaudible)\]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function assertUsableTranscript(text, video) {
+  const words = text.toLowerCase().match(/[a-z0-9']+/g) || [];
+  const uniqueWords = new Set(words);
+  if (words.length < 25) {
+    throw new Error(`Transcript for "${video.title || "video"}" is too short to be useful.`);
+  }
+  if (uniqueWords.size / words.length < 0.18) {
+    throw new Error(`Transcript for "${video.title || "video"}" looks repetitive or low quality.`);
+  }
+}
+
+function segmentTranscriptText(text) {
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+  const segments = [];
+  let buffer = "";
+  for (const sentence of sentences.map((item) => item.trim()).filter(Boolean)) {
+    if ((buffer + " " + sentence).trim().length > 900 && buffer) {
+      segments.push({ id: String(segments.length), start: "", end: "", text: buffer });
+      buffer = sentence;
+    } else {
+      buffer = [buffer, sentence].filter(Boolean).join(" ");
+    }
+  }
+  if (buffer) segments.push({ id: String(segments.length), start: "", end: "", text: buffer });
+  return segments;
+}
+
+function fileNameFromUrl(url, contentType) {
+  let name = "blackboard-media";
+  try {
+    const parsed = new URL(url);
+    name = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || name);
+  } catch (_error) {
+    // Keep fallback file name.
+  }
+  if (/\.[a-z0-9]{2,5}$/i.test(name)) return name;
+  if (/mp4/i.test(contentType)) return `${name}.mp4`;
+  if (/webm/i.test(contentType)) return `${name}.webm`;
+  if (/mpeg|mp3/i.test(contentType)) return `${name}.mp3`;
+  if (/wav/i.test(contentType)) return `${name}.wav`;
+  return `${name}.mp4`;
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function safeGroupTitle(resource, transcript) {
@@ -657,7 +920,7 @@ function reportError(error) {
   console.error(error);
   setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
   els.crawlBtn.disabled = false;
-  els.crawlBtn.textContent = "Crawl";
+  els.crawlBtn.textContent = "Index Blackboard";
 }
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -670,7 +933,7 @@ chrome.runtime.onMessage.addListener((message) => {
     setStatus(`Crawl complete. Pages ${payload.pages}; resources ${payload.resources}.`);
     els.crawlState.textContent = "complete";
     els.crawlBtn.disabled = false;
-    els.crawlBtn.textContent = "Crawl";
+    els.crawlBtn.textContent = "Index Blackboard";
   } else if (payload.status === "started") {
     setStatus("Crawl started.");
     els.crawlState.textContent = "running";
@@ -695,11 +958,12 @@ els.crawlBtn.addEventListener("click", () =>
     .catch(reportError)
     .finally(() => {
       els.crawlBtn.disabled = false;
-      els.crawlBtn.textContent = "Crawl";
+      els.crawlBtn.textContent = "Index Blackboard";
     })
 );
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
+els.transcribeAllBtn.addEventListener("click", () => transcribeAllMissingVideos().catch(reportError));
 els.chatForm.addEventListener("submit", handleAsk);
 els.transcriptFile.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];

@@ -184,7 +184,7 @@ async function crawlSite(payload) {
     payload.allowed_prefix || payload.allowedPrefix || defaultAllowedPrefix(seedUrl),
     seedUrl
   );
-  const maxPages = clampInteger(payload.max_pages || payload.maxPages, 1, 2000, 500);
+  const maxPages = clampInteger(payload.max_pages || payload.maxPages, 1, 2000, 1500);
   const delayMs = clampInteger(payload.delay_ms || payload.delayMs, 0, 3000, 120);
   const seedOrigin = new URL(seedUrl).origin;
   const queue = [seedUrl];

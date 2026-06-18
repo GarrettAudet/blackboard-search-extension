@@ -22,8 +22,8 @@ preparing transcript/index data.
 - Lets the user import a prepared transcript JSON bundle.
 - Automatically attaches transcripts to discovered videos when titles, URLs, or
   source hints match.
-- Lets the user manually attach a transcript to a video when matching is
-  ambiguous.
+- Shows detected videos that do not have transcripts and can transcribe direct
+  audio/video files through OpenAI, then cache the searchable transcript locally.
 - Searches normal resources and video transcript segments together in a chat-like
   local retrieval view.
 - Includes a setup screen for OpenAI, DeepSeek, or OpenRouter API settings.
@@ -31,7 +31,9 @@ preparing transcript/index data.
 
 ## What It Does Not Do Yet
 
-- It does not automatically transcribe MP4 files inside Chrome.
+- It does not guarantee transcription for every embedded player. If Blackboard
+  only exposes a player page instead of a direct audio/video file, import a
+  prepared transcript JSON bundle instead.
 - It does not upload course content or transcripts to a shared backend.
 - It does not bypass Blackboard permissions; it only sees pages the user's
   logged-in browser can access.
@@ -44,24 +46,21 @@ preparing transcript/index data.
    - Click Load unpacked.
    - Select this repo folder: `C:\repos\BlackboardSearchExtension`.
 2. Open Blackboard and log in normally.
-3. Navigate to a course/resource page.
-4. Open the extension side panel.
-5. Click `Crawl`.
+3. Open the extension side panel.
+4. Click `Library`, then `Index Blackboard`.
    - Crawling starts from the Blackboard portal page and looks for links under
      `My Courses`.
    - Course links are crawled first, then sub-links, resource pages, embedded
      videos, and file links inside those course areas are indexed.
-   - Leave `Allowed URL prefix` blank for the current Blackboard site, or paste a
-     narrower folder/course prefix if you need to keep the crawl focused.
-6. Use `Scan Active Tab` for a quick one-page refresh when needed.
-7. Search the indexed resources.
-8. If videos are found, import a transcript bundle:
-   - Click `Import Transcripts`.
-   - Select a JSON transcript bundle.
-   - The extension auto-attaches transcripts where it can.
-   - If a video still says `Transcript missing`, choose a transcript from the
-     dropdown and click `Attach`.
-9. Future searches include transcript segments instantly. The MP4 does not need
+   - The default crawl limit is fixed at 1500 pages.
+5. Use `Scan Current Page` for a quick one-page refresh when needed.
+6. Search the indexed resources.
+7. If videos are found, open `Library`.
+   - Videos without transcripts appear under `Videos Needing Transcripts`.
+   - Select OpenAI in Setup and save an API key to use `Transcribe` or
+     `Transcribe All` for direct audio/video files.
+   - Or click `Import Transcripts` and select a prepared JSON transcript bundle.
+8. Future searches include transcript segments instantly. The MP4 does not need
    to be transcribed again.
 
 ## API Setup
@@ -78,20 +77,27 @@ Supported providers:
 - OpenRouter: use an OpenRouter route or sub-model, such as `openrouter/auto`,
   `openai/gpt-4.1-mini`, or `deepseek/deepseek-chat`.
 
+Video transcription currently uses OpenAI audio transcription. The extension
+downloads the detected media with the user's logged-in Blackboard session,
+sends that media to OpenAI, checks that the returned transcript looks usable,
+and stores the resulting searchable transcript locally.
+
 ## Video Transcript Workflow
 
 The extension treats transcript creation as a one-time preparation step:
 
 ```text
-MP4 or embedded video
--> transcribe once outside the extension
--> save transcript JSON with timestamps
--> import transcript JSON into the extension
+Detected direct media file
+-> transcribe once with OpenAI from the Library tab
+-> quality-check and chunk transcript text
+-> store transcript locally in Chrome
 -> transcript is cached locally and searched forever
 ```
 
-This avoids forcing every search to re-process the MP4. For a shared group, one
-admin can transcribe important videos once and distribute the transcript bundle.
+For embedded players that do not expose a direct audio/video file, prepare a
+transcript outside the extension and import it as JSON. This avoids forcing
+every search to re-process the MP4. For a shared group, one admin can transcribe
+important videos once and distribute the transcript bundle.
 
 ## Transcript Bundle Format
 
@@ -154,5 +160,6 @@ powershell -Command "Get-Content manifest.json | ConvertFrom-Json | Out-Null"
 ## Privacy
 
 Resources, transcript bundles, and search history stay in local Chrome storage.
-The current version does not call any LLM or transcription API. If transcription
-support is added later, it should be explicit, opt-in, and cached.
+LLM answering sends only the user's question plus top matched snippets to the
+selected provider. Video transcription is explicit and opt-in from the Library
+tab; generated transcripts are cached locally.

@@ -234,9 +234,11 @@ main {
   display: grid;
   grid-auto-rows: max-content;
   align-content: start;
-  gap: 18px;
+  gap: 13px;
   min-height: calc(100vh - 224px);
   padding: 0 2px 94px;
+  font-size: 10px;
+  line-height: 1.55;
 }
 
 .message {
@@ -249,6 +251,8 @@ main {
 
 .message-body {
   max-width: 94%;
+  font-size: 10px;
+  line-height: 1.55;
   color: var(--text);
   white-space: pre-wrap;
 }
@@ -259,7 +263,7 @@ main {
 
 .message.user .message-body {
   max-width: 82%;
-  padding: 10px 13px;
+  padding: 8px 11px;
   border-radius: 8px;
   color: #fff;
   background: linear-gradient(145deg, #7c3aed, #9b72ff);
@@ -404,6 +408,11 @@ input[readonly] {
   font-size: 12px;
 }
 
+.panel-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .transcript-groups {
   display: grid;
   gap: 10px;
@@ -443,6 +452,46 @@ input[readonly] {
   font-size: 12px;
 }
 
+.missing-video-list {
+  display: grid;
+  gap: 10px;
+}
+
+.missing-video-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0c0a14;
+}
+
+.missing-video-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.missing-video-copy .transcript-row-title,
+.missing-video-copy .transcript-row-meta {
+  overflow-wrap: anywhere;
+}
+
+.missing-video-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.missing-video-actions button {
+  padding: 7px 9px;
+  font-size: 11px;
+}
+
 .source-card {
   display: grid;
   gap: 7px;
@@ -450,6 +499,8 @@ input[readonly] {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #0c0a14;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .result-topline {
@@ -463,7 +514,7 @@ input[readonly] {
   display: inline-block;
   border-radius: 999px;
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 750;
   background: var(--accent-soft);
   color: var(--accent-strong);
@@ -474,7 +525,7 @@ input[readonly] {
 }
 
 .source {
-  font-size: 12px;
+  font-size: 10px;
   overflow-wrap: anywhere;
 }
 
