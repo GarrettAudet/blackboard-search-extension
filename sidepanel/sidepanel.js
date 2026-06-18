@@ -861,9 +861,11 @@ function isTaskQuery(query) {
 }
 
 function buildTaskAnswer(query, results) {
-  const candidates = distinctSourceResults(results)
-    .filter((result) => isLikelyTaskSource(query, result))
-    .slice(0, 6);
+  const distinctResults = distinctSourceResults(results);
+  const taskPages = distinctResults.filter((result) => isTaskPageResult(result));
+  const candidates = (taskPages.length ? taskPages : distinctResults.filter((result) => isLikelyTaskSource(query, result)))
+    .filter((result) => result.kind === "page")
+    .slice(0, 4);
   if (!candidates.length) return null;
 
   const sourceRefs = [];
@@ -873,14 +875,16 @@ function buildTaskAnswer(query, results) {
 
   for (const result of candidates) {
     const key = sourceKeyFor(result);
+    const text = fullTextForResult(result);
+    const extractedItems = extractTaskItemsFromText(text, result);
+    if (!extractedItems.length) continue;
     if (!sourceByKey.has(key)) {
       sourceByKey.set(key, sourceRefs.length + 1);
       sourceRefs.push(result);
     }
     const sourceId = sourceByKey.get(key);
-    const text = fullTextForResult(result);
-    for (const item of extractTaskItemsFromText(text, result)) {
-      const itemKey = normalizeText(`${item.title} ${item.deadline} ${item.detail}`);
+    for (const item of extractedItems) {
+      const itemKey = normalizeText(`${item.title} ${item.deadline}`);
       if (!itemKey || seenItems.has(itemKey)) continue;
       seenItems.add(itemKey);
       items.push({ ...item, sourceId });
@@ -932,9 +936,20 @@ function isLikelyTaskSource(query, result) {
   return isTaskQuery(query) && result.kind === "page";
 }
 
+function isTaskPageResult(result) {
+  if (result.kind !== "page") return false;
+  const title = normalizeText([result.title, result.base_title, result.source].filter(Boolean).join(" "));
+  const text = fullTextForResult(result);
+  if (/\bto do\b/.test(title)) return true;
+  return hasDeadlineBlocks(text) && /\b(to do|deadline|mandatory|submit|survey|application)\b/i.test(text);
+}
+
 function extractTaskItemsFromText(text, result) {
   const clean = normalizeTaskText(text);
   if (!clean) return [];
+  const blockItems = extractDeadlineBlockItems(clean, result);
+  if (blockItems.length) return blockItems;
+
   const items = [];
   const deadlinePattern =
     /(?:\u3010|\[|\()?[\s]*(?:deadline|due)[\s:]*([^\u3011\].!?]{2,130})(?:\u3011|\])?\s*([^.!?]{8,420})/gi;
@@ -965,6 +980,91 @@ function extractTaskItemsFromText(text, result) {
     deadline: extractDateLikeText(sentence),
     detail: cleanupTaskPhrase(sentence)
   }));
+}
+
+function hasDeadlineBlocks(text) {
+  return /[【\[]\s*Deadline\s+[^】\]]+[】\]]/i.test(String(text || ""));
+}
+
+function extractDeadlineBlockItems(clean, result) {
+  const markers = [];
+  const markerPattern = /[【\[]\s*Deadline\s+([^】\]]+?)\s*[】\]]/gi;
+  let match = markerPattern.exec(clean);
+  while (match) {
+    markers.push({
+      index: match.index,
+      end: markerPattern.lastIndex,
+      deadline: cleanupDeadline(match[1])
+    });
+    match = markerPattern.exec(clean);
+  }
+  if (!markers.length) return [];
+
+  const items = [];
+  for (let index = 0; index < markers.length; index += 1) {
+    const marker = markers[index];
+    const next = markers[index + 1]?.index || clean.length;
+    const block = cleanupTaskPhrase(clean.slice(marker.end, next));
+    if (!block || isBlackboardUtilityBlock(block)) continue;
+    const title = extractDeadlineBlockTitle(block, result);
+    const detail = extractDeadlineBlockDetail(block, title);
+    if (!title || !detail) continue;
+    items.push({
+      title,
+      deadline: marker.deadline,
+      detail
+    });
+  }
+  return items;
+}
+
+function cleanupDeadline(value) {
+  return cleanupTaskPhrase(value)
+    .replace(/^[\s:,-]+|[\s:,-]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function extractDeadlineBlockTitle(block, result) {
+  const beforeAction = block
+    .split(
+      /\b(?:Attached Files?:|Review|Read|Fill out|Complete|Submit|Students?|Please|The survey|This survey|You can|Click|Scan|Access)\b/i
+    )[0]
+    .replace(/\bClass of 20\d{2}[-–]20\d{2} Pre-program\b/gi, " ")
+    .replace(/\bTo Do\b/gi, " ")
+    .replace(/\bHome\b/gi, " ")
+    .replace(/\s+-\s+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sentenceTitle = beforeAction.split(/[.!?]/)[0] || beforeAction;
+  const title = cleanupTaskPhrase(sentenceTitle).slice(0, 180);
+  if (title.length >= 6 && !/^https?:/i.test(title)) return title;
+  return cleanSourceTitle(result);
+}
+
+function extractDeadlineBlockDetail(block, title) {
+  let detail = block;
+  if (title) detail = detail.replace(title, " ");
+  detail = detail
+    .replace(/\bAttached Files?:\s*[^.]+/gi, " ")
+    .replace(/\bYou can access\b[\s\S]*$/i, " ")
+    .replace(/\bScan the QR Code\b[\s\S]*$/i, " ")
+    .replace(/\bclick the link:\s*\S+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const actionSentences = splitSentences(detail)
+    .filter((sentence) => /\b(review|read|fill out|complete|submit|mandatory|survey|application|students)\b/i.test(sentence))
+    .filter((sentence) => !isBlackboardUtilityBlock(sentence))
+    .slice(0, 2);
+  const selected = actionSentences.length ? actionSentences.join(" ") : detail;
+  return cleanupTaskPhrase(selected).slice(0, 420);
+}
+
+function isBlackboardUtilityBlock(value) {
+  const text = normalizeText(value);
+  if (!text) return true;
+  if (/\b(actions all items|nothing due today|select date go today|last updated)\b/.test(text)) return true;
+  if (/^https?/.test(String(value || "").trim())) return true;
+  return false;
 }
 
 function extractTaskTitle(afterDeadline, result) {

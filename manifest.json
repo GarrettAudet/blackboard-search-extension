@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Blackboard Search Extension",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Integrated Blackboard crawling, resource search, transcript search, and API-powered Q&A.",
   "permissions": ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"],
   "host_permissions": [
