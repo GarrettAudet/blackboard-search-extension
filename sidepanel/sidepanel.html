@@ -8,20 +8,33 @@
   </head>
   <body>
     <header class="app-header">
-      <div class="header-top">
-        <div class="brand-row">
-          <div class="brand-mark">B</div>
-          <div class="brand-copy">
-            <h1>Blackboard Search Extension</h1>
-            <p id="statusText">Loading local index...</p>
-          </div>
-        </div>
-        <button id="refreshBtn" class="refresh-button" title="Refresh index" type="button">Refresh</button>
-      </div>
-      <nav class="header-tabs" aria-label="Views">
-        <button id="chatViewBtn" class="tab-button active" type="button">Chat</button>
-        <button id="transcriptsViewBtn" class="tab-button" type="button">Library</button>
-        <button id="setupViewBtn" class="tab-button" type="button">Setup</button>
+      <button id="chatViewBtn" class="brand-button active" title="Chat" type="button">
+        <span class="brand-mark" aria-hidden="true">B</span>
+        <span class="brand-copy">
+          <span class="app-title">Blackboard Search</span>
+          <span id="statusText">Loading local index...</span>
+        </span>
+      </button>
+      <nav class="header-icons" aria-label="Tools">
+        <button id="transcriptsViewBtn" class="tool-button" title="Library" type="button" aria-label="Library">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Z" />
+            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20" />
+            <path d="M7 19V3" />
+          </svg>
+        </button>
+        <button id="refreshBtn" class="tool-button" title="Refresh index" type="button" aria-label="Refresh index">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-2.34 5.66" />
+            <path d="M20 4v7h-7" />
+          </svg>
+        </button>
+        <button id="setupViewBtn" class="tool-button" title="Setup" type="button" aria-label="Setup">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+            <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.1 2.1 0 1 1-2.97 2.97l-.05-.05A1.8 1.8 0 0 0 14.8 19.6a1.8 1.8 0 0 0-1.08 1.65V21a2.1 2.1 0 1 1-4.2 0v-.08A1.8 1.8 0 0 0 8.4 19.3a1.8 1.8 0 0 0-1.98.36l-.05.05A2.1 2.1 0 1 1 3.4 16.74l.05-.05A1.8 1.8 0 0 0 3.8 14.7a1.8 1.8 0 0 0-1.65-1.08H2a2.1 2.1 0 1 1 0-4.2h.08A1.8 1.8 0 0 0 3.7 8.3a1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.1 2.1 0 1 1 6.26 3.3l.05.05A1.8 1.8 0 0 0 8.3 3.7h.1A1.8 1.8 0 0 0 9.48 2.1V2a2.1 2.1 0 1 1 4.2 0v.08A1.8 1.8 0 0 0 14.8 3.7a1.8 1.8 0 0 0 1.98-.36l.05-.05A2.1 2.1 0 1 1 19.8 6.26l-.05.05A1.8 1.8 0 0 0 19.4 8.3v.1a1.8 1.8 0 0 0 1.65 1.08H21a2.1 2.1 0 1 1 0 4.2h-.08A1.8 1.8 0 0 0 19.4 15Z" />
+          </svg>
+        </button>
       </nav>
     </header>
 
@@ -42,7 +55,12 @@
             placeholder="Ask about your Blackboard resources..."
             autocomplete="off"
           />
-          <button id="searchBtn" class="send-button" title="Ask" type="submit">Ask</button>
+          <button id="searchBtn" class="send-button" title="Ask" type="submit" aria-label="Ask">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 19V5" />
+              <path d="m5 12 7-7 7 7" />
+            </svg>
+          </button>
         </form>
       </section>
 

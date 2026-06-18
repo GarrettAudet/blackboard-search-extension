@@ -151,8 +151,7 @@ function render() {
   els.resourceCount.textContent = String(state.resources.length);
   els.videoCount.textContent = String(videos.length);
   els.transcriptCount.textContent = String(state.transcripts.length);
-  const updated = state.meta.last_updated ? new Date(state.meta.last_updated).toLocaleString() : "not built yet";
-  setStatus(`${state.resources.length} resources indexed; updated ${updated}`);
+  setStatus(`${state.resources.length} resources indexed`);
   renderSettings();
   renderTranscripts();
   seedIntroMessage();
@@ -306,7 +305,7 @@ async function handleAsk(event) {
   }
 
   els.searchBtn.disabled = true;
-  els.searchBtn.textContent = "...";
+  els.searchBtn.classList.add("is-loading");
   const pending = appendMessage("assistant", "Reading the top local matches and asking the selected API...");
   try {
     const answer = await buildApiAnswer(query, results);
@@ -319,7 +318,7 @@ async function handleAsk(event) {
     );
   } finally {
     els.searchBtn.disabled = false;
-    els.searchBtn.textContent = "Ask";
+    els.searchBtn.classList.remove("is-loading");
   }
 }
 
