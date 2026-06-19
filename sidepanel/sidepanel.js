@@ -180,12 +180,20 @@ function renderTranscripts() {
   }
 
   for (const group of groups) {
-    const section = document.createElement("section");
+    const section = document.createElement("details");
     section.className = "transcript-group";
+    section.open = true;
 
-    const title = document.createElement("h3");
+    const summary = document.createElement("summary");
+    summary.className = "group-summary";
+    const title = document.createElement("span");
+    title.className = "group-title";
     title.textContent = group.title;
-    section.append(title);
+    const count = document.createElement("span");
+    count.className = "group-count";
+    count.textContent = `${group.items.length} transcript${group.items.length === 1 ? "" : "s"}`;
+    summary.append(title, count);
+    section.append(summary);
 
     const list = document.createElement("div");
     list.className = "transcript-list";
@@ -206,9 +214,12 @@ function renderMissingVideos() {
   const canTranscribe = canUseVideoTranscription();
 
   els.missingVideoList.textContent = "";
+  els.transcribeAllBtn.textContent = directMissingVideos.length
+    ? `Transcribe direct (${directMissingVideos.length})`
+    : "Transcribe direct";
   els.transcribeAllBtn.disabled = !directMissingVideos.length || !canTranscribe;
   els.transcribeAllBtn.title = canTranscribe
-    ? "Transcribe every direct audio/video file missing a transcript"
+    ? "Auto-transcribe every direct audio/video file missing a transcript"
     : "Select OpenAI in Setup and save an API key to transcribe videos";
 
   if (!missingVideos.length) {
@@ -219,9 +230,53 @@ function renderMissingVideos() {
 
   els.transcriptionStatus.textContent = transcriptionReadinessLabel(missingVideos.length, directMissingVideos.length);
 
-  for (const video of missingVideos) {
-    els.missingVideoList.append(renderMissingVideoRow(video));
+  const groups = groupMissingVideosByPage(missingVideos);
+  groups.forEach((group, index) => {
+    const section = document.createElement("details");
+    section.className = "video-group";
+    section.open = groups.length === 1 || index === 0;
+
+    const summary = document.createElement("summary");
+    summary.className = "group-summary";
+    const title = document.createElement("span");
+    title.className = "group-title";
+    title.textContent = group.title;
+    const count = document.createElement("span");
+    count.className = "group-count";
+    const pieces = [`${group.items.length} video${group.items.length === 1 ? "" : "s"}`];
+    if (group.directCount) pieces.push(`${group.directCount} direct`);
+    if (group.embeddedCount) pieces.push(`${group.embeddedCount} embedded`);
+    count.textContent = pieces.join(" | ");
+    summary.append(title, count);
+    section.append(summary);
+
+    const list = document.createElement("div");
+    list.className = "compact-video-list";
+    group.items.forEach((video) => list.append(renderMissingVideoRow(video)));
+    section.append(list);
+    els.missingVideoList.append(section);
+  });
+}
+
+function groupMissingVideosByPage(videos) {
+  const groups = new Map();
+  for (const video of videos) {
+    const title = safeVideoGroupTitle(video);
+    if (!groups.has(title)) groups.set(title, []);
+    groups.get(title).push(video);
   }
+  return Array.from(groups.entries())
+    .map(([title, items]) => ({
+      title,
+      items: items.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""))),
+      directCount: items.filter(isDirectMediaResource).length,
+      embeddedCount: items.filter((item) => !isDirectMediaResource(item)).length
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function safeVideoGroupTitle(video) {
+  return safeGroupTitle(video, { source_hint: video.source_hint || "" });
 }
 
 function renderMissingVideoRow(video) {
@@ -241,17 +296,23 @@ function renderMissingVideoRow(video) {
 
   const actions = document.createElement("div");
   actions.className = "missing-video-actions";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = isDirectMedia ? "Transcribe" : "Import needed";
-  button.disabled = !canUseVideoTranscription() || !isDirectMedia;
-  button.title = !isDirectMedia
-    ? "This looks like an embedded player, not a direct media file. Import a prepared transcript JSON for now."
-    : button.disabled
-    ? "Select OpenAI in Setup and save an API key to transcribe this video"
-    : "Transcribe and store this video locally";
-  button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
-  actions.append(button);
+  if (isDirectMedia) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Auto-transcribe";
+    button.disabled = !canUseVideoTranscription();
+    button.title = button.disabled
+      ? "Select OpenAI in Setup and save an API key to transcribe this video"
+      : "Create a timestamped local transcript with anonymized speakers";
+    button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
+    actions.append(button);
+  } else {
+    const status = document.createElement("span");
+    status.className = "video-status-pill";
+    status.textContent = "source needed";
+    status.title = "Embedded videos need a transcript import or a direct media URL before auto-transcription can run.";
+    actions.append(status);
+  }
   if (video.url) {
     const link = document.createElement("a");
     link.className = "open-link";
@@ -325,8 +386,12 @@ function renderTranscriptRow(item) {
 
   const meta = document.createElement("div");
   meta.className = "transcript-row-meta";
-  const segmentCount = `${(item.transcript.segments || []).length} segment(s)`;
-  meta.textContent = [item.resource?.page_title, item.transcript.source_hint, segmentCount].filter(Boolean).join(" - ");
+  const segments = item.transcript.segments || [];
+  const segmentCount = `${segments.length} segment${segments.length === 1 ? "" : "s"}`;
+  const timestamped = segments.some((segment) => segment.start || segment.end) ? "timestamped" : "untimed";
+  meta.textContent = [item.resource?.page_title, item.transcript.source_hint, segmentCount, timestamped]
+    .filter(Boolean)
+    .join(" - ");
 
   row.append(title, meta);
   if (item.resource?.url || item.transcript.video_url) {
@@ -386,8 +451,8 @@ async function transcribeVideo(video, options = {}) {
   if (!options.quiet) els.transcriptionStatus.textContent = `Downloading ${video.title || "video"}...`;
   const media = await fetchMediaBlob(video);
   if (!options.quiet) els.transcriptionStatus.textContent = `Transcribing ${video.title || "video"}...`;
-  const rawText = await callOpenAiTranscription(media.blob, media.fileName);
-  const text = normalizeTranscriptText(rawText);
+  const transcription = await callOpenAiTranscription(media.blob, media.fileName);
+  const text = normalizeTranscriptText(transcription.text || "");
   assertUsableTranscript(text, video);
 
   const transcript = {
@@ -396,7 +461,7 @@ async function transcribeVideo(video, options = {}) {
     source_hint: [video.page_title, video.section].filter(Boolean).join(" - "),
     video_url: video.url || "",
     matched_resource_ids: [video.id],
-    segments: segmentTranscriptText(text)
+    segments: standardizeTranscriptSegments(transcription, text)
   };
 
   const response = await sendMessage("IMPORT_TRANSCRIPTS", { transcripts: [transcript] });
@@ -439,7 +504,8 @@ async function fetchMediaBlob(video) {
 async function callOpenAiTranscription(blob, fileName) {
   const form = new FormData();
   form.append("model", "whisper-1");
-  form.append("response_format", "json");
+  form.append("response_format", "verbose_json");
+  form.append("timestamp_granularities[]", "segment");
   form.append("file", new File([blob], fileName, { type: blob.type || "audio/mpeg" }));
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -459,7 +525,7 @@ async function callOpenAiTranscription(blob, fileName) {
   if (!response.ok) {
     throw new Error(json.error?.message || text || `Transcription failed with HTTP ${response.status}`);
   }
-  return json.text || "";
+  return json;
 }
 
 function normalizeTranscriptText(value) {
@@ -480,19 +546,70 @@ function assertUsableTranscript(text, video) {
   }
 }
 
+function standardizeTranscriptSegments(transcription, fallbackText) {
+  const rawSegments = Array.isArray(transcription?.segments) ? transcription.segments : [];
+  if (rawSegments.length) {
+    const speakerMap = new Map();
+    const segments = rawSegments
+      .map((segment, index) => {
+        const rawSpeaker = firstPresent(
+          segment.speaker,
+          segment.speaker_label,
+          segment.speakerLabel,
+          segment.channel,
+          segment.channel_label
+        );
+        return {
+          id: String(firstPresent(segment.id, index)),
+          start: formatTranscriptTimestamp(firstPresent(segment.start, segment.start_time, segment.startTime)),
+          end: formatTranscriptTimestamp(firstPresent(segment.end, segment.end_time, segment.endTime)),
+          speaker: rawSpeaker ? anonymizedSpeakerLabel(rawSpeaker, speakerMap) : "Speaker 1",
+          text: normalizeTranscriptText(segment.text || segment.transcript || segment.caption || "")
+        };
+      })
+      .filter((segment) => segment.text);
+    if (segments.length) return segments;
+  }
+  return segmentTranscriptText(fallbackText);
+}
+
+function firstPresent(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
+}
+
+function anonymizedSpeakerLabel(rawSpeaker, speakerMap) {
+  const key = String(rawSpeaker || "speaker").trim().toLowerCase();
+  if (!speakerMap.has(key)) speakerMap.set(key, `Speaker ${speakerMap.size + 1}`);
+  return speakerMap.get(key);
+}
+
+function formatTranscriptTimestamp(value) {
+  if (value === undefined || value === null || value === "") return "";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value).trim();
+  const totalSeconds = Math.max(0, Math.round(numeric));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
 function segmentTranscriptText(text) {
   const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
   const segments = [];
   let buffer = "";
   for (const sentence of sentences.map((item) => item.trim()).filter(Boolean)) {
     if ((buffer + " " + sentence).trim().length > 900 && buffer) {
-      segments.push({ id: String(segments.length), start: "", end: "", text: buffer });
+      segments.push({ id: String(segments.length), start: "", end: "", speaker: "Speaker 1", text: buffer });
       buffer = sentence;
     } else {
       buffer = [buffer, sentence].filter(Boolean).join(" ");
     }
   }
-  if (buffer) segments.push({ id: String(segments.length), start: "", end: "", text: buffer });
+  if (buffer) segments.push({ id: String(segments.length), start: "", end: "", speaker: "Speaker 1", text: buffer });
   return segments;
 }
 
@@ -746,6 +863,7 @@ function safeGroupTitle(resource, transcript) {
   const raw = resource?.section || resource?.page_title || transcript.source_hint || "Imported transcript bundle";
   const parts = String(raw)
     .replace(/\s+>\s+/g, "\n")
+    .replace(/\s+[\u2013\u2014]\s+/g, "\n")
     .replace(/\s+--\s+/g, "\n")
     .replace(/\s+-\s+/g, "\n")
     .split(/\n|\r|\/+/)

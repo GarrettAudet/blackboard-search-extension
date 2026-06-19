@@ -812,17 +812,31 @@ function normalizeTranscript(raw) {
 function normalizeSegments(rawSegments) {
   if (typeof rawSegments === "string") {
     const text = cleanText(rawSegments, 100000);
-    return text ? [{ start: "", end: "", text }] : [];
+    return text ? [{ start: "", end: "", speaker: "Speaker 1", text }] : [];
   }
   if (!Array.isArray(rawSegments)) return [];
+  const speakerMap = new Map();
   return rawSegments
-    .map((segment, index) => ({
-      id: cleanText(segment.id || String(index), 80),
-      start: cleanText(segment.start || segment.start_time || segment.startTime || "", 40),
-      end: cleanText(segment.end || segment.end_time || segment.endTime || "", 40),
-      text: cleanText(segment.text || segment.transcript || segment.caption || "", 5000)
-    }))
+    .map((segment, index) => {
+      if (typeof segment === "string") {
+        return { id: String(index), start: "", end: "", speaker: "Speaker 1", text: cleanText(segment, 5000) };
+      }
+      const rawSpeaker = segment.speaker || segment.speaker_label || segment.speakerLabel || segment.name || segment.role || "Speaker 1";
+      return {
+        id: cleanText(segment.id || String(index), 80),
+        start: cleanText(segment.start || segment.start_time || segment.startTime || "", 40),
+        end: cleanText(segment.end || segment.end_time || segment.endTime || "", 40),
+        speaker: anonymizedSpeakerLabel(rawSpeaker, speakerMap),
+        text: cleanText(segment.text || segment.transcript || segment.caption || "", 5000)
+      };
+    })
     .filter((segment) => segment.text);
+}
+
+function anonymizedSpeakerLabel(rawSpeaker, speakerMap) {
+  const key = cleanText(rawSpeaker || "Speaker 1", 120).toLowerCase();
+  if (!speakerMap.has(key)) speakerMap.set(key, `Speaker ${speakerMap.size + 1}`);
+  return speakerMap.get(key);
 }
 
 function matchTranscriptsToResources(resources, transcripts) {
