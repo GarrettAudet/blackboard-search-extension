@@ -520,8 +520,8 @@ async function runTranscriptionWithButton(button, title, task) {
   try {
     const result = await task(update);
     button.textContent = "Saved";
-    els.transcriptionStatus.textContent = "Transcript saved locally";
-    setStatus("Transcript saved locally.");
+    els.transcriptionStatus.textContent = "Transcript saved locally. Open Library preview to verify segment count and text.";
+    setStatus("Transcript saved locally. Open Library preview to verify segment count and text.");
     return result;
   } catch (error) {
     button.textContent = "Failed";
@@ -660,20 +660,29 @@ function renderTranscriptRow(item) {
   const row = document.createElement("article");
   row.className = "transcript-row";
 
+  const copy = document.createElement("div");
+  copy.className = "transcript-row-copy";
+
   const title = document.createElement("div");
   title.className = "transcript-row-title";
   title.textContent = item.transcript.title || "Untitled transcript";
 
+  const stats = transcriptVerificationStats(item.transcript);
   const meta = document.createElement("div");
   meta.className = "transcript-row-meta";
-  const segments = item.transcript.segments || [];
-  const segmentCount = `${segments.length} segment${segments.length === 1 ? "" : "s"}`;
-  const timestamped = segments.some((segment) => segment.start || segment.end) ? "timestamped" : "untimed";
-  meta.textContent = [item.resource?.page_title, item.transcript.source_hint, segmentCount, timestamped]
+  meta.textContent = [item.resource?.page_title, item.transcript.source_hint, stats.summary]
     .filter(Boolean)
     .join(" - ");
 
-  row.append(title, meta);
+  copy.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "transcript-row-actions";
+  const status = document.createElement("span");
+  status.className = `transcript-quality ${stats.quality}`;
+  status.textContent = stats.label;
+  status.title = stats.reason;
+  actions.append(status);
   if (item.resource?.url || item.transcript.video_url) {
     const link = document.createElement("a");
     link.className = "open-link";
@@ -681,11 +690,74 @@ function renderTranscriptRow(item) {
     link.target = "_blank";
     link.rel = "noreferrer";
     link.textContent = "Open source";
-    row.append(link);
+    actions.append(link);
   }
+
+  const details = document.createElement("details");
+  details.className = "transcript-preview";
+  const summary = document.createElement("summary");
+  summary.textContent = "Preview / verify";
+  const body = document.createElement("div");
+  body.className = "transcript-preview-body";
+  const statLine = document.createElement("div");
+  statLine.className = "transcript-preview-stats";
+  statLine.textContent = stats.detail;
+  const preview = document.createElement("pre");
+  preview.className = "transcript-preview-text";
+  preview.textContent = transcriptPreviewText(item.transcript);
+  body.append(statLine, preview);
+  details.append(summary, body);
+
+  row.append(copy, actions, details);
   return row;
 }
 
+function transcriptVerificationStats(transcript) {
+  const segments = Array.isArray(transcript?.segments) ? transcript.segments : [];
+  const texts = segments.map((segment) => normalizeTranscriptText(segment.text || "")).filter(Boolean);
+  const wordCount = texts.join(" ").match(/[a-z0-9']+/gi)?.length || 0;
+  const timestampedCount = segments.filter((segment) => segment.start || segment.end).length;
+  const maxEnd = Math.max(0, ...segments.map((segment) => parseTranscriptTimestamp(segment.end || segment.start)).filter(Number.isFinite));
+  const durationText = maxEnd ? formatDuration(maxEnd * 1000) : "duration unknown";
+  const segmentText = `${segments.length} segment${segments.length === 1 ? "" : "s"}`;
+  const wordText = `${wordCount} word${wordCount === 1 ? "" : "s"}`;
+  const timestampText = segments.length ? `${timestampedCount}/${segments.length} timestamped` : "no timestamps";
+
+  let quality = "ok";
+  let label = "Verified";
+  let reason = "Transcript has segment text and enough words to search.";
+  if (!segments.length || !wordCount) {
+    quality = "bad";
+    label = "Empty";
+    reason = "No searchable transcript segment text was saved.";
+  } else if (wordCount < 80 || timestampedCount === 0) {
+    quality = "warn";
+    label = "Review";
+    reason = wordCount < 80 ? "Transcript is very short; verify it captured the right media." : "Transcript has text but no timestamps.";
+  }
+
+  return {
+    summary: `${segmentText} • ${wordText} • ${timestampText}`,
+    detail: `${segmentText}; ${wordText}; ${timestampText}; ${durationText}. ${reason}`,
+    quality,
+    label,
+    reason,
+    wordCount,
+    segmentCount: segments.length
+  };
+}
+
+function transcriptPreviewText(transcript) {
+  const segments = Array.isArray(transcript?.segments) ? transcript.segments : [];
+  const lines = segments
+    .filter((segment) => normalizeTranscriptText(segment.text || ""))
+    .slice(0, 5)
+    .map((segment) => {
+      const stamp = segment.start || segment.end ? `[${segment.start || "--:--"}${segment.end ? `-${segment.end}` : ""}] ` : "";
+      return `${stamp}${normalizeTranscriptText(segment.text || "")}`;
+    });
+  return lines.length ? lines.join("\n\n") : "No searchable transcript text was saved.";
+}
 async function transcribeDetectedMedia(item, options = {}) {
   if (!item || !item.url) throw new Error("Detected media does not have a URL to transcribe.");
   const resource = await ensureDetectedMediaResource(item);
