@@ -27,6 +27,7 @@ preparing transcript/index data.
 - Lets the user import a prepared transcript JSON bundle.
 - Automatically attaches transcripts to discovered videos when titles, URLs, or
   source hints match.
+- Watches video-player network requests after the user presses play, detects caption files, manifests, and direct media candidates, and imports detected captions when available.
 - Shows detected videos that do not have transcripts and can transcribe direct
   audio/video files through OpenAI, then cache the searchable transcript locally.
 - Searches normal resources and video transcript segments together in a chat-like
@@ -36,12 +37,9 @@ preparing transcript/index data.
 
 ## What It Does Not Do Yet
 
-- It does not guarantee transcription for every embedded player. If Blackboard
-  only exposes a player page instead of a direct audio/video file, import a
-  prepared transcript JSON bundle instead.
+- It does not bypass DRM, expiring access controls, or Blackboard permissions. If an embedded player only exposes encrypted/segmented media and no caption file, import a prepared transcript JSON bundle instead.
 - It does not upload course content or transcripts to a shared backend.
-- It does not bypass Blackboard permissions; it only sees pages the user's
-  logged-in browser can access.
+- It only sees pages and video requests the user's logged-in browser can already access.
 
 ## User Flow
 
@@ -61,6 +59,8 @@ preparing transcript/index data.
 5. Use `Scan Current Page` for a quick one-page refresh when needed.
 6. Search the indexed resources.
 7. If videos are found, open `Library`.
+   - Open a video and press play. The `Detected Media` panel watches for caption files, media manifests, and direct media requests.
+   - Caption files are imported automatically when available; the `Import captions` button retries pending caption imports.
    - Videos without transcripts appear under `Videos Needing Transcripts`.
    - Select OpenAI in Setup and save an API key to use `Transcribe` or
      `Transcribe All` for direct audio/video files.
@@ -106,17 +106,16 @@ only the top relevant chunks to the selected API provider.
 The extension treats transcript creation as a one-time preparation step:
 
 ```text
-Detected direct media file
--> transcribe once with OpenAI from the Library tab
+Open/play a Blackboard video
+-> detect caption files, media manifests, and direct media requests
+-> import captions automatically when exposed by the player
+-> if direct media is exposed, transcribe once with OpenAI from the Library tab
 -> quality-check and chunk transcript text
 -> store transcript locally in Chrome
 -> transcript is cached locally and searched forever
 ```
 
-For embedded players that do not expose a direct audio/video file, prepare a
-transcript outside the extension and import it as JSON. This avoids forcing
-every search to re-process the MP4. For a shared group, one admin can transcribe
-important videos once and distribute the transcript bundle.
+For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
 
 ## Transcript Bundle Format
 

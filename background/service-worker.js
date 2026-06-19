@@ -2,8 +2,11 @@ const RESOURCE_KEY = "resource_index";
 const TRANSCRIPT_KEY = "transcript_store";
 const CONTENT_KEY = "content_store";
 const META_KEY = "index_meta";
+const DETECTED_MEDIA_KEY = "detected_media_store";
 const DEFAULT_CRAWL_SEED_URL =
   "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
+
+setupMediaRequestObservers();
 
 try {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
@@ -11,6 +14,259 @@ try {
   }
 } catch (_error) {
   // Older Chromium builds may not expose sidePanel behavior controls.
+}
+
+const captionImportInflight = new Set();
+
+function setupMediaRequestObservers() {
+  if (!chrome.webRequest || !chrome.webRequest.onBeforeRequest) return;
+  const filter = {
+    urls: ["https://*/*"],
+    types: ["media", "xmlhttprequest", "other", "sub_frame", "object"]
+  };
+  chrome.webRequest.onBeforeRequest.addListener((details) => {
+    captureMediaRequest(details).catch(() => {});
+  }, filter);
+  chrome.webRequest.onHeadersReceived.addListener((details) => {
+    captureMediaRequest(details, responseContentType(details.responseHeaders)).catch(() => {});
+  }, filter, ["responseHeaders"]);
+}
+
+function responseContentType(headers = []) {
+  const header = (headers || []).find((item) => /^content-type$/i.test(item.name || ""));
+  return cleanText(header && header.value, 160).toLowerCase();
+}
+
+async function captureMediaRequest(details, contentType = "") {
+  if (!details || !details.url || details.tabId < 0) return;
+  const classification = classifyMediaRequest(details, contentType);
+  if (!classification) return;
+
+  const tab = await getTabSnapshot(details.tabId);
+  const detection = {
+    id: stableId(["detected_media", details.url]),
+    kind: classification.kind,
+    url: details.url,
+    content_type: contentType || classification.contentType || "",
+    request_type: details.type || "",
+    document_url: details.documentUrl || details.frameUrl || "",
+    initiator: details.initiator || "",
+    tab_id: details.tabId,
+    page_url: tab.url || details.documentUrl || details.initiator || "",
+    page_title: tab.title || "",
+    title: cleanText(fileNameFromUrl(details.url) || tab.title || classification.kind, 240),
+    first_seen_at: new Date().toISOString(),
+    last_seen_at: new Date().toISOString(),
+    seen_count: 1
+  };
+
+  const stored = await storeDetectedMedia(detection);
+  if (classification.kind === "caption") {
+    importDetectedCaption(stored).catch(() => {});
+  }
+  if (classification.kind === "direct_media") {
+    mergeDetectedDirectMedia(stored).catch(() => {});
+  }
+}
+
+function classifyMediaRequest(details, contentType = "") {
+  const url = String(details.url || "");
+  const lower = url.toLowerCase();
+  const type = String(details.type || "").toLowerCase();
+  const content = String(contentType || "").toLowerCase();
+  if (isLikelyChunkUrl(lower)) return null;
+
+  if (/\.(vtt|srt|ttml|dfxp)(?:[?#]|$)/i.test(lower) || /text\/vtt|application\/x-subrip|application\/ttml\+xml/i.test(content)) {
+    return { kind: "caption", contentType: content };
+  }
+  if (/(caption|captions|subtitle|subtitles|transcript|texttrack|timedtext|cue)/i.test(lower) && !/\.css(?:[?#]|$)/i.test(lower)) {
+    return { kind: "caption", contentType: content };
+  }
+  if (/\.(m3u8|mpd)(?:[?#]|$)/i.test(lower) || /mpegurl|dash\+xml/i.test(content)) {
+    return { kind: "manifest", contentType: content };
+  }
+  if (/\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(lower) || /^(audio|video)\//i.test(content) || type === "media") {
+    return { kind: "direct_media", contentType: content };
+  }
+  return null;
+}
+
+function isLikelyChunkUrl(lowerUrl) {
+  return /\.(m4s|cmfv|cmfa|ts)(?:[?#]|$)/i.test(lowerUrl) || /(?:segment|frag|chunk)[-_]?\d+/i.test(lowerUrl);
+}
+
+async function getTabSnapshot(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return { url: tab.url || "", title: tab.title || "" };
+  } catch (_error) {
+    return { url: "", title: "" };
+  }
+}
+
+async function storeDetectedMedia(detection) {
+  const data = await chrome.storage.local.get(DETECTED_MEDIA_KEY);
+  const current = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
+  const byId = new Map(current.map((item) => [item.id, item]));
+  const previous = byId.get(detection.id);
+  const next = previous
+    ? {
+        ...previous,
+        ...withoutEmpty(detection),
+        first_seen_at: previous.first_seen_at || detection.first_seen_at,
+        last_seen_at: new Date().toISOString(),
+        seen_count: (previous.seen_count || 1) + 1
+      }
+    : detection;
+  byId.set(next.id, next);
+  const records = Array.from(byId.values())
+    .sort((a, b) => String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")))
+    .slice(0, 300);
+  await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: records });
+  return next;
+}
+
+async function importDetectedCaptions() {
+  const data = await chrome.storage.local.get(DETECTED_MEDIA_KEY);
+  const detections = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
+  let imported = 0;
+  let failed = 0;
+  for (const detection of detections.filter((item) => item.kind === "caption" && !item.imported_transcript_id)) {
+    try {
+      const result = await importDetectedCaption(detection);
+      if (result && result.imported) imported += 1;
+    } catch (_error) {
+      failed += 1;
+    }
+  }
+  return { ok: true, imported, failed };
+}
+
+async function importDetectedCaption(detection) {
+  if (!detection || !detection.url || captionImportInflight.has(detection.id)) return { imported: false };
+  captionImportInflight.add(detection.id);
+  try {
+    const data = await chrome.storage.local.get([RESOURCE_KEY, DETECTED_MEDIA_KEY]);
+    const detections = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
+    const current = detections.find((item) => item.id === detection.id) || detection;
+    if (current.imported_transcript_id) return { imported: false, transcript_id: current.imported_transcript_id };
+
+    const response = await fetch(detection.url, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    const segments = parseCaptionSegments(text);
+    if (!segments.length) throw new Error("No timed caption cues found.");
+
+    const resources = data[RESOURCE_KEY] || [];
+    const matched = bestResourceForDetection(detection, resources);
+    const transcriptId = stableId(["detected_caption", detection.url]);
+    const transcript = {
+      id: transcriptId,
+      title: detection.page_title || detection.title || "Detected video captions",
+      source_hint: "Detected caption file",
+      video_url: detection.document_url || detection.page_url || detection.url,
+      matched_resource_ids: matched ? [matched.id] : [],
+      segments
+    };
+    const result = await importTranscripts({ transcripts: [transcript] });
+    await updateDetectedMedia(detection.id, {
+      imported_transcript_id: transcriptId,
+      transcript_status: result.ok ? "imported" : "failed",
+      transcript_error: result.ok ? "" : result.error || "Import failed"
+    });
+    return { imported: true, transcript_id: transcriptId };
+  } catch (error) {
+    await updateDetectedMedia(detection.id, {
+      transcript_status: "failed",
+      transcript_error: String(error && error.message ? error.message : error).slice(0, 240)
+    });
+    throw error;
+  } finally {
+    captionImportInflight.delete(detection.id);
+  }
+}
+
+async function updateDetectedMedia(id, patch) {
+  const data = await chrome.storage.local.get(DETECTED_MEDIA_KEY);
+  const detections = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
+  const next = detections.map((item) => (item.id === id ? { ...item, ...patch, last_seen_at: new Date().toISOString() } : item));
+  await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: next });
+}
+
+async function mergeDetectedDirectMedia(detection) {
+  if (!detection || !detection.url) return;
+  const type = /audio\//i.test(detection.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(detection.url)
+    ? "audio"
+    : "video";
+  await mergeScrape({
+    resources: [
+      {
+        type,
+        title: detection.page_title || detection.title || fileNameFromUrl(detection.url) || "Detected media",
+        url: detection.url,
+        preserve_url: true,
+        page_url: detection.page_url || detection.document_url || detection.url,
+        page_title: detection.page_title || "Detected media",
+        section: "Detected media request",
+        context: ["Detected while playing video", detection.document_url, detection.initiator].filter(Boolean).join(" - "),
+        discovered_at: new Date().toISOString()
+      }
+    ]
+  });
+}
+
+function bestResourceForDetection(detection, resources) {
+  const videos = resources.filter(isVideoResource);
+  const pageUrl = normalizeUrl(detection.page_url || "");
+  const documentUrl = normalizeUrl(detection.document_url || "");
+  return (
+    videos.find((resource) => normalizeUrl(resource.url || "") === documentUrl) ||
+    videos.find((resource) => normalizeUrl(resource.page_url || "") === pageUrl) ||
+    videos.find((resource) => normalizeText(resource.page_title || "") === normalizeText(detection.page_title || "")) ||
+    null
+  );
+}
+
+function parseCaptionSegments(text) {
+  const clean = String(text || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/^WEBVTT[^\n]*\n/i, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  const blocks = clean.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const segments = [];
+  for (const block of blocks) {
+    const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+    const timingIndex = lines.findIndex((line) => /-->/i.test(line));
+    if (timingIndex < 0) continue;
+    const timing = lines[timingIndex].match(/([\d:. ,]+)\s*-->\s*([\d:. ,]+)/);
+    if (!timing) continue;
+    const cueText = lines
+      .slice(timingIndex + 1)
+      .join(" ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cueText) continue;
+    segments.push({
+      id: String(segments.length),
+      start: normalizeCaptionTimestamp(timing[1]),
+      end: normalizeCaptionTimestamp(timing[2]),
+      speaker: "Speaker 1",
+      text: cueText
+    });
+  }
+  return mergeTranscriptSegments([], segments);
+}
+
+function normalizeCaptionTimestamp(value) {
+  const normalized = String(value || "").replace(",", ".").trim().split(/\s+/)[0];
+  const parts = normalized.split(":");
+  if (parts.length === 2) return `00:${parts[0].padStart(2, "0")}:${parts[1].padStart(6, "0")}`;
+  if (parts.length === 3) return `${parts[0].padStart(2, "0")}:${parts[1].padStart(2, "0")}:${parts[2].padStart(6, "0")}`;
+  return normalized;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -37,6 +293,8 @@ async function handleMessage(message) {
       return crawlSite(message.payload || {});
     case "IMPORT_TRANSCRIPTS":
       return importTranscripts(message.payload || {});
+    case "IMPORT_DETECTED_CAPTIONS":
+      return importDetectedCaptions();
     case "SEARCH_VIDEO_RESULTS":
       return searchVideoResults(message.payload || {});
     case "MANUAL_ATTACH_TRANSCRIPT":
@@ -47,12 +305,13 @@ async function handleMessage(message) {
 }
 
 async function getIndex() {
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY]);
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, DETECTED_MEDIA_KEY]);
   const resources = data[RESOURCE_KEY] || [];
   const transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
+  const detectedMedia = data[DETECTED_MEDIA_KEY] || [];
   const meta = data[META_KEY] || { resource_count: resources.length, transcript_count: transcripts.length };
-  return { ok: true, resources, transcripts, content_store: contentStore, meta };
+  return { ok: true, resources, transcripts, detected_media: detectedMedia, content_store: contentStore, meta };
 }
 
 async function clearIndex() {
@@ -60,6 +319,7 @@ async function clearIndex() {
     [RESOURCE_KEY]: [],
     [TRANSCRIPT_KEY]: [],
     [CONTENT_KEY]: {},
+    [DETECTED_MEDIA_KEY]: [],
     [META_KEY]: {
       resource_count: 0,
       transcript_count: 0,
@@ -1046,9 +1306,13 @@ function emitCrawlProgress(payload) {
 }
 
 function normalizeResource(raw) {
-  const url = normalizeUrl(raw.url || raw.href || raw.src || "");
-  const title = cleanText(raw.title || raw.name || raw.label || url || "Untitled resource", 240);
-  const type = cleanText(raw.type || inferType(url, title), 80);
+  const rawUrl = String(raw.url || raw.href || raw.src || "").trim();
+  const rawTitle = raw.title || raw.name || raw.label || rawUrl || "Untitled resource";
+  const preliminaryType = cleanText(raw.type || inferType(rawUrl, rawTitle), 80);
+  const preserveUrl = Boolean(raw.preserve_url || raw.preserveUrl);
+  const url = preserveUrl ? rawUrl : normalizeUrl(rawUrl);
+  const title = cleanText(rawTitle || url || "Untitled resource", 240);
+  const type = preliminaryType || cleanText(inferType(url, title), 80);
   const resource = {
     id: cleanText(raw.id || stableId(["resource", type, url, title]), 120),
     type,

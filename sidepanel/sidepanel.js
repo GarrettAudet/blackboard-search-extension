@@ -8,6 +8,7 @@ const TRANSCRIPTION_TIMEOUT_MS = 60 * 60 * 1000;
 const state = {
   resources: [],
   transcripts: [],
+  detectedMedia: [],
   contentStore: {},
   meta: {},
   conversation: [],
@@ -50,6 +51,9 @@ const els = {
   videoStatus: document.getElementById("videoStatus"),
   transcriptionStatus: document.getElementById("transcriptionStatus"),
   transcribeAllBtn: document.getElementById("transcribeAllBtn"),
+  detectedMediaStatus: document.getElementById("detectedMediaStatus"),
+  importDetectedCaptionsBtn: document.getElementById("importDetectedCaptionsBtn"),
+  detectedMediaList: document.getElementById("detectedMediaList"),
   missingVideoList: document.getElementById("missingVideoList"),
   transcriptGroups: document.getElementById("transcriptGroups"),
   messageTemplate: document.getElementById("messageTemplate"),
@@ -69,6 +73,7 @@ async function refreshAll() {
   if (!indexResponse.ok) throw new Error(indexResponse.error || "Unable to load index");
   state.resources = indexResponse.resources || [];
   state.transcripts = indexResponse.transcripts || [];
+  state.detectedMedia = indexResponse.detected_media || indexResponse.detectedMedia || [];
   state.contentStore = indexResponse.content_store || indexResponse.contentStore || {};
   state.meta = indexResponse.meta || {};
   state.settings = settings;
@@ -164,6 +169,7 @@ function render() {
   setStatus(`${state.resources.length} resources indexed; ${contentCount} searchable bodies`);
   renderSettings();
   renderTranscripts();
+  renderDetectedMedia();
   renderMissingVideos();
   seedIntroMessage();
 }
@@ -213,6 +219,110 @@ function renderTranscripts() {
   }
 }
 
+async function importDetectedCaptions() {
+  els.importDetectedCaptionsBtn.disabled = true;
+  els.detectedMediaStatus.textContent = "importing captions...";
+  try {
+    const response = await sendMessage("IMPORT_DETECTED_CAPTIONS");
+    if (!response.ok) throw new Error(response.error || "Caption import failed");
+    await refreshAll();
+    els.detectedMediaStatus.textContent = `${response.imported} imported${response.failed ? `, ${response.failed} failed` : ""}`;
+  } finally {
+    els.importDetectedCaptionsBtn.disabled = false;
+  }
+}
+
+function renderDetectedMedia() {
+  const detections = state.detectedMedia || [];
+  const captions = detections.filter((item) => item.kind === "caption");
+  const direct = detections.filter((item) => item.kind === "direct_media");
+  const manifests = detections.filter((item) => item.kind === "manifest");
+  const pendingCaptions = captions.filter((item) => !item.imported_transcript_id);
+  els.detectedMediaStatus.textContent = detections.length
+    ? `${captions.length} captions | ${direct.length} media | ${manifests.length} manifests`
+    : "play a video to detect media";
+  els.importDetectedCaptionsBtn.disabled = !pendingCaptions.length;
+  els.importDetectedCaptionsBtn.textContent = pendingCaptions.length ? `Import captions (${pendingCaptions.length})` : "Captions imported";
+  els.detectedMediaList.textContent = "";
+
+  if (!detections.length) {
+    els.detectedMediaList.append(emptyNode("Open a Blackboard video and press play. The extension will watch for captions, manifests, and direct media requests."));
+    return;
+  }
+
+  const groups = groupDetectedMediaByPage(detections.slice(0, 80));
+  for (const group of groups) {
+    const section = document.createElement("details");
+    section.className = "video-group";
+    section.open = groups.length === 1;
+    const summary = document.createElement("summary");
+    summary.className = "group-summary";
+    const title = document.createElement("span");
+    title.className = "group-title";
+    title.textContent = group.title;
+    const count = document.createElement("span");
+    count.className = "group-count";
+    count.textContent = `${group.items.length} detected`;
+    summary.append(title, count);
+    section.append(summary);
+    const list = document.createElement("div");
+    list.className = "compact-video-list";
+    for (const item of group.items.slice(0, 12)) list.append(renderDetectedMediaRow(item));
+    section.append(list);
+    els.detectedMediaList.append(section);
+  }
+}
+
+function groupDetectedMediaByPage(detections) {
+  const groups = new Map();
+  for (const item of detections) {
+    const title = clampText(item.page_title || item.document_url || item.page_url || "Detected media", 110);
+    if (!groups.has(title)) groups.set(title, []);
+    groups.get(title).push(item);
+  }
+  return Array.from(groups.entries())
+    .map(([title, items]) => ({
+      title,
+      items: items.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")))
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function kindRank(kind) {
+  if (kind === "caption") return 0;
+  if (kind === "direct_media") return 1;
+  if (kind === "manifest") return 2;
+  return 3;
+}
+
+function renderDetectedMediaRow(item) {
+  const row = document.createElement("article");
+  row.className = "missing-video-row detected-media-row";
+  const text = document.createElement("div");
+  text.className = "missing-video-copy";
+  const title = document.createElement("div");
+  title.className = "transcript-row-title";
+  title.textContent = item.title || fileNameFromUrl(item.url, item.content_type || "") || item.kind;
+  const meta = document.createElement("div");
+  meta.className = "transcript-row-meta";
+  const status = item.imported_transcript_id ? "imported" : item.transcript_status || item.kind;
+  meta.textContent = [labelForKind(item.kind), status, item.content_type].filter(Boolean).join(" - ");
+  text.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "missing-video-actions";
+  if (item.url) {
+    const link = document.createElement("a");
+    link.className = "open-link";
+    link.href = item.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open";
+    actions.append(link);
+  }
+  row.append(text, actions);
+  return row;
+}
 function renderMissingVideos() {
   const missingVideos = state.resources
     .filter(isVideoResource)
@@ -2127,6 +2237,7 @@ els.crawlBtn.addEventListener("click", () =>
 );
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
+els.importDetectedCaptionsBtn.addEventListener("click", () => importDetectedCaptions().catch(reportError));
 els.transcribeAllBtn.addEventListener("click", () => transcribeAllMissingVideos().catch(reportError));
 els.chatForm.addEventListener("submit", handleAsk);
 els.transcriptFile.addEventListener("change", (event) => {
