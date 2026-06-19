@@ -6,6 +6,9 @@ const MEDIA_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const TRANSCRIPTION_TIMEOUT_MS = 60 * 60 * 1000;
 const TRANSCRIPTION_MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 const TRANSCRIPTION_CHUNK_BYTES = 20 * 1024 * 1024;
+const TRANSCRIPTION_MAX_BROWSER_DECODE_BYTES = 250 * 1024 * 1024;
+const TRANSCRIPTION_AUDIO_CHUNK_SECONDS = 8 * 60;
+const TRANSCRIPTION_AUDIO_SAMPLE_RATE = 16000;
 const MAX_TRANSCRIPTION_CHUNKS = 30;
 
 const state = {
@@ -803,10 +806,12 @@ async function transcribeVideo(video, options = {}) {
   };
   report("Resolving");
   const media = await fetchMediaPayload(video);
-  report(media.mode === "range" || media.mode === "blob_chunks" ? "Chunking" : "Uploading");
+  report(media.mode === "range" || media.mode === "blob_chunks" ? "Chunking" : media.mode === "decode_audio" ? "Decoding audio" : "Uploading");
   const transcription = media.mode === "range" || media.mode === "blob_chunks"
     ? await callOpenAiChunkedTranscription(media, video, report)
-    : await callOpenAiTranscription(media.blob, media.fileName);
+    : media.mode === "decode_audio"
+      ? await callOpenAiDecodedAudioTranscription(media, video, report)
+      : await callOpenAiTranscription(media.blob, media.fileName);
   const text = normalizeTranscriptText(transcription.text || "");
   assertUsableTranscript(text, video);
 
@@ -839,32 +844,55 @@ async function fetchMediaPayload(video) {
     const probedLength = await probeMediaContentLength(media.url).catch(() => 0);
     if (probedLength) {
       contentLength = probedLength;
-      await cancelResponseBody(response);
       if (contentLength > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
-        if (!canByteChunkMedia(contentType, fileName)) throw new Error(largeMediaNeedsSplitterMessage(fileName, contentType));
-        return {
-          mode: "range",
-          url: media.url,
-          contentType,
-          contentLength,
-          fileName
-        };
+        if (canByteChunkMedia(contentType, fileName)) {
+          await cancelResponseBody(response);
+          return {
+            mode: "range",
+            url: media.url,
+            contentType,
+            contentLength,
+            fileName
+          };
+        }
+        if (canDecodeAudioMedia(contentType, fileName, contentLength)) {
+          const blob = await withTimeout(
+            response.blob(),
+            MEDIA_DOWNLOAD_TIMEOUT_MS,
+            "Timed out downloading this media file for browser audio extraction."
+          );
+          return { mode: "decode_audio", blob, contentType: blob.type || contentType, contentLength: blob.size, fileName };
+        }
+        await cancelResponseBody(response);
+        throw new Error(largeMediaNeedsSplitterMessage(fileName, contentType, contentLength));
       }
+      await cancelResponseBody(response);
       const blob = await fetchRangeBlob(media.url, 0, contentLength - 1, contentType);
       return { mode: "blob", blob, fileName };
     }
   }
 
   if (contentLength && contentLength > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+    if (canByteChunkMedia(contentType, fileName)) {
+      await cancelResponseBody(response);
+      return {
+        mode: "range",
+        url: media.url,
+        contentType,
+        contentLength,
+        fileName
+      };
+    }
+    if (canDecodeAudioMedia(contentType, fileName, contentLength)) {
+      const blob = await withTimeout(
+        response.blob(),
+        MEDIA_DOWNLOAD_TIMEOUT_MS,
+        "Timed out downloading this media file for browser audio extraction."
+      );
+      return { mode: "decode_audio", blob, contentType: blob.type || contentType, contentLength: blob.size, fileName };
+    }
     await cancelResponseBody(response);
-    if (!canByteChunkMedia(contentType, fileName)) throw new Error(largeMediaNeedsSplitterMessage(fileName, contentType));
-    return {
-      mode: "range",
-      url: media.url,
-      contentType,
-      contentLength,
-      fileName
-    };
+    throw new Error(largeMediaNeedsSplitterMessage(fileName, contentType, contentLength));
   }
 
   const blob = await withTimeout(
@@ -873,14 +901,25 @@ async function fetchMediaPayload(video) {
     "Timed out downloading this media file; skipping it."
   );
   if (blob.size > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
-    if (!canByteChunkMedia(blob.type || contentType, fileName)) throw new Error(largeMediaNeedsSplitterMessage(fileName, blob.type || contentType));
-    return {
-      mode: "blob_chunks",
-      blob,
-      contentType: blob.type || contentType,
-      contentLength: blob.size,
-      fileName
-    };
+    if (canByteChunkMedia(blob.type || contentType, fileName)) {
+      return {
+        mode: "blob_chunks",
+        blob,
+        contentType: blob.type || contentType,
+        contentLength: blob.size,
+        fileName
+      };
+    }
+    if (canDecodeAudioMedia(blob.type || contentType, fileName, blob.size)) {
+      return {
+        mode: "decode_audio",
+        blob,
+        contentType: blob.type || contentType,
+        contentLength: blob.size,
+        fileName
+      };
+    }
+    throw new Error(largeMediaNeedsSplitterMessage(fileName, blob.type || contentType, blob.size));
   }
 
   return {
@@ -1034,9 +1073,22 @@ function canByteChunkMedia(contentType, fileName) {
   return /audio\/(mpeg|mp3|aac|ogg)|\.(mp3|aac|ogg|oga)(?:$|\?)/i.test(haystack);
 }
 
-function largeMediaNeedsSplitterMessage(fileName, contentType) {
+function canDecodeAudioMedia(contentType, fileName, sizeBytes = 0) {
+  const haystack = `${contentType || ""} ${fileName || ""}`.toLowerCase();
+  if (sizeBytes && sizeBytes > TRANSCRIPTION_MAX_BROWSER_DECODE_BYTES) return false;
+  return /video\/(mp4|webm|quicktime)|audio\/(mp4|m4a|x-m4a|webm)|\.(mp4|m4v|mov|webm|m4a)(?:$|\?)/i.test(haystack);
+}
+
+function largeMediaNeedsSplitterMessage(fileName, contentType, sizeBytes = 0) {
   const label = fileName || contentType || "This media file";
-  return `${label} is over OpenAI's browser upload limit. MP4/WebM/M4A files cannot be reliably transcribed by raw byte chunks; use exposed captions, import a prepared transcript, or split/remux the audio with a real media splitter first.`;
+  const sizeNote = sizeBytes ? ` (${formatFileSize(sizeBytes)})` : "";
+  return `${label}${sizeNote} is too large to upload directly. Chrome could not safely prepare browser audio chunks for it; use exposed captions, import a prepared transcript, or split/remux the audio with a media tool first.`;
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(Number(bytes)) || Number(bytes) <= 0) return "unknown size";
+  const mb = Number(bytes) / (1024 * 1024);
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
 }
 
 async function callOpenAiTranscription(blob, fileName, options = {}) {
@@ -1076,6 +1128,121 @@ async function callOpenAiTranscription(blob, fileName, options = {}) {
   return json;
 }
 
+async function callOpenAiDecodedAudioTranscription(media, video, report) {
+  report("Downloading media");
+  const audioBuffer = await decodeMediaAudio(media.blob, media.fileName);
+  const duration = Number(audioBuffer.duration || 0);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error("Chrome decoded this media, but could not read a usable audio duration.");
+  }
+
+  const chunkCount = Math.ceil(duration / TRANSCRIPTION_AUDIO_CHUNK_SECONDS);
+  if (chunkCount > MAX_TRANSCRIPTION_CHUNKS) {
+    throw new Error(`This video would require ${chunkCount} audio chunks. Import a prepared transcript or split the audio outside the extension.`);
+  }
+
+  const textParts = [];
+  const combinedSegments = [];
+  let prompt = "";
+
+  for (let index = 0; index < chunkCount; index += 1) {
+    const startSeconds = index * TRANSCRIPTION_AUDIO_CHUNK_SECONDS;
+    const chunkSeconds = Math.min(TRANSCRIPTION_AUDIO_CHUNK_SECONDS, duration - startSeconds);
+    report(`Preparing audio ${index + 1}/${chunkCount}`);
+    const wavBlob = await renderAudioChunkToWav(audioBuffer, startSeconds, chunkSeconds);
+    if (wavBlob.size > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+      throw new Error(`Prepared audio chunk ${index + 1}/${chunkCount} is still too large to upload (${formatFileSize(wavBlob.size)}).`);
+    }
+
+    report(`Transcribing audio ${index + 1}/${chunkCount}`);
+    const partial = await callOpenAiTranscription(wavBlob, chunkedFileName(media.fileName || video.title || "blackboard-audio.wav", index).replace(/\.[^.]+$/, ".wav"), { prompt });
+    const chunkText = normalizeTranscriptText(partial.text || "");
+    if (!chunkText) continue;
+    textParts.push(chunkText);
+
+    const rawSegments = standardizeTranscriptSegments(partial, chunkText);
+    const shiftedSegments = rawSegments.some((segment) => segment.start || segment.end)
+      ? shiftTranscriptSegments(rawSegments, startSeconds)
+      : rawSegments.map((segment) => ({ ...segment, start: formatTranscriptTimestamp(startSeconds), end: "" }));
+    const baseIndex = combinedSegments.length;
+    shiftedSegments.forEach((segment, segmentIndex) => {
+      combinedSegments.push({ ...segment, id: String(baseIndex + segmentIndex) });
+    });
+    prompt = transcriptPromptTail(textParts.join(" "));
+  }
+
+  const text = textParts.join("\n").trim();
+  return {
+    text,
+    preparedSegments: combinedSegments.length ? combinedSegments : segmentTranscriptText(text)
+  };
+}
+
+async function decodeMediaAudio(blob, fileName) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("This browser does not expose Web Audio decoding for media transcription.");
+  const context = new AudioContextClass();
+  try {
+    const arrayBuffer = await withTimeout(
+      blob.arrayBuffer(),
+      MEDIA_DOWNLOAD_TIMEOUT_MS,
+      "Timed out reading media bytes for audio extraction."
+    );
+    return await withTimeout(
+      context.decodeAudioData(arrayBuffer),
+      MEDIA_DOWNLOAD_TIMEOUT_MS,
+      `Chrome could not decode audio from ${fileName || "this media file"}.`
+    );
+  } catch (error) {
+    throw new Error(`Chrome could not extract an audio track from ${fileName || "this media file"}: ${readableErrorMessage(error)}`);
+  } finally {
+    context.close?.().catch?.(() => {});
+  }
+}
+
+async function renderAudioChunkToWav(audioBuffer, startSeconds, durationSeconds) {
+  const frameCount = Math.max(1, Math.ceil(durationSeconds * TRANSCRIPTION_AUDIO_SAMPLE_RATE));
+  const offline = new OfflineAudioContext(1, frameCount, TRANSCRIPTION_AUDIO_SAMPLE_RATE);
+  const source = offline.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offline.destination);
+  source.start(0, startSeconds, durationSeconds);
+  const rendered = await offline.startRendering();
+  return encodeAudioBufferAsWav(rendered);
+}
+
+function encodeAudioBufferAsWav(audioBuffer) {
+  const channel = audioBuffer.getChannelData(0);
+  const sampleRate = audioBuffer.sampleRate;
+  const bytesPerSample = 2;
+  const dataSize = channel.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 8 * bytesPerSample, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  for (let index = 0; index < channel.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, channel[index]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) view.setUint8(offset + index, text.charCodeAt(index));
+}
 async function callOpenAiChunkedTranscription(media, video, report) {
   const totalBytes = media.contentLength || media.blob?.size || 0;
   if (!totalBytes) throw new Error("Could not determine media size for chunked transcription.");

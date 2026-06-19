@@ -29,8 +29,9 @@ preparing transcript/index data.
   source hints match.
 - Watches Tsinghua-hosted video-player network requests after the user presses play, detects caption files, manifests, and direct media candidates, and imports detected captions when available.
 - Shows detected videos that do not have transcripts and can transcribe direct
-  audio/video files through OpenAI, chunking large direct files when the browser
-  can fetch byte ranges, then cache the searchable transcript locally.
+  audio/video files through OpenAI. Large audio files use byte chunks when safe;
+  large MP4/WebM/M4A files use Chrome audio extraction into WAV chunks when the
+  browser can decode them, then cache the searchable transcript locally.
 - Searches normal resources and video transcript segments together in a chat-like
   local retrieval view.
 - Includes a setup screen for OpenAI, DeepSeek, or OpenRouter API settings.
@@ -87,9 +88,12 @@ Video transcription currently uses OpenAI audio transcription. The extension
 fetches detected media with the user's logged-in Blackboard session, sends the
 media to OpenAI, checks that the returned transcript looks usable, and stores
 the resulting searchable transcript locally. OpenAI audio uploads have a file
-size ceiling, so large direct media is split into roughly 20 MB chunks when the
-server supports browser byte-range requests. The extension merges returned
-segment timestamps into one transcript and does not save the source video file.
+size ceiling, so large direct audio files are split into roughly 20 MB chunks
+when the server supports browser byte-range requests. For large MP4/WebM/M4A
+containers, the extension tries to download the media in memory, asks Chrome to
+extract the audio track, encodes roughly 8-minute mono WAV chunks, transcribes
+those chunks, and merges returned segment timestamps into one transcript. It
+does not save the source video file.
 
 ## Search Architecture
 
@@ -114,13 +118,14 @@ Open/play a Blackboard video
 -> detect caption files, media manifests, and direct media requests
 -> import captions automatically when exposed by the player
 -> if direct media is exposed, click Transcribe or auto-transcribe with OpenAI
--> for large direct files, fetch/transcribe byte-range chunks when supported
+-> for large direct audio files, fetch/transcribe byte-range chunks when supported
+-> for large MP4/WebM/M4A files, extract audio in Chrome and transcribe WAV chunks when possible
 -> quality-check and merge transcript segments
 -> store transcript locally in Chrome and discard the in-memory media blob/chunks
 -> transcript is cached locally and searched forever
 ```
 
-For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. Large direct audio files are chunked best-effort when the format is likely to tolerate byte slicing. Large MP4/WebM/M4A video containers are not raw-byte chunked because later slices are usually not independently decodable; use exposed captions, import a prepared transcript, or split/remux the audio with a real media tool first. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
+For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. Large direct audio files are chunked best-effort when the format is likely to tolerate byte slicing. Large MP4/WebM/M4A video containers are not raw-byte chunked because later slices are usually not independently decodable; instead, the extension tries browser audio extraction into WAV chunks up to a local decode size limit. If Chrome cannot decode the media or the file is too large to prepare safely in memory, use exposed captions, import a prepared transcript, or split/remux the audio with a real media tool first. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
 
 ## Transcript Bundle Format
 
