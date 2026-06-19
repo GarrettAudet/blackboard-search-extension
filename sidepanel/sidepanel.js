@@ -18,6 +18,8 @@ const state = {
   }
 };
 
+const videoResultSearchCache = new Set();
+
 const els = {
   statusText: document.getElementById("statusText"),
   refreshBtn: document.getElementById("refreshBtn"),
@@ -396,7 +398,7 @@ function groupTranscriptsByPage() {
 function cleanGroupTitle(resource, transcript) {
   const raw = resource?.section || resource?.page_title || transcript.source_hint || "Imported transcript bundle";
   const parts = String(raw)
-    .split(/\s[-–>]\s|\n|\r|\/+/)
+    .split(/\s[-\u2013>]\s|\n|\r|\/+/)
     .map((part) => part.trim())
     .filter(Boolean);
   return parts[parts.length - 1] || raw;
@@ -1096,7 +1098,14 @@ async function handleAsk(event) {
   const memory = getConversationMemory();
   const retrievalQuery = buildRetrievalQuery(query, memory);
   appendMessage("user", query);
-  const results = searchIndex(retrievalQuery);
+  let results = searchIndex(retrievalQuery);
+
+  const videoSearch = await enrichVideoResultsForQuery(query, retrievalQuery, results);
+  if (videoSearch.segment_count || videoSearch.transcripts_imported) {
+    await refreshAll();
+    results = searchIndex(retrievalQuery);
+  }
+
   const directAnswer = buildDirectAnswer(query, results);
   if (directAnswer) {
     appendMessage("assistant", directAnswer.text, directAnswer.sources);
@@ -1127,13 +1136,107 @@ async function handleAsk(event) {
     els.searchBtn.classList.remove("is-loading");
   }
 }
-
 function searchIndex(query) {
   return buildSearchDocs()
     .map((doc) => ({ ...doc, score: scoreDoc(query, doc) }))
     .filter((doc) => doc.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 10);
+}
+
+async function enrichVideoResultsForQuery(query, retrievalQuery, results) {
+  const searchText = makeVideoPlayerSearchQuery(query, retrievalQuery);
+  if (!searchText) return { segment_count: 0, transcripts_imported: 0 };
+  const candidates = videoResultCandidates(results, searchText).slice(0, 3);
+  if (!candidates.length) return { segment_count: 0, transcripts_imported: 0 };
+
+  for (const candidate of candidates) videoResultSearchCache.add(videoResultSearchCacheKey(candidate, searchText));
+  setStatus(`Searching inside ${candidates.length} relevant video${candidates.length === 1 ? "" : "s"}...`);
+  try {
+    const response = await sendMessage("SEARCH_VIDEO_RESULTS", { query: searchText, videos: candidates });
+    if (!response || !response.ok) {
+      console.warn("Video result search failed", response && response.error);
+      setStatus(response?.error ? `Video search skipped: ${response.error}` : "Video search skipped.");
+      return { segment_count: 0, transcripts_imported: 0 };
+    }
+    if (response.segment_count) {
+      setStatus(`Added ${response.segment_count} timestamped video result${response.segment_count === 1 ? "" : "s"} to the local index.`);
+    } else {
+      setStatus("No timestamped matches found inside the candidate videos.");
+    }
+    return response;
+  } catch (error) {
+    console.warn("Video result search failed", error);
+    setStatus(`Video search skipped: ${error && error.message ? error.message : String(error)}`);
+    return { segment_count: 0, transcripts_imported: 0 };
+  }
+}
+
+function makeVideoPlayerSearchQuery(query, retrievalQuery) {
+  const needsContext = isFollowUpQuery(query);
+  const text = needsContext ? retrievalQuery : query;
+  return clampText(String(text || "").replace(/[?!]+$/g, "").trim(), 220);
+}
+
+function videoResultCandidates(results, searchText) {
+  const resourceById = new Map(state.resources.map((resource) => [resource.id, resource]));
+  const candidates = [];
+  const seen = new Set();
+
+  function addResource(resource, score = 0) {
+    if (!resource || !resource.url || !isLikelySearchableVideoResource(resource)) return;
+    const id = resource.id || resource.url;
+    if (seen.has(id)) return;
+    if (videoResultSearchCache.has(videoResultSearchCacheKey(resource, searchText))) return;
+    seen.add(id);
+    candidates.push({
+      id: resource.id || "",
+      title: resource.title || "Video",
+      url: resource.url,
+      page_title: resource.page_title || "",
+      section: resource.section || "",
+      score
+    });
+  }
+
+  for (const result of results.slice(0, 10)) {
+    const resource = result.resource_id ? resourceById.get(result.resource_id) : null;
+    if (!resource) continue;
+    if (result.kind === "video_transcript" && resourceTranscriptSegmentCount(resource) >= 8) continue;
+    addResource(resource, result.score || 0);
+  }
+
+  if (!candidates.length) {
+    for (const resource of state.resources.filter(isLikelySearchableVideoResource)) {
+      const doc = {
+        kind: resource.type || "video",
+        title: resource.title || "",
+        source: [resource.section, resource.page_title].filter(Boolean).join(" "),
+        text: [resource.context, resource.page_title, resource.section, resource.url].filter(Boolean).join(" ")
+      };
+      const score = scoreDoc(searchText, doc);
+      if (score > 0) addResource(resource, score);
+    }
+  }
+
+  return candidates.sort((a, b) => b.score - a.score);
+}
+
+function isLikelySearchableVideoResource(resource) {
+  const haystack = `${resource.type || ""} ${resource.title || ""} ${resource.url || ""}`;
+  return /video_embed|kaltura|panopto|echo360|yuja|mediasite|bbcollab|youtube|vimeo|recording|webinar|video/i.test(haystack);
+}
+
+function resourceTranscriptSegmentCount(resource) {
+  const ids = new Set(resource.transcript_ids || []);
+  if (!ids.size) return 0;
+  return state.transcripts
+    .filter((transcript) => ids.has(transcript.id))
+    .reduce((sum, transcript) => sum + ((transcript.segments || []).length || 0), 0);
+}
+
+function videoResultSearchCacheKey(resource, searchText) {
+  return `${resource.id || resource.url || "video"}|${normalizeText(searchText).slice(0, 140)}`;
 }
 
 function buildLocalAnswer(query, results, retrievalQuery = query) {
@@ -1290,12 +1393,12 @@ function extractTaskItemsFromText(text, result) {
 }
 
 function hasDeadlineBlocks(text) {
-  return /[【\[]\s*Deadline\s+[^】\]]+[】\]]/i.test(String(text || ""));
+  return /[\u3010\[]\s*Deadline\s+[^\u3011\]]+[\u3011\]]/i.test(String(text || ""));
 }
 
 function extractDeadlineBlockItems(clean, result) {
   const markers = [];
-  const markerPattern = /[【\[]\s*Deadline\s+([^】\]]+?)\s*[】\]]/gi;
+  const markerPattern = /[\u3010\[]\s*Deadline\s+([^\u3011\]]+?)\s*[\u3011\]]/gi;
   let match = markerPattern.exec(clean);
   while (match) {
     markers.push({
@@ -1336,7 +1439,7 @@ function extractDeadlineBlockTitle(block, result) {
     .split(
       /\b(?:Attached Files?:|Review|Read|Fill out|Complete|Submit|Students?|Please|The survey|This survey|You can|Click|Scan|Access)\b/i
     )[0]
-    .replace(/\bClass of 20\d{2}[-–]20\d{2} Pre-program\b/gi, " ")
+    .replace(/\bClass of 20\d{2}[-\u2013]20\d{2} Pre-program\b/gi, " ")
     .replace(/\bTo Do\b/gi, " ")
     .replace(/\bHome\b/gi, " ")
     .replace(/\s+-\s+/g, " ")

@@ -99,6 +99,30 @@
     return parts.join(" - ");
   }
 
+  function videoTitle() {
+    const selectors = [
+      "[class*='title' i]",
+      "h1",
+      "h2",
+      "[aria-label*='title' i]"
+    ];
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      const text = cleanText(node && (node.innerText || node.textContent), 240);
+      if (text && !/^results?$/i.test(text)) return text;
+    }
+    return cleanText(document.title || "Video search results", 240);
+  }
+
+  function simpleHash(value) {
+    let hash = 0;
+    const text = String(value || "");
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    return hash.toString(36);
+  }
+
   function pageTextExcerpt() {
     const main =
       document.querySelector("main") ||
@@ -124,6 +148,72 @@
       context: nearestContext(element || document.body),
       discovered_at: new Date().toISOString()
     };
+  }
+
+  function collectVideoSearchTranscripts() {
+    const segments = visibleVideoSearchSegments();
+    if (!segments.length) return [];
+    const url = normalizeUrl(window.location.href);
+    const title = videoTitle();
+    return [
+      {
+        id: `visible_video_results_${simpleHash(url || title)}`,
+        title,
+        source_hint: `Visible video search results - ${cleanText(document.title || title, 180)}`,
+        video_url: url,
+        segments
+      }
+    ];
+  }
+
+  function visibleVideoSearchSegments() {
+    const rowSelectors = [
+      "[role='listitem']",
+      "li",
+      "tr",
+      "[class*='result' i]",
+      "[class*='transcript' i]",
+      "[class*='caption' i]",
+      "[class*='search' i]"
+    ];
+    const timestampPattern = /\b(?:\d{1,2}:)?\d{1,2}:\d{2}\b/g;
+    const seen = new Set();
+    const candidates = [];
+
+    document.querySelectorAll(rowSelectors.join(",")).forEach((node) => {
+      const text = cleanText(node.innerText || node.textContent, 700);
+      const timestamps = text.match(timestampPattern) || [];
+      if (!timestamps.length || !/[a-zA-Z]{4,}/.test(text)) return;
+      if (/^(details|discussion|notes|bookmarks|results|hide|search all|sort by relevance)\b/i.test(text)) return;
+      const timestamp = timestamps[timestamps.length - 1];
+      const snippet = cleanText(
+        text
+          .replace(timestampPattern, " ")
+          .replace(/\b(Search all|Sort by relevance|Results|Hide)\b/gi, " "),
+        500
+      );
+      if (snippet.length < 12) return;
+      const key = `${timestamp}|${snippet.toLowerCase().slice(0, 160)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push({ id: String(candidates.length), start: normalizeTimestamp(timestamp), end: "", speaker: "", text: snippet });
+    });
+
+    return candidates.sort((a, b) => secondsFromTimestamp(a.start) - secondsFromTimestamp(b.start));
+  }
+
+  function normalizeTimestamp(value) {
+    const parts = String(value || "").split(":").map((part) => Number.parseInt(part, 10));
+    if (parts.some((part) => !Number.isFinite(part))) return String(value || "");
+    if (parts.length === 2) return `00:${String(parts[0]).padStart(2, "0")}:${String(parts[1]).padStart(2, "0")}`;
+    if (parts.length === 3) return parts.map((part) => String(part).padStart(2, "0")).join(":");
+    return String(value || "");
+  }
+
+  function secondsFromTimestamp(value) {
+    const parts = String(value || "").split(":").map((part) => Number.parseInt(part, 10));
+    if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return 0;
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
   }
 
   function collectResources() {
@@ -193,7 +283,8 @@
         section: breadcrumbText(),
         scraped_at: new Date().toISOString()
       },
-      resources: collectResources()
+      resources: collectResources(),
+      transcripts: collectVideoSearchTranscripts()
     };
   }
 
@@ -202,7 +293,11 @@
 
   function sendScrape() {
     const payload = scrapePage();
-    const payloadKey = `${payload.page.url}|${payload.resources.length}|${payload.resources.map((item) => item.context || item.title).join("|").length}`;
+    const transcriptKey = (payload.transcripts || [])
+      .flatMap((transcript) => transcript.segments || [])
+      .map((segment) => `${segment.start}|${segment.text}`)
+      .join("|");
+    const payloadKey = `${payload.page.url}|${payload.resources.length}|${payload.resources.map((item) => item.context || item.title).join("|").length}|${transcriptKey.length}`;
     if (payloadKey === lastPayloadKey) return;
     lastPayloadKey = payloadKey;
     chrome.runtime.sendMessage({ type: "SCRAPE_PAGE", payload }, () => {

@@ -37,6 +37,8 @@ async function handleMessage(message) {
       return crawlSite(message.payload || {});
     case "IMPORT_TRANSCRIPTS":
       return importTranscripts(message.payload || {});
+    case "SEARCH_VIDEO_RESULTS":
+      return searchVideoResults(message.payload || {});
     case "MANUAL_ATTACH_TRANSCRIPT":
       return manualAttachTranscript(message.payload || {});
     default:
@@ -71,9 +73,10 @@ async function clearIndex() {
 
 async function mergeScrape(payload) {
   const scrapedResources = Array.isArray(payload.resources) ? payload.resources : [];
+  const scrapedTranscripts = normalizeTranscriptBundle(payload.transcripts || []);
   const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY]);
   const currentResources = data[RESOURCE_KEY] || [];
-  const transcripts = data[TRANSCRIPT_KEY] || [];
+  let transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
   const byId = new Map(currentResources.map((resource) => [resource.id, resource]));
 
@@ -102,17 +105,26 @@ async function mergeScrape(payload) {
     }
   }
 
+  if (scrapedTranscripts.length) {
+    const transcriptById = new Map(transcripts.map((transcript) => [transcript.id, transcript]));
+    for (const transcript of scrapedTranscripts) {
+      transcriptById.set(transcript.id, mergeTranscriptRecords(transcriptById.get(transcript.id), transcript));
+    }
+    transcripts = Array.from(transcriptById.values());
+  }
+
   const resources = Array.from(byId.values());
   matchTranscriptsToResources(resources, transcripts);
   await saveIndex(resources, transcripts, contentStore);
   return {
     ok: true,
     added_or_updated: scrapedResources.length,
+    transcripts_imported: scrapedTranscripts.length,
     resource_count: resources.length,
+    transcript_count: transcripts.length,
     content_count: Object.keys(contentStore).length
   };
 }
-
 async function importTranscripts(payload) {
   const incoming = normalizeTranscriptBundle(payload);
   if (!incoming.length) return { ok: false, error: "no_transcripts_found" };
@@ -123,17 +135,7 @@ async function importTranscripts(payload) {
   const byId = new Map(existing.map((transcript) => [transcript.id, transcript]));
 
   for (const transcript of incoming) {
-    const previous = byId.get(transcript.id);
-    byId.set(transcript.id, {
-      ...previous,
-      ...transcript,
-      matched_resource_ids: uniqueStrings([
-        ...((previous && previous.matched_resource_ids) || []),
-        ...(transcript.matched_resource_ids || [])
-      ]),
-      imported_at: previous?.imported_at || new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    });
+    byId.set(transcript.id, mergeTranscriptRecords(byId.get(transcript.id), transcript));
   }
 
   const transcripts = Array.from(byId.values());
@@ -142,12 +144,12 @@ async function importTranscripts(payload) {
   return {
     ok: true,
     imported: incoming.length,
+    segment_count: incoming.reduce((sum, transcript) => sum + (transcript.segments || []).length, 0),
     transcript_count: transcripts.length,
     auto_attached: matchSummary.autoAttached,
     unmatched: transcripts.filter((transcript) => !(transcript.matched_resource_ids || []).length).length
   };
 }
-
 async function manualAttachTranscript(payload) {
   const resourceId = String(payload.resource_id || "").trim();
   const transcriptId = String(payload.transcript_id || "").trim();
@@ -165,6 +167,268 @@ async function manualAttachTranscript(payload) {
   transcript.updated_at = new Date().toISOString();
   await saveIndex(resources, transcripts);
   return { ok: true };
+}
+
+async function searchVideoResults(payload) {
+  const query = cleanText(payload.query || "", 240);
+  const videos = (Array.isArray(payload.videos) ? payload.videos : [])
+    .map((video) => ({
+      id: cleanText(video.id || video.resource_id || "", 120),
+      title: cleanText(video.title || video.name || "Video", 240),
+      url: normalizeUrl(video.url || video.video_url || video.href || ""),
+      page_title: cleanText(video.page_title || "", 240),
+      section: cleanText(video.section || "", 240)
+    }))
+    .filter((video) => video.url && /^https?:\/\//i.test(video.url))
+    .slice(0, 3);
+
+  if (!query || !videos.length) {
+    return { ok: true, searched: 0, transcripts_imported: 0, segment_count: 0, failures: [] };
+  }
+
+  const transcripts = [];
+  const failures = [];
+  for (const video of videos) {
+    try {
+      const transcript = await searchSingleVideoResults(video, query);
+      if (transcript && transcript.segments && transcript.segments.length) transcripts.push(transcript);
+    } catch (error) {
+      failures.push({
+        title: video.title,
+        url: video.url,
+        error: String(error && error.message ? error.message : error)
+      });
+    }
+  }
+
+  if (!transcripts.length) {
+    return { ok: true, searched: videos.length, transcripts_imported: 0, segment_count: 0, failures };
+  }
+
+  const importResult = await importTranscripts({ transcripts });
+  return {
+    ok: true,
+    searched: videos.length,
+    transcripts_imported: importResult.imported || transcripts.length,
+    segment_count: importResult.segment_count || transcripts.reduce((sum, transcript) => sum + transcript.segments.length, 0),
+    transcript_count: importResult.transcript_count,
+    auto_attached: importResult.auto_attached,
+    failures
+  };
+}
+
+async function searchSingleVideoResults(video, query) {
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: video.url, active: false });
+    if (!tab || !tab.id) throw new Error("Could not open video tab for search.");
+    await waitForTabComplete(tab.id, 45000);
+    await sleep(2500);
+
+    const frameResults = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: searchVisibleVideoResultsInPage,
+      args: [query]
+    });
+
+    const rawSegments = [];
+    let title = video.title;
+    for (const frame of frameResults || []) {
+      const result = frame && frame.result;
+      if (!result) continue;
+      if ((!title || title === "Video") && result.title) title = cleanText(result.title, 240);
+      for (const segment of result.segments || []) rawSegments.push(segment);
+    }
+
+    const segments = mergeTranscriptSegments([], normalizeSegments(rawSegments)).map((segment, index) => ({
+      ...segment,
+      id: String(index)
+    }));
+    if (!segments.length) return null;
+
+    return {
+      id: stableId(["video_player_results", video.id || video.url]),
+      title: title || "Video search results",
+      source_hint: `Player search results for "${query}"`,
+      video_url: video.url,
+      matched_resource_ids: video.id ? [video.id] : [],
+      segments
+    };
+  } finally {
+    if (tab && tab.id) {
+      try {
+        await chrome.tabs.remove(tab.id);
+      } catch (_error) {
+        // The user or browser may already have closed the temporary tab.
+      }
+    }
+  }
+}
+
+function waitForTabComplete(tabId, timeoutMs = 45000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+    };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") finish();
+    };
+
+    chrome.tabs.onUpdated.addListener(listener);
+    timer = setTimeout(() => finish(), timeoutMs);
+    chrome.tabs.get(tabId)
+      .then((tab) => {
+        if (tab && tab.status === "complete") finish();
+      })
+      .catch((error) => fail(error));
+  });
+}
+
+async function searchVisibleVideoResultsInPage(query) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const cleanText = (value, limit = 600) =>
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, limit);
+  const isVisible = (node) => {
+    if (!node || !node.getBoundingClientRect) return false;
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+    return rect.width > 0 && rect.height > 0 && (!style || (style.display !== "none" && style.visibility !== "hidden"));
+  };
+  const normalizeTimestamp = (value) => {
+    const parts = String(value || "").split(":").map((part) => Number.parseInt(part, 10));
+    if (parts.some((part) => !Number.isFinite(part))) return String(value || "");
+    if (parts.length === 2) return `00:${String(parts[0]).padStart(2, "0")}:${String(parts[1]).padStart(2, "0")}`;
+    if (parts.length === 3) return parts.map((part) => String(part).padStart(2, "0")).join(":");
+    return String(value || "");
+  };
+  const secondsFromTimestamp = (value) => {
+    const parts = String(value || "").split(":").map((part) => Number.parseInt(part, 10));
+    if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return 0;
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  };
+  const setInputValue = (input, value) => {
+    input.focus();
+    if (input.isContentEditable) {
+      input.textContent = value;
+    } else {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      if (setter && input instanceof window.HTMLInputElement) setter.call(input, value);
+      else input.value = value;
+    }
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+  };
+  const clickSearchButton = (input) => {
+    const inputRect = input.getBoundingClientRect();
+    const formButton = input.closest("form")?.querySelector("button,[role='button'],input[type='submit']");
+    const buttons = Array.from(document.querySelectorAll("button,[role='button'],input[type='submit'],input[type='button']"))
+      .filter(isVisible)
+      .map((button) => {
+        const rect = button.getBoundingClientRect();
+        const label = cleanText([button.textContent, button.getAttribute("aria-label"), button.getAttribute("title"), button.value].join(" "), 120);
+        const verticalOverlap = rect.bottom >= inputRect.top && rect.top <= inputRect.bottom;
+        const toRight = rect.left >= inputRect.left;
+        const distance = Math.abs(rect.left - inputRect.right) + Math.abs(rect.top - inputRect.top);
+        let score = 0;
+        if (/search|find|go|submit/i.test(label)) score += 10;
+        if (/clear|close|cancel|hide/i.test(label)) score -= 10;
+        if (verticalOverlap) score += 4;
+        if (toRight) score += 2;
+        score += Math.max(0, 4 - Math.floor(distance / 80));
+        return { button, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    const button = formButton || buttons.find((candidate) => candidate.score > 0)?.button;
+    if (button && typeof button.click === "function") button.click();
+  };
+  const chooseSearchInput = () => {
+    const inputs = Array.from(
+      document.querySelectorAll("input[type='search'],input[type='text'],input:not([type]),textarea,[role='searchbox'],[contenteditable='true']")
+    ).filter(isVisible);
+    return inputs
+      .map((input) => {
+        const label = cleanText([
+          input.getAttribute("aria-label"),
+          input.getAttribute("placeholder"),
+          input.getAttribute("title"),
+          input.closest("form")?.textContent,
+          input.parentElement?.textContent
+        ].join(" "), 240);
+        let score = 0;
+        if (/search|find|transcript|caption|result/i.test(label)) score += 5;
+        if (input.matches("input[type='search'],[role='searchbox']")) score += 3;
+        return { input, score };
+      })
+      .sort((a, b) => b.score - a.score)[0]?.input;
+  };
+  const collectSegments = () => {
+    const rowSelectors = [
+      "[role='listitem']",
+      "li",
+      "tr",
+      "[class*='result' i]",
+      "[class*='transcript' i]",
+      "[class*='caption' i]",
+      "[class*='search' i]"
+    ];
+    const timestampPattern = /\b(?:\d{1,2}:)?\d{1,2}:\d{2}\b/g;
+    const seen = new Set();
+    const segments = [];
+    document.querySelectorAll(rowSelectors.join(",")).forEach((node) => {
+      if (!isVisible(node)) return;
+      const text = cleanText(node.innerText || node.textContent, 900);
+      const timestamps = text.match(timestampPattern) || [];
+      if (!timestamps.length || !/[a-zA-Z]{4,}/.test(text)) return;
+      if (/^(details|discussion|notes|bookmarks|results|hide|search all|sort by relevance)\b/i.test(text)) return;
+      const timestamp = timestamps[timestamps.length - 1];
+      const snippet = cleanText(
+        text
+          .replace(timestampPattern, " ")
+          .replace(/\b(Search all|Sort by relevance|Results|Hide|Details|Discussion|Notes|Bookmarks)\b/gi, " "),
+        650
+      );
+      if (snippet.length < 12) return;
+      const key = `${timestamp}|${snippet.toLowerCase().slice(0, 180)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      segments.push({ start: normalizeTimestamp(timestamp), end: "", speaker: "", text: snippet });
+    });
+    return segments.sort((a, b) => secondsFromTimestamp(a.start) - secondsFromTimestamp(b.start));
+  };
+
+  const input = chooseSearchInput();
+  if (input) {
+    setInputValue(input, query);
+    clickSearchButton(input);
+    await sleep(3500);
+  }
+
+  return {
+    title: cleanText(document.title || "Video search results", 240),
+    url: location.href,
+    searched: Boolean(input),
+    segments: collectSegments()
+  };
 }
 
 async function scanActiveTab() {
@@ -843,6 +1107,61 @@ function normalizeTranscript(raw) {
     matched_resource_ids: uniqueStrings(raw.matched_resource_ids || raw.matchedResourceIds || []),
     imported_at: cleanText(raw.imported_at || new Date().toISOString(), 80)
   };
+}
+
+function mergeTranscriptRecords(previous, transcript) {
+  const now = new Date().toISOString();
+  if (!previous) {
+    return {
+      ...transcript,
+      segments: mergeTranscriptSegments([], transcript.segments || []),
+      matched_resource_ids: uniqueStrings(transcript.matched_resource_ids || []),
+      imported_at: transcript.imported_at || now,
+      updated_at: now
+    };
+  }
+
+  return {
+    ...previous,
+    ...withoutEmpty(transcript),
+    segments: mergeTranscriptSegments(previous.segments || [], transcript.segments || []),
+    matched_resource_ids: uniqueStrings([
+      ...(previous.matched_resource_ids || []),
+      ...(transcript.matched_resource_ids || [])
+    ]),
+    source_hint: mergeSourceHints(previous.source_hint, transcript.source_hint),
+    imported_at: previous.imported_at || transcript.imported_at || now,
+    updated_at: now
+  };
+}
+
+function mergeSourceHints(previous, next) {
+  return uniqueStrings([previous, next]).join(" | ").slice(0, 240);
+}
+
+function mergeTranscriptSegments(existing, incoming) {
+  const byKey = new Map();
+  for (const segment of [...(existing || []), ...(incoming || [])]) {
+    const text = cleanText(segment.text || "", 5000);
+    if (!text) continue;
+    const normalized = {
+      id: cleanText(segment.id || String(byKey.size), 80),
+      start: cleanText(segment.start || "", 40),
+      end: cleanText(segment.end || "", 40),
+      speaker: cleanText(segment.speaker || "", 80),
+      text
+    };
+    const key = `${normalized.start}|${normalizeText(normalized.text).slice(0, 200)}`;
+    if (!byKey.has(key)) byKey.set(key, normalized);
+  }
+  return Array.from(byKey.values()).sort((a, b) => secondsFromTimestamp(a.start) - secondsFromTimestamp(b.start));
+}
+
+function secondsFromTimestamp(value) {
+  const parts = String(value || "").split(":").map((part) => Number.parseInt(part, 10));
+  if (parts.length === 2 && parts.every((part) => Number.isFinite(part))) return parts[0] * 60 + parts[1];
+  if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return 0;
 }
 
 function normalizeSegments(rawSegments) {
