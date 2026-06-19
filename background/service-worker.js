@@ -227,7 +227,7 @@ async function crawlSite(payload) {
   const resources = [];
   const failures = [];
 
-  emitCrawlProgress({ status: "started", pages: 0, queued: queue.length, resources: 0, current_url: seedUrl });
+  emitCrawlProgress({ status: "started", pages: 0, queued: queue.length, candidates_seen: 0, current_url: seedUrl });
 
   while (queue.length && visited.size < maxPages) {
     const currentUrl = queue.shift();
@@ -238,7 +238,7 @@ async function crawlSite(payload) {
       status: "fetching",
       pages: visited.size,
       queued: queue.length,
-      resources: resources.length,
+      candidates_seen: resources.length,
       current_url: currentUrl
     });
 
@@ -267,12 +267,19 @@ async function crawlSite(payload) {
   const response = {
     ok: true,
     pages_crawled: visited.size,
+    candidates_seen: resources.length,
     resources_seen: resources.length,
     resource_count: mergeResult.resource_count,
     queued_remaining: queue.length,
     failures: failures.slice(0, 20)
   };
-  emitCrawlProgress({ status: "complete", pages: visited.size, queued: queue.length, resources: resources.length });
+  emitCrawlProgress({
+    status: "complete",
+    pages: visited.size,
+    queued: queue.length,
+    candidates_seen: resources.length,
+    resource_count: mergeResult.resource_count
+  });
   return response;
 }
 
@@ -332,17 +339,20 @@ function extractResourcesFromHtml(html, pageUrl) {
     const url = normalizeUrlFrom(href, pageUrl);
     if (!url || isIgnoredProtocol(url)) return;
     const title = cleanText(anchor.textContent || anchor.getAttribute("title") || anchor.getAttribute("aria-label") || url, 240);
+    const type = inferType(url, title);
     childUrls.push(url);
-    add({
-      type: inferType(url, title),
-      title,
-      url,
-      page_url: pageUrl,
-      page_title: pageTitle,
-      section,
-      context: nearestContextFromDocument(anchor),
-      discovered_at: new Date().toISOString()
-    });
+    if (shouldStoreAnchorResource(url, title, type, pageUrl)) {
+      add({
+        type,
+        title,
+        url,
+        page_url: pageUrl,
+        page_title: pageTitle,
+        section,
+        context: nearestContextFromDocument(anchor),
+        discovered_at: new Date().toISOString()
+      });
+    }
   });
 
   document.querySelectorAll("video[src], video source[src], audio[src], audio source[src]").forEach((media) => {
@@ -406,6 +416,25 @@ function extractResourcesFromHtml(html, pageUrl) {
   };
 }
 
+function shouldStoreAnchorResource(url, title, type, pageUrl) {
+  if (!url) return false;
+  const resourceType = String(type || "").toLowerCase();
+  if (/^(pdf|document|slides|spreadsheet|video|audio|video_embed|announcement)$/.test(resourceType)) return true;
+  if (isCourseOrOrganizationUrl(url)) return false;
+  if (isSameBlackboardOrigin(url, pageUrl)) return false;
+  return Boolean(cleanText(title, 80));
+}
+
+function isSameBlackboardOrigin(url, pageUrl) {
+  try {
+    const parsed = new URL(url);
+    const page = new URL(pageUrl);
+    return parsed.origin === page.origin && /\/webapps\/blackboard\//i.test(parsed.pathname);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function extractResourcesFromHtmlFallback(html, pageUrl) {
   const title = cleanText((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || pageUrl, 240);
   const text = cleanText(stripHtml(html), 3000);
@@ -416,18 +445,22 @@ function extractResourcesFromHtmlFallback(html, pageUrl) {
   while (match) {
     const url = normalizeUrlFrom(match[1], pageUrl);
     if (url && !isIgnoredProtocol(url)) {
+      const type = inferType(url, fileNameFromUrl(url));
+      const resourceTitle = fileNameFromUrl(url) || url;
       urls.push(url);
-      resources.push(
-        normalizeResource({
-          type: inferType(url, fileNameFromUrl(url)),
-          title: fileNameFromUrl(url) || url,
-          url,
-          page_url: pageUrl,
-          page_title: title,
-          context: title,
-          discovered_at: new Date().toISOString()
-        })
-      );
+      if (shouldStoreAnchorResource(url, resourceTitle, type, pageUrl)) {
+        resources.push(
+          normalizeResource({
+            type,
+            title: resourceTitle,
+            url,
+            page_url: pageUrl,
+            page_title: title,
+            context: title,
+            discovered_at: new Date().toISOString()
+          })
+        );
+      }
     }
     match = attrPattern.exec(html);
   }

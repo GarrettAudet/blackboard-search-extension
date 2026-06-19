@@ -129,7 +129,7 @@ async function crawlSite() {
   await refreshAll();
   const failureText = response.failures && response.failures.length ? ` ${response.failures.length} page(s) failed.` : "";
   setStatus(
-    `Crawled ${response.pages_crawled} page(s), saw ${response.resources_seen} resources, stored ${response.resource_count}.${failureText}`
+    `Crawled ${response.pages_crawled} page(s), saw ${response.candidates_seen || response.resources_seen || 0} candidates, stored ${response.resource_count}.${failureText}`
   );
 }
 
@@ -1974,10 +1974,12 @@ chrome.runtime.onMessage.addListener((message) => {
   if (!message || message.type !== "CRAWL_PROGRESS") return false;
   const payload = message.payload || {};
   if (payload.status === "fetching") {
-    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; resources ${payload.resources}.`);
+    const candidates = payload.candidates_seen ?? payload.resources ?? 0;
+    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; candidates seen ${candidates}.`);
     els.crawlState.textContent = `${payload.pages} pages`;
   } else if (payload.status === "complete") {
-    setStatus(`Crawl complete. Pages ${payload.pages}; resources ${payload.resources}.`);
+    const stored = payload.resource_count ?? payload.resources ?? 0;
+    setStatus(`Crawl complete. Pages ${payload.pages}; stored ${stored}.`);
     els.crawlState.textContent = "complete";
     els.crawlBtn.disabled = false;
     els.crawlBtn.textContent = "Index Blackboard";
