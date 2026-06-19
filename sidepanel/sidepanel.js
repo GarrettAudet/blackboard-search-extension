@@ -2,8 +2,8 @@ const SETTINGS_KEY = "assistant_settings";
 const MAX_CONTENT_CHARS = 20000;
 const MAX_MEMORY_TURNS = 6;
 const MEDIA_RESOLVE_TIMEOUT_MS = 30000;
-const MEDIA_DOWNLOAD_TIMEOUT_MS = 60000;
-const TRANSCRIPTION_TIMEOUT_MS = 300000;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const TRANSCRIPTION_TIMEOUT_MS = 60 * 60 * 1000;
 
 const state = {
   resources: [],
@@ -644,7 +644,7 @@ async function callOpenAiTranscription(blob, fileName) {
       body: form
     },
     TRANSCRIPTION_TIMEOUT_MS,
-    "Timed out waiting for the transcription provider; skipping it."
+    "Timed out waiting for the transcription provider after 60 minutes; skipping it."
   );
   const text = await withTimeout(
     response.text(),
