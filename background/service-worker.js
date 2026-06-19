@@ -3,6 +3,7 @@ const TRANSCRIPT_KEY = "transcript_store";
 const CONTENT_KEY = "content_store";
 const META_KEY = "index_meta";
 const DETECTED_MEDIA_KEY = "detected_media_store";
+const IGNORED_MEDIA_KEY = "ignored_media_store";
 const DEFAULT_CRAWL_SEED_URL =
   "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
 const TSINGHUA_MEDIA_URL_PATTERN = /tsinghua/i;
@@ -43,10 +44,13 @@ async function captureMediaRequest(details, contentType = "") {
   if (!isTsinghuaMediaUrl(details.url)) return;
   const classification = classifyMediaRequest(details, contentType);
   if (!classification) return;
+  const mediaKey = mediaCandidateKey(details.url);
+  if (mediaKey && (await isIgnoredMediaKey(mediaKey))) return;
 
   const tab = await getTabSnapshot(details.tabId);
   const detection = {
-    id: stableId(["detected_media", details.url]),
+    id: stableId(["detected_media", classification.kind, mediaKey || details.url]),
+    canonical_key: mediaKey,
     kind: classification.kind,
     url: details.url,
     content_type: contentType || classification.contentType || "",
@@ -114,7 +118,9 @@ async function getTabSnapshot(tabId) {
 }
 
 async function storeDetectedMedia(detection) {
-  const data = await chrome.storage.local.get(DETECTED_MEDIA_KEY);
+  const data = await chrome.storage.local.get([DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
+  const ignoredKeys = ignoredMediaKeys(data[IGNORED_MEDIA_KEY]);
+  if (mediaCandidateIsIgnored(detection, ignoredKeys)) return detection;
   const current = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
   const byId = new Map(current.map((item) => [item.id, item]));
   const previous = byId.get(detection.id);
@@ -213,6 +219,7 @@ function emitMediaDetected(payload) {
 
 async function mergeDetectedDirectMedia(detection) {
   if (!detection || !detection.url) return;
+  if (await isIgnoredMediaUrl(detection.url)) return;
   const type = /audio\//i.test(detection.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(detection.url)
     ? "audio"
     : "video";
@@ -220,6 +227,7 @@ async function mergeDetectedDirectMedia(detection) {
   const result = await mergeScrape({
     resources: [
       {
+        id: stableId(["resource", type, mediaCandidateKey(detection.url) || detection.url]),
         type,
         title: sourceTitle,
         url: detection.url,
@@ -326,6 +334,8 @@ async function handleMessage(message) {
       return importTranscripts(message.payload || {});
     case "IMPORT_DETECTED_CAPTIONS":
       return importDetectedCaptions();
+    case "DISMISS_MEDIA_CANDIDATE":
+      return dismissMediaCandidate(message.payload || {});
     case "SEARCH_VIDEO_RESULTS":
       return searchVideoResults(message.payload || {});
     case "MANUAL_ATTACH_TRANSCRIPT":
@@ -335,13 +345,72 @@ async function handleMessage(message) {
   }
 }
 
+async function dismissMediaCandidate(payload) {
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
+  const resources = data[RESOURCE_KEY] || [];
+  const transcripts = data[TRANSCRIPT_KEY] || [];
+  const contentStore = data[CONTENT_KEY] || {};
+  const detections = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
+  const ignored = Array.isArray(data[IGNORED_MEDIA_KEY]) ? data[IGNORED_MEDIA_KEY] : [];
+
+  const resource = resources.find((item) => item.id === payload.resource_id || item.id === payload.resourceId);
+  const detection = detections.find((item) => item.id === payload.id || item.id === payload.detected_media_id || item.id === payload.detectedMediaId);
+  const keyValues = uniqueStrings([
+    payload.url,
+    payload.video_url,
+    payload.videoUrl,
+    resource?.url,
+    detection?.url
+  ].map(mediaCandidateKey));
+
+  const ignoredByKey = new Map(ignored.map((item) => [item.key, item]));
+  for (const key of keyValues) {
+    ignoredByKey.set(key, {
+      key,
+      url: payload.url || resource?.url || detection?.url || "",
+      title: cleanText(payload.title || resource?.title || detection?.title || detection?.page_title || "Dismissed media", 240),
+      ignored_at: new Date().toISOString()
+    });
+  }
+
+  const matchesKeys = (candidate) => mediaCandidateKeys(candidate).some((key) => keyValues.includes(key));
+  const nextDetections = detections.filter((item) => item.id !== detection?.id && !matchesKeys(item));
+  const removedResourceIds = new Set();
+  const nextResources = resources.filter((item) => {
+    const shouldRemove = item.id === resource?.id || (isVideoResource(item) && matchesKeys(item));
+    if (shouldRemove) removedResourceIds.add(item.id);
+    return !shouldRemove;
+  });
+
+  const nextResourceIds = new Set(nextResources.map((item) => item.id));
+  const nextTranscripts = transcripts.map((transcript) => ({
+    ...transcript,
+    matched_resource_ids: (transcript.matched_resource_ids || []).filter((id) => nextResourceIds.has(id))
+  }));
+  const nextContentStore = Object.fromEntries(
+    Object.entries(contentStore || {}).filter(([id]) => !removedResourceIds.has(id))
+  );
+
+  await chrome.storage.local.set({
+    [DETECTED_MEDIA_KEY]: nextDetections,
+    [IGNORED_MEDIA_KEY]: Array.from(ignoredByKey.values()).slice(-500)
+  });
+  await saveIndex(nextResources, nextTranscripts, nextContentStore);
+  return {
+    ok: true,
+    ignored: keyValues.length,
+    removed_resources: removedResourceIds.size,
+    removed_detections: detections.length - nextDetections.length
+  };
+}
 async function getIndex() {
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, DETECTED_MEDIA_KEY]);
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
   const resources = data[RESOURCE_KEY] || [];
   const transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
   const detectedMedia = data[DETECTED_MEDIA_KEY] || [];
-  const prunedDetectedMedia = pruneDetectedMediaToTsinghua(detectedMedia);
+  const ignoredKeys = ignoredMediaKeys(data[IGNORED_MEDIA_KEY]);
+  const prunedDetectedMedia = pruneDetectedMediaToTsinghua(detectedMedia).filter((item) => !mediaCandidateIsIgnored(item, ignoredKeys));
   if (prunedDetectedMedia.length !== detectedMedia.length) {
     await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: prunedDetectedMedia });
   }
@@ -355,6 +424,7 @@ async function clearIndex() {
     [TRANSCRIPT_KEY]: [],
     [CONTENT_KEY]: {},
     [DETECTED_MEDIA_KEY]: [],
+    [IGNORED_MEDIA_KEY]: [],
     [META_KEY]: {
       resource_count: 0,
       transcript_count: 0,
@@ -369,7 +439,8 @@ async function clearIndex() {
 async function mergeScrape(payload) {
   const scrapedResources = Array.isArray(payload.resources) ? payload.resources : [];
   const scrapedTranscripts = normalizeTranscriptBundle(payload.transcripts || []);
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY]);
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, IGNORED_MEDIA_KEY]);
+  const ignoredKeys = ignoredMediaKeys(data[IGNORED_MEDIA_KEY]);
   const currentResources = data[RESOURCE_KEY] || [];
   let transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
@@ -378,6 +449,7 @@ async function mergeScrape(payload) {
   for (const raw of scrapedResources) {
     const normalized = normalizeResource(raw);
     if (!normalized.url && !normalized.title) continue;
+    if (mediaCandidateIsIgnored(normalized, ignoredKeys)) continue;
     const resource = resourceMetadataFrom(normalized);
     const content = searchableContentFrom(normalized);
     if (content) contentStore[resource.id] = content;
@@ -1348,8 +1420,9 @@ function normalizeResource(raw) {
   const url = preserveUrl ? rawUrl : normalizeUrl(rawUrl);
   const title = cleanText(rawTitle || url || "Untitled resource", 240);
   const type = preliminaryType || cleanText(inferType(url, title), 80);
+  const mediaKey = /^(audio|video)$/.test(type) ? mediaCandidateKey(url) : "";
   const resource = {
-    id: cleanText(raw.id || stableId(["resource", type, url, title]), 120),
+    id: cleanText(raw.id || stableId(["resource", type, mediaKey || url, mediaKey ? "" : title]), 120),
     type,
     title,
     url,
@@ -1600,6 +1673,54 @@ function normalizeUrl(rawUrl) {
   } catch (_error) {
     return value;
   }
+}
+
+function mediaCandidateKey(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    let path = decodeURIComponent(parsed.pathname || "/")
+      .replace(/\/+/g, "/")
+      .replace(/\/(index|master)\.m3u8$/i, "")
+      .replace(/\/fragmented\.mp4$/i, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
+    return `${host}${path}`;
+  } catch (_error) {
+    return value
+      .split(/[?#]/)[0]
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+/g, "/")
+      .replace(/\/fragmented\.mp4$/i, "")
+      .replace(/\/(index|master)\.m3u8$/i, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
+  }
+}
+
+function mediaCandidateKeys(candidate) {
+  return uniqueStrings([candidate?.canonical_key, candidate?.url, candidate?.video_url, candidate?.videoUrl].map((value) => candidate?.canonical_key === value ? value : mediaCandidateKey(value)));
+}
+
+function ignoredMediaKeys(records) {
+  return new Set((Array.isArray(records) ? records : []).map((item) => item && item.key).filter(Boolean));
+}
+
+function mediaCandidateIsIgnored(candidate, ignoredKeys) {
+  return mediaCandidateKeys(candidate).some((key) => ignoredKeys.has(key));
+}
+
+async function isIgnoredMediaUrl(url) {
+  const key = mediaCandidateKey(url);
+  if (!key) return false;
+  return isIgnoredMediaKey(key);
+}
+
+async function isIgnoredMediaKey(key) {
+  const data = await chrome.storage.local.get(IGNORED_MEDIA_KEY);
+  return ignoredMediaKeys(data[IGNORED_MEDIA_KEY]).has(key);
 }
 
 function tokenOverlap(query, text) {

@@ -266,7 +266,7 @@ function renderDetectedMedia() {
 
   if (!actionable.length) return;
 
-  const groups = groupDetectedMediaByPage(actionable.slice(0, 80));
+  const groups = groupDetectedMediaByPage(dedupeDetectedMedia(actionable).slice(0, 80));
   for (const group of groups) {
     const section = document.createElement("details");
     section.className = "video-group";
@@ -278,7 +278,8 @@ function renderDetectedMedia() {
     title.textContent = group.title;
     const count = document.createElement("span");
     count.className = "group-count";
-    count.textContent = `${group.items.length} detected`;
+    const duplicateCount = group.items.reduce((sum, item) => sum + (item.duplicate_count || 0), 0);
+    count.textContent = `${group.items.length} detected${duplicateCount ? ` | ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"} hidden` : ""}`;
     summary.append(title, count);
     section.append(summary);
     const list = document.createElement("div");
@@ -298,9 +299,9 @@ function isUsefulDetectedMedia(item) {
 }
 
 function detectedMediaHasTranscript(item) {
-  const itemUrl = normalizeUrlForCompare(item.url);
+  const itemKey = mediaCandidateKey(item.url) || normalizeUrlForCompare(item.url);
   return state.resources.some((resource) =>
-    normalizeUrlForCompare(resource.url) === itemUrl && (resource.transcript_ids || []).length
+    (mediaCandidateKey(resource.url) || normalizeUrlForCompare(resource.url)) === itemKey && (resource.transcript_ids || []).length
   );
 }
 
@@ -315,6 +316,26 @@ function detectedMediaStatusLabel(captionCount, directCount, manifestCount) {
   }
   if (directCount) return `${captionCount} captions | ${directCount} media ready; auto on`;
   return `${captionCount} captions | ${manifestCount} manifests`;
+}
+
+function dedupeDetectedMedia(items) {
+  const byKey = new Map();
+  for (const item of items) {
+    const key = mediaCandidateKey(item.url) || item.id || item.url;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...item, duplicate_count: 0 });
+      continue;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...withoutEmptyObject(item),
+      duplicate_count: (existing.duplicate_count || 0) + 1,
+      first_seen_at: existing.first_seen_at || item.first_seen_at,
+      last_seen_at: String(item.last_seen_at || "") > String(existing.last_seen_at || "") ? item.last_seen_at : existing.last_seen_at
+    });
+  }
+  return Array.from(byKey.values());
 }
 
 function groupDetectedMediaByPage(detections) {
@@ -350,7 +371,8 @@ function renderDetectedMediaRow(item) {
   const meta = document.createElement("div");
   meta.className = "transcript-row-meta";
   const status = item.imported_transcript_id ? "imported" : item.transcript_status || item.kind;
-  meta.textContent = [labelForKind(item.kind), status, item.content_type].filter(Boolean).join(" - ");
+  const duplicateText = item.duplicate_count ? `${item.duplicate_count} duplicate${item.duplicate_count === 1 ? "" : "s"} hidden` : "";
+  meta.textContent = [labelForKind(item.kind), status, item.content_type, duplicateText].filter(Boolean).join(" - ");
   text.append(title, meta);
 
   const actions = document.createElement("div");
@@ -366,6 +388,7 @@ function renderDetectedMediaRow(item) {
     button.addEventListener("click", () => runTranscriptionWithButton(button, item.title || item.page_title || item.url, (onStatus) => transcribeDetectedMedia(item, { onStatus })).catch(() => {}));
     actions.append(button);
   }
+  actions.append(renderDismissButton({ id: item.id, url: item.url, title: item.title || item.page_title }));
   if (item.url) {
     const link = document.createElement("a");
     link.className = "open-link";
@@ -379,10 +402,11 @@ function renderDetectedMediaRow(item) {
   return row;
 }
 function renderMissingVideos() {
-  const missingVideos = state.resources
-    .filter(isVideoResource)
-    .filter((video) => !(video.transcript_ids || []).length)
-    .sort((a, b) => String(a.page_title || a.title).localeCompare(String(b.page_title || b.title)));
+  const missingVideos = dedupeVideoResources(
+    state.resources
+      .filter(isVideoResource)
+      .filter((video) => !(video.transcript_ids || []).length)
+  ).sort((a, b) => String(a.page_title || a.title).localeCompare(String(b.page_title || b.title)));
   const directMissingVideos = missingVideos.filter(isDirectMediaResource);
   const embeddedMissingVideos = missingVideos.filter((video) => !isDirectMediaResource(video));
   const canTranscribe = canUseVideoTranscription();
@@ -443,6 +467,31 @@ function renderMissingVideos() {
   });
 }
 
+function dedupeVideoResources(videos) {
+  const byKey = new Map();
+  for (const video of videos) {
+    const key = videoResourceDedupeKey(video);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...video, duplicate_count: 0 });
+      continue;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...withoutEmptyObject(video),
+      duplicate_count: (existing.duplicate_count || 0) + 1,
+      first_seen_at: existing.first_seen_at || video.first_seen_at,
+      last_seen_at: String(video.last_seen_at || "") > String(existing.last_seen_at || "") ? video.last_seen_at : existing.last_seen_at
+    });
+  }
+  return Array.from(byKey.values());
+}
+
+function videoResourceDedupeKey(video) {
+  if (isDirectMediaResource(video)) return mediaCandidateKey(video.url) || video.id || video.url;
+  return normalizeUrlForCompare(video.url) || normalizeText(`${video.page_title || ""} ${video.title || ""}`) || video.id;
+}
+
 function groupMissingVideosByPage(videos) {
   const groups = new Map();
   for (const video of videos) {
@@ -482,7 +531,8 @@ function renderMissingVideoRow(video) {
   title.textContent = video.title || "Untitled video";
   const meta = document.createElement("div");
   meta.className = "transcript-row-meta";
-  meta.textContent = [video.type, video.page_title, video.section].filter(Boolean).join(" - ");
+  const duplicateText = video.duplicate_count ? `${video.duplicate_count} duplicate${video.duplicate_count === 1 ? "" : "s"} hidden` : "";
+  meta.textContent = [video.type, video.page_title, video.section, duplicateText].filter(Boolean).join(" - ");
   text.append(title, meta);
 
   const actions = document.createElement("div");
@@ -511,6 +561,7 @@ function renderMissingVideoRow(video) {
     status.title = "This video needs an imported transcript or a direct media URL before auto-transcription can run.";
     actions.append(status);
   }
+  actions.append(renderDismissButton({ resource_id: video.id, url: video.url, title: video.title || video.page_title }));
   if (video.url) {
     const link = document.createElement("a");
     link.className = "open-link";
@@ -523,6 +574,24 @@ function renderMissingVideoRow(video) {
 
   row.append(text, actions);
   return row;
+}
+
+function renderDismissButton(payload) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary dismiss-button";
+  button.textContent = "Dismiss";
+  button.title = "Remove this media candidate locally and ignore matching future detections.";
+  button.addEventListener("click", () => dismissMediaCandidate(payload, button).catch(reportError));
+  return button;
+}
+
+async function dismissMediaCandidate(payload, button) {
+  if (button) button.disabled = true;
+  const response = await sendMessage("DISMISS_MEDIA_CANDIDATE", payload);
+  if (!response.ok) throw new Error(response.error || "Could not dismiss media candidate.");
+  await refreshAll();
+  setStatus(`Dismissed media candidate; removed ${response.removed_resources || 0} resource(s), ${response.removed_detections || 0} detection(s).`);
 }
 
 function canUseVideoTranscription() {
@@ -569,9 +638,11 @@ function autoTranscribeEnabled() {
 }
 
 async function handleTranscriptAction() {
-  const missingVideos = state.resources
-    .filter(isVideoResource)
-    .filter((video) => !(video.transcript_ids || []).length);
+  const missingVideos = dedupeVideoResources(
+    state.resources
+      .filter(isVideoResource)
+      .filter((video) => !(video.transcript_ids || []).length)
+  );
   const directMissingVideos = missingVideos.filter(isDirectMediaResource);
   if (directMissingVideos.length) return transcribeAllMissingVideos();
   const embedded = missingVideos.find((video) => video.url);
@@ -596,11 +667,13 @@ function scheduleAutoTranscription() {
 
 async function runAutoTranscriptionQueue() {
   if (!autoTranscribeEnabled() || autoTranscribeRunning) return;
-  const candidates = state.resources
-    .filter(isVideoResource)
-    .filter(isDirectMediaResource)
-    .filter((video) => video.url)
-    .filter((video) => !(video.transcript_ids || []).length)
+  const candidates = dedupeVideoResources(
+    state.resources
+      .filter(isVideoResource)
+      .filter(isDirectMediaResource)
+      .filter((video) => video.url)
+      .filter((video) => !(video.transcript_ids || []).length)
+  )
     .filter((video) => !autoTranscribeAttempted.has(video.id))
     .slice(0, 3);
   if (!candidates.length) return;
@@ -822,6 +895,35 @@ async function ensureDetectedMediaResource(item) {
   return created;
 }
 
+function mediaCandidateKey(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    let path = decodeURIComponent(parsed.pathname || "/")
+      .replace(/\/+/g, "/")
+      .replace(/\/(index|master)\.m3u8$/i, "")
+      .replace(/\/fragmented\.mp4$/i, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
+    return `${host}${path}`;
+  } catch (_error) {
+    return value
+      .split(/[?#]/)[0]
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+/g, "/")
+      .replace(/\/fragmented\.mp4$/i, "")
+      .replace(/\/(index|master)\.m3u8$/i, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
+  }
+}
+
+function withoutEmptyObject(object) {
+  return Object.fromEntries(Object.entries(object || {}).filter(([_key, value]) => value !== "" && value !== null && value !== undefined));
+}
+
 function normalizeUrlForCompare(url) {
   try {
     const parsed = new URL(url);
@@ -842,11 +944,13 @@ function detectedMediaSourceTitle(item) {
 }
 
 async function transcribeAllMissingVideos() {
-  const missingVideos = state.resources
-    .filter(isVideoResource)
-    .filter(isDirectMediaResource)
-    .filter((video) => video.url)
-    .filter((video) => !(video.transcript_ids || []).length);
+  const missingVideos = dedupeVideoResources(
+    state.resources
+      .filter(isVideoResource)
+      .filter(isDirectMediaResource)
+      .filter((video) => video.url)
+      .filter((video) => !(video.transcript_ids || []).length)
+  );
   if (!missingVideos.length) {
     throw new Error("No direct audio/video files are available for bulk transcription. Embedded videos need transcript import or a direct media download link.");
   }
