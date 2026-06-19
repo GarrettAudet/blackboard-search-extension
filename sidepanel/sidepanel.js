@@ -1193,7 +1193,7 @@ async function callChatCompletion({ provider, apiKey, model, messages }) {
       model,
       messages,
       temperature: 0.2,
-      max_tokens: 1800
+      max_tokens: 5000
     })
   });
 
