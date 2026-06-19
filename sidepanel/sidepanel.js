@@ -64,6 +64,7 @@ const els = {
   transcribeAllBtn: document.getElementById("transcribeAllBtn"),
   detectedMediaSection: document.getElementById("detectedMediaSection"),
   detectedMediaStatus: document.getElementById("detectedMediaStatus"),
+  transcribeDetectedAllBtn: document.getElementById("transcribeDetectedAllBtn"),
   importDetectedCaptionsBtn: document.getElementById("importDetectedCaptionsBtn"),
   detectedMediaList: document.getElementById("detectedMediaList"),
   missingVideoSection: document.getElementById("missingVideoSection"),
@@ -254,19 +255,26 @@ async function importDetectedCaptions() {
 }
 
 function renderDetectedMedia() {
-  const actionable = (state.detectedMedia || []).filter(isUsefulDetectedMedia);
+  const actionable = detectedMediaCandidates();
   const captions = actionable.filter((item) => item.kind === "caption");
   const direct = actionable.filter((item) => item.kind === "direct_media");
   const pendingCaptions = captions.filter((item) => !item.imported_transcript_id);
   els.detectedMediaSection.hidden = !actionable.length;
   els.detectedMediaStatus.textContent = detectedMediaStatusLabel(captions.length, direct.length, 0);
+  els.transcribeDetectedAllBtn.disabled = !direct.length || !canUseVideoTranscription();
+  els.transcribeDetectedAllBtn.textContent = direct.length ? "Transcribe all" : "Transcribe";
+  els.transcribeDetectedAllBtn.title = direct.length
+    ? canUseVideoTranscription()
+      ? "Transcribe every detected direct audio/video file in memory, then save only transcripts"
+      : "Select OpenAI in Setup and save an API key to transcribe detected media"
+    : "No detected direct media needs transcription";
   els.importDetectedCaptionsBtn.disabled = !pendingCaptions.length;
   els.importDetectedCaptionsBtn.textContent = pendingCaptions.length ? `Captions (${pendingCaptions.length})` : "Captions";
   els.detectedMediaList.textContent = "";
 
   if (!actionable.length) return;
 
-  const groups = groupDetectedMediaByPage(dedupeDetectedMedia(actionable).slice(0, 80));
+  const groups = groupDetectedMediaByPage(actionable.slice(0, 80));
   for (const group of groups) {
     const section = document.createElement("details");
     section.className = "video-group";
@@ -290,6 +298,9 @@ function renderDetectedMedia() {
   }
 }
 
+function detectedMediaCandidates() {
+  return dedupeDetectedMedia((state.detectedMedia || []).filter(isUsefulDetectedMedia));
+}
 function isUsefulDetectedMedia(item) {
   if (!item || !item.url) return false;
   if (!isAllowedTranscriptSource(item)) return false;
@@ -944,6 +955,60 @@ function detectedMediaSourceTitle(item) {
   );
 }
 
+async function transcribeAllDetectedMedia() {
+  const candidates = detectedMediaCandidates().filter((item) => item.kind === "direct_media" && item.url);
+  if (!candidates.length) {
+    throw new Error("No detected direct media is available for transcription.");
+  }
+  if (!state.settings.hasApiKey) throw new Error("Add an API key in Setup before transcribing detected media.");
+  if (state.settings.provider !== "openai") {
+    throw new Error("Detected media transcription currently requires OpenAI as the selected API provider.");
+  }
+
+  els.transcribeDetectedAllBtn.disabled = true;
+  const originalText = els.transcribeDetectedAllBtn.textContent;
+  const startedAt = Date.now();
+  let completed = 0;
+  let failed = 0;
+  let lastFailure = "";
+
+  try {
+    for (let index = 0; index < candidates.length; index += 1) {
+      const item = candidates[index];
+      const label = clampText(item.title || item.page_title || fileNameFromUrl(item.url, item.content_type || "") || "media", 54);
+      const updateBatchStatus = (stage) => {
+        const processed = completed + failed;
+        const elapsedMs = Date.now() - startedAt;
+        const averageMs = processed ? elapsedMs / processed : 0;
+        const eta = averageMs ? formatDuration(averageMs * (candidates.length - processed)) : "calculating";
+        const cleanStage = compactTranscriptionStage(String(stage || "Working"));
+        els.transcribeDetectedAllBtn.textContent = `${index + 1}/${candidates.length}`;
+        els.detectedMediaStatus.textContent = `${cleanStage} ${index + 1}/${candidates.length}; saved ${completed}; failed ${failed}; ETA ${eta}`;
+        setStatus(`${cleanStage} ${label}...`);
+      };
+
+      updateBatchStatus("Resolving");
+      try {
+        await transcribeDetectedMedia(item, {
+          quiet: true,
+          onStatus: (stage) => updateBatchStatus(stage)
+        });
+        completed += 1;
+        updateBatchStatus("Saved");
+      } catch (error) {
+        failed += 1;
+        lastFailure = readableErrorMessage(error);
+        els.detectedMediaStatus.textContent = `Skipped ${index + 1}/${candidates.length}: ${lastFailure}`;
+        console.warn("Detected media transcription failed", item.title || item.url, error);
+      }
+    }
+  } finally {
+    await refreshAll();
+    els.detectedMediaStatus.textContent = `${completed} detected media transcribed${failed ? `, ${failed} failed${lastFailure ? `; last: ${lastFailure}` : ""}` : ""}`;
+    els.transcribeDetectedAllBtn.disabled = false;
+    els.transcribeDetectedAllBtn.textContent = originalText;
+  }
+}
 async function transcribeAllMissingVideos() {
   const missingVideos = dedupeVideoResources(
     state.resources
@@ -3118,6 +3183,7 @@ els.crawlBtn.addEventListener("click", () =>
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
 els.importDetectedCaptionsBtn.addEventListener("click", () => importDetectedCaptions().catch(reportError));
+els.transcribeDetectedAllBtn.addEventListener("click", () => transcribeAllDetectedMedia().catch(reportError));
 els.transcribeAllBtn.addEventListener("click", () => handleTranscriptAction().catch(reportError));
 els.chatForm.addEventListener("submit", handleAsk);
 els.transcriptFile.addEventListener("change", (event) => {
