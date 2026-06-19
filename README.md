@@ -27,7 +27,7 @@ preparing transcript/index data.
 - Lets the user import a prepared transcript JSON bundle.
 - Automatically attaches transcripts to discovered videos when titles, URLs, or
   source hints match.
-- Watches video-player network requests after the user presses play, detects caption files, manifests, and direct media candidates, and imports detected captions when available.
+- Watches Tsinghua-hosted video-player network requests after the user presses play, detects caption files, manifests, and direct media candidates, and imports detected captions when available.
 - Shows detected videos that do not have transcripts and can transcribe direct
   audio/video files through OpenAI, chunking large direct files when the browser
   can fetch byte ranges, then cache the searchable transcript locally.
@@ -120,7 +120,7 @@ Open/play a Blackboard video
 -> transcript is cached locally and searched forever
 ```
 
-For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. Large direct files are chunked best-effort; if the server rejects byte-range requests or the sliced media chunks are not independently decodable, the extension reports that clearly. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
+For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. Large direct audio files are chunked best-effort when the format is likely to tolerate byte slicing. Large MP4/WebM/M4A video containers are not raw-byte chunked because later slices are usually not independently decodable; use exposed captions, import a prepared transcript, or split/remux the audio with a real media tool first. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
 
 ## Transcript Bundle Format
 

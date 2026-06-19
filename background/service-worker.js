@@ -5,6 +5,7 @@ const META_KEY = "index_meta";
 const DETECTED_MEDIA_KEY = "detected_media_store";
 const DEFAULT_CRAWL_SEED_URL =
   "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
+const TSINGHUA_MEDIA_URL_PATTERN = /tsinghua/i;
 
 setupMediaRequestObservers();
 
@@ -39,6 +40,7 @@ function responseContentType(headers = []) {
 
 async function captureMediaRequest(details, contentType = "") {
   if (!details || !details.url || details.tabId < 0) return;
+  if (!isTsinghuaMediaUrl(details.url)) return;
   const classification = classifyMediaRequest(details, contentType);
   if (!classification) return;
 
@@ -95,6 +97,13 @@ function isLikelyChunkUrl(lowerUrl) {
   return /\.(m4s|cmfv|cmfa|ts)(?:[?#]|$)/i.test(lowerUrl) || /(?:segment|frag|chunk)[-_]?\d+/i.test(lowerUrl);
 }
 
+function isTsinghuaMediaUrl(url) {
+  return TSINGHUA_MEDIA_URL_PATTERN.test(String(url || ""));
+}
+
+function pruneDetectedMediaToTsinghua(records) {
+  return (Array.isArray(records) ? records : []).filter((item) => isTsinghuaMediaUrl(item && item.url));
+}
 async function getTabSnapshot(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
@@ -320,8 +329,12 @@ async function getIndex() {
   const transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
   const detectedMedia = data[DETECTED_MEDIA_KEY] || [];
+  const prunedDetectedMedia = pruneDetectedMediaToTsinghua(detectedMedia);
+  if (prunedDetectedMedia.length !== detectedMedia.length) {
+    await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: prunedDetectedMedia });
+  }
   const meta = data[META_KEY] || { resource_count: resources.length, transcript_count: transcripts.length };
-  return { ok: true, resources, transcripts, detected_media: detectedMedia, content_store: contentStore, meta };
+  return { ok: true, resources, transcripts, detected_media: prunedDetectedMedia, content_store: contentStore, meta };
 }
 
 async function clearIndex() {

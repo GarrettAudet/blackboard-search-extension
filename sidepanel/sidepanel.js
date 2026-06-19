@@ -342,7 +342,7 @@ function renderDetectedMediaRow(item) {
     button.title = button.disabled
       ? "Select OpenAI in Setup and save an API key to transcribe detected media"
       : "Fetch this detected media in memory, transcribe it, and save only the transcript";
-    button.addEventListener("click", () => transcribeDetectedMedia(item).catch(reportError));
+    button.addEventListener("click", () => runTranscriptionWithButton(button, item.title || item.page_title || item.url, (onStatus) => transcribeDetectedMedia(item, { onStatus })).catch(() => {}));
     actions.append(button);
   }
   if (item.url) {
@@ -468,7 +468,7 @@ function renderMissingVideoRow(video) {
     button.title = button.disabled
       ? "Select OpenAI in Setup and save an API key to transcribe this video"
       : "Create a timestamped local transcript with anonymized speakers";
-    button.addEventListener("click", () => transcribeSingleVideo(video).catch(reportError));
+    button.addEventListener("click", () => runTranscriptionWithButton(button, video.title || video.page_title || video.url, (onStatus) => transcribeSingleVideo(video, { onStatus })).catch(() => {}));
     actions.append(button);
   } else if (video.url) {
     const button = document.createElement("button");
@@ -500,6 +500,41 @@ function renderMissingVideoRow(video) {
 
 function canUseVideoTranscription() {
   return Boolean(state.settings.hasApiKey && state.settings.provider === "openai");
+}
+
+async function runTranscriptionWithButton(button, title, task) {
+  const originalText = button.textContent;
+  const label = clampText(title || "video", 70);
+  const update = (stage) => {
+    const cleanStage = String(stage || "Working").trim();
+    button.textContent = compactTranscriptionStage(cleanStage);
+    els.transcriptionStatus.textContent = `${cleanStage} ${label}...`;
+    setStatus(`${cleanStage} ${label}...`);
+  };
+
+  button.disabled = true;
+  update("Starting");
+  try {
+    const result = await task(update);
+    button.textContent = "Saved";
+    els.transcriptionStatus.textContent = "Transcript saved locally";
+    setStatus("Transcript saved locally.");
+    return result;
+  } catch (error) {
+    button.textContent = "Failed";
+    els.transcriptionStatus.textContent = `Failed: ${readableErrorMessage(error)}`;
+    reportError(error);
+    throw error;
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = !canUseVideoTranscription();
+      button.textContent = originalText;
+    }, 2500);
+  }
+}
+
+function compactTranscriptionStage(stage) {
+  return clampText(stage.replace(/\s+\d+\/\d+$/, ""), 18);
 }
 
 function autoTranscribeEnabled() {
@@ -648,10 +683,10 @@ function renderTranscriptRow(item) {
   return row;
 }
 
-async function transcribeDetectedMedia(item) {
+async function transcribeDetectedMedia(item, options = {}) {
   if (!item || !item.url) throw new Error("Detected media does not have a URL to transcribe.");
   const resource = await ensureDetectedMediaResource(item);
-  return transcribeSingleVideo(resource);
+  return transcribeSingleVideo(resource, options);
 }
 
 async function ensureDetectedMediaResource(item) {
@@ -806,6 +841,7 @@ async function fetchMediaPayload(video) {
       contentLength = probedLength;
       await cancelResponseBody(response);
       if (contentLength > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+        if (!canByteChunkMedia(contentType, fileName)) throw new Error(largeMediaNeedsSplitterMessage(fileName, contentType));
         return {
           mode: "range",
           url: media.url,
@@ -821,6 +857,7 @@ async function fetchMediaPayload(video) {
 
   if (contentLength && contentLength > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
     await cancelResponseBody(response);
+    if (!canByteChunkMedia(contentType, fileName)) throw new Error(largeMediaNeedsSplitterMessage(fileName, contentType));
     return {
       mode: "range",
       url: media.url,
@@ -836,6 +873,7 @@ async function fetchMediaPayload(video) {
     "Timed out downloading this media file; skipping it."
   );
   if (blob.size > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+    if (!canByteChunkMedia(blob.type || contentType, fileName)) throw new Error(largeMediaNeedsSplitterMessage(fileName, blob.type || contentType));
     return {
       mode: "blob_chunks",
       blob,
@@ -989,6 +1027,16 @@ function normalizeAbsoluteUrl(rawUrl, baseUrl) {
 
 function isLikelyTranscribableMediaUrl(url) {
   return /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(\?|$)/i.test(String(url || ""));
+}
+
+function canByteChunkMedia(contentType, fileName) {
+  const haystack = `${contentType || ""} ${fileName || ""}`.toLowerCase();
+  return /audio\/(mpeg|mp3|aac|ogg)|\.(mp3|aac|ogg|oga)(?:$|\?)/i.test(haystack);
+}
+
+function largeMediaNeedsSplitterMessage(fileName, contentType) {
+  const label = fileName || contentType || "This media file";
+  return `${label} is over OpenAI's browser upload limit. MP4/WebM/M4A files cannot be reliably transcribed by raw byte chunks; use exposed captions, import a prepared transcript, or split/remux the audio with a real media splitter first.`;
 }
 
 async function callOpenAiTranscription(blob, fileName, options = {}) {
