@@ -207,7 +207,7 @@ async function mergeDetectedDirectMedia(detection) {
   const type = /audio\//i.test(detection.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(detection.url)
     ? "audio"
     : "video";
-  await mergeScrape({
+  const result = await mergeScrape({
     resources: [
       {
         type,
@@ -222,6 +222,7 @@ async function mergeDetectedDirectMedia(detection) {
       }
     ]
   });
+  emitMediaDetected({ ...detection, resource_status: result.ok ? "indexed" : "index_failed" });
 }
 
 function bestResourceForDetection(detection, resources) {

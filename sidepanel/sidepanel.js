@@ -247,9 +247,7 @@ function renderDetectedMedia() {
   const direct = detections.filter((item) => item.kind === "direct_media");
   const manifests = detections.filter((item) => item.kind === "manifest");
   const pendingCaptions = captions.filter((item) => !item.imported_transcript_id);
-  els.detectedMediaStatus.textContent = detections.length
-    ? `${captions.length} captions | ${direct.length} media | ${manifests.length} manifests`
-    : "play a video to detect media";
+  els.detectedMediaStatus.textContent = detectedMediaStatusLabel(captions.length, direct.length, manifests.length);
   els.importDetectedCaptionsBtn.disabled = !pendingCaptions.length;
   els.importDetectedCaptionsBtn.textContent = pendingCaptions.length ? `Import captions (${pendingCaptions.length})` : "Captions imported";
   els.detectedMediaList.textContent = "";
@@ -280,6 +278,19 @@ function renderDetectedMedia() {
     section.append(list);
     els.detectedMediaList.append(section);
   }
+}
+
+function detectedMediaStatusLabel(captionCount, directCount, manifestCount) {
+  const total = captionCount + directCount + manifestCount;
+  if (!total) return "play a video to detect media";
+  if (directCount && !canUseVideoTranscription()) {
+    return `${captionCount} captions | ${directCount} media ready; choose OpenAI`;
+  }
+  if (directCount && !state.settings.autoTranscribe) {
+    return `${captionCount} captions | ${directCount} media ready; click Transcribe`;
+  }
+  if (directCount) return `${captionCount} captions | ${directCount} media ready; auto on`;
+  return `${captionCount} captions | ${manifestCount} manifests`;
 }
 
 function groupDetectedMediaByPage(detections) {
@@ -320,6 +331,17 @@ function renderDetectedMediaRow(item) {
 
   const actions = document.createElement("div");
   actions.className = "missing-video-actions";
+  if (item.kind === "direct_media" && item.url) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Transcribe";
+    button.disabled = !canUseVideoTranscription();
+    button.title = button.disabled
+      ? "Select OpenAI in Setup and save an API key to transcribe detected media"
+      : "Fetch this detected media in memory, transcribe it, and save only the transcript";
+    button.addEventListener("click", () => transcribeDetectedMedia(item).catch(reportError));
+    actions.append(button);
+  }
   if (item.url) {
     const link = document.createElement("a");
     link.className = "open-link";
@@ -621,6 +643,51 @@ function renderTranscriptRow(item) {
     row.append(link);
   }
   return row;
+}
+
+async function transcribeDetectedMedia(item) {
+  if (!item || !item.url) throw new Error("Detected media does not have a URL to transcribe.");
+  const resource = await ensureDetectedMediaResource(item);
+  return transcribeSingleVideo(resource);
+}
+
+async function ensureDetectedMediaResource(item) {
+  const existing = state.resources.find((resource) => resource.url === item.url || normalizeUrlForCompare(resource.url) === normalizeUrlForCompare(item.url));
+  if (existing) return existing;
+
+  const type = /audio\//i.test(item.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(item.url)
+    ? "audio"
+    : "video";
+  const response = await sendMessage("SCRAPE_PAGE", {
+    resources: [
+      {
+        type,
+        title: item.page_title || item.title || fileNameFromUrl(item.url, item.content_type || "") || "Detected media",
+        url: item.url,
+        preserve_url: true,
+        page_url: item.page_url || item.document_url || item.url,
+        page_title: item.page_title || "Detected media",
+        section: "Detected media request",
+        context: ["Detected while playing video", item.document_url, item.initiator].filter(Boolean).join(" - "),
+        discovered_at: new Date().toISOString()
+      }
+    ]
+  });
+  if (!response.ok) throw new Error(response.error || "Could not index detected media before transcription.");
+  await refreshAll();
+  const created = state.resources.find((resource) => resource.url === item.url || normalizeUrlForCompare(resource.url) === normalizeUrlForCompare(item.url));
+  if (!created) throw new Error("Detected media was indexed, but could not be found for transcription.");
+  return created;
+}
+
+function normalizeUrlForCompare(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.href;
+  } catch (_error) {
+    return String(url || "");
+  }
 }
 
 async function transcribeAllMissingVideos() {

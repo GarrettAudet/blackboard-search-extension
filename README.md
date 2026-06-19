@@ -109,13 +109,13 @@ The extension treats transcript creation as a one-time preparation step:
 Open/play a Blackboard video
 -> detect caption files, media manifests, and direct media requests
 -> import captions automatically when exposed by the player
--> if direct media is exposed, transcribe once with OpenAI from memory
+-> if direct media is exposed, click Transcribe or auto-transcribe once with OpenAI from memory
 -> quality-check and chunk transcript text
 -> store transcript locally in Chrome and discard the in-memory media blob
 -> transcript is cached locally and searched forever
 ```
 
-For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, and let Auto-transcribe process the detected media. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
+For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
 
 ## Transcript Bundle Format
 
