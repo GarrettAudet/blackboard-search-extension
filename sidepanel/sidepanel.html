@@ -85,6 +85,12 @@
             <label for="apiKeyInput">API key</label>
             <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Stored locally in Chrome" />
 
+            <label for="autoTranscribeInput">Auto-transcribe</label>
+            <label class="checkbox-row">
+              <input id="autoTranscribeInput" type="checkbox" />
+              <span>Transcribe detected direct media in memory; store only the transcript.</span>
+            </label>
+
             <p class="setup-note">
               API answering sends your question and the top matched Blackboard snippets/transcript segments to the
               selected provider. For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.

@@ -350,6 +350,25 @@ label,
   gap: 9px;
 }
 
+.checkbox-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0c0a14;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.checkbox-row input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
 .crawl-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

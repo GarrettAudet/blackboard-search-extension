@@ -123,6 +123,7 @@ async function storeDetectedMedia(detection) {
     .sort((a, b) => String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")))
     .slice(0, 300);
   await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: records });
+  emitMediaDetected(next);
   return next;
 }
 
@@ -191,6 +192,14 @@ async function updateDetectedMedia(id, patch) {
   const detections = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
   const next = detections.map((item) => (item.id === id ? { ...item, ...patch, last_seen_at: new Date().toISOString() } : item));
   await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: next });
+  const updated = next.find((item) => item.id === id);
+  if (updated) emitMediaDetected(updated);
+}
+
+function emitMediaDetected(payload) {
+  chrome.runtime.sendMessage({ type: "MEDIA_DETECTED", payload }, () => {
+    void chrome.runtime.lastError;
+  });
 }
 
 async function mergeDetectedDirectMedia(detection) {

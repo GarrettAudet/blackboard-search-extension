@@ -15,11 +15,15 @@ const state = {
   settings: {
     provider: "openrouter",
     model: "openrouter/auto",
-    hasApiKey: false
+    hasApiKey: false,
+    autoTranscribe: false
   }
 };
 
 const videoResultSearchCache = new Set();
+const autoTranscribeAttempted = new Set();
+let autoTranscribeRunning = false;
+let detectedMediaRefreshTimer = 0;
 
 const els = {
   statusText: document.getElementById("statusText"),
@@ -40,6 +44,7 @@ const els = {
   providerSelect: document.getElementById("providerSelect"),
   modelInput: document.getElementById("modelInput"),
   apiKeyInput: document.getElementById("apiKeyInput"),
+  autoTranscribeInput: document.getElementById("autoTranscribeInput"),
   saveSettingsBtn: document.getElementById("saveSettingsBtn"),
   setupState: document.getElementById("setupState"),
   crawlState: document.getElementById("crawlState"),
@@ -88,7 +93,8 @@ async function loadSettings() {
     provider: saved.provider || "openrouter",
     model: saved.model || defaultModel(saved.provider || "openrouter"),
     hasApiKey: Boolean(saved.apiKey),
-    apiKey: saved.apiKey || ""
+    apiKey: saved.apiKey || "",
+    autoTranscribe: Boolean(saved.autoTranscribe)
   };
 }
 
@@ -96,14 +102,16 @@ async function saveSettings() {
   const provider = els.providerSelect.value;
   const model = els.modelInput.value.trim() || defaultModel(provider);
   const apiKey = els.apiKeyInput.value.trim() || state.settings.apiKey || "";
+  const autoTranscribe = Boolean(els.autoTranscribeInput.checked);
   await chrome.storage.local.set({
     [SETTINGS_KEY]: {
       provider,
       model,
-      apiKey
+      apiKey,
+      autoTranscribe
     }
   });
-  state.settings = { provider, model, apiKey, hasApiKey: Boolean(apiKey) };
+  state.settings = { provider, model, apiKey, hasApiKey: Boolean(apiKey), autoTranscribe };
   els.apiKeyInput.value = "";
   renderSettings();
   setStatus("Setup saved locally.");
@@ -179,6 +187,7 @@ function renderSettings() {
   els.modelInput.value = state.settings.model || defaultModel(els.providerSelect.value);
   els.setupState.textContent = state.settings.hasApiKey ? "API key saved" : "local search only";
   els.apiKeyInput.placeholder = state.settings.hasApiKey ? "Saved; enter a new key to replace" : "Stored locally in Chrome";
+  els.autoTranscribeInput.checked = Boolean(state.settings.autoTranscribe);
 }
 
 function renderTranscripts() {
@@ -335,13 +344,15 @@ function renderMissingVideos() {
   els.missingVideoList.textContent = "";
   els.transcribeAllBtn.textContent = directMissingVideos.length
     ? `Transcribe direct (${directMissingVideos.length})`
-    : "Import embedded";
-  els.transcribeAllBtn.disabled = !directMissingVideos.length || !canTranscribe;
+    : embeddedMissingVideos.length
+      ? "Open to detect"
+      : "Complete";
+  els.transcribeAllBtn.disabled = directMissingVideos.length ? !canTranscribe : !embeddedMissingVideos.length;
   els.transcribeAllBtn.title = directMissingVideos.length
     ? canTranscribe
-      ? "Auto-transcribe every direct audio/video file missing a transcript"
+      ? "Transcribe every direct audio/video file in memory, then save only the transcript"
       : "Select OpenAI in Setup and save an API key to transcribe direct videos"
-    : "Detected videos are embedded players. Open them and import/export transcripts or direct media when available.";
+    : "Open the first embedded player. Press play once so Blackboard exposes captions or media requests for detection.";
 
   if (!missingVideos.length) {
     els.missingVideoList.append(emptyNode("Every detected video has an attached transcript."));
@@ -354,7 +365,7 @@ function renderMissingVideos() {
   if (embeddedMissingVideos.length && !directMissingVideos.length) {
     const note = document.createElement("p");
     note.className = "panel-note embedded-note";
-    note.textContent = "These are embedded player links. Bulk transcription only works when Blackboard exposes direct audio/video files. Use Open to check for a transcript/download option, then Import Transcripts.";
+    note.textContent = "These are embedded player links. Open a video and press play once; the detector will import exposed captions or add direct media for transcription. Auto-transcribe can then fetch the media in memory and save only the transcript.";
     els.missingVideoList.append(note);
   }
 
@@ -427,7 +438,7 @@ function renderMissingVideoRow(video) {
   if (isDirectMedia) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = isDirectMedia ? "Auto-transcribe" : "Try transcribe";
+    button.textContent = "Transcribe";
     button.disabled = !canUseVideoTranscription();
     button.title = button.disabled
       ? "Select OpenAI in Setup and save an API key to transcribe this video"
@@ -437,12 +448,9 @@ function renderMissingVideoRow(video) {
   } else if (video.url) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = "Try transcribe";
-    button.disabled = !canUseVideoTranscription();
-    button.title = button.disabled
-      ? "Select OpenAI in Setup and save an API key to try resolving this embedded video"
-      : "Try to resolve this embedded player to a direct media file, then transcribe it";
-    button.addEventListener("click", () => transcribeSingleVideo(video).catch(reportError));
+    button.textContent = "Open to detect";
+    button.title = "Open the embedded player, press play, then let the detector capture captions or direct media.";
+    button.addEventListener("click", () => openVideoForDetection(video).catch(reportError));
     actions.append(button);
   } else {
     const status = document.createElement("span");
@@ -467,6 +475,77 @@ function renderMissingVideoRow(video) {
 
 function canUseVideoTranscription() {
   return Boolean(state.settings.hasApiKey && state.settings.provider === "openai");
+}
+
+function autoTranscribeEnabled() {
+  return Boolean(state.settings.autoTranscribe && canUseVideoTranscription());
+}
+
+async function handleTranscriptAction() {
+  const missingVideos = state.resources
+    .filter(isVideoResource)
+    .filter((video) => !(video.transcript_ids || []).length);
+  const directMissingVideos = missingVideos.filter(isDirectMediaResource);
+  if (directMissingVideos.length) return transcribeAllMissingVideos();
+  const embedded = missingVideos.find((video) => video.url);
+  if (embedded) return openVideoForDetection(embedded);
+  throw new Error("No videos need transcripts.");
+}
+
+async function openVideoForDetection(video) {
+  if (!video || !video.url) throw new Error("This video does not have a URL to open.");
+  await chrome.tabs.create({ url: video.url, active: true });
+  els.transcriptionStatus.textContent = "Opened player. Press play once; detected captions/media will appear here automatically.";
+  setStatus("Open the video and press play so Blackboard exposes captions or media requests.");
+}
+
+function scheduleAutoTranscription() {
+  if (!autoTranscribeEnabled() || autoTranscribeRunning) return;
+  window.setTimeout(() => runAutoTranscriptionQueue().catch((error) => {
+    console.warn("Auto-transcription failed", error);
+    els.transcriptionStatus.textContent = `Auto-transcribe skipped: ${readableErrorMessage(error)}`;
+  }), 250);
+}
+
+async function runAutoTranscriptionQueue() {
+  if (!autoTranscribeEnabled() || autoTranscribeRunning) return;
+  const candidates = state.resources
+    .filter(isVideoResource)
+    .filter(isDirectMediaResource)
+    .filter((video) => video.url)
+    .filter((video) => !(video.transcript_ids || []).length)
+    .filter((video) => !autoTranscribeAttempted.has(video.id))
+    .slice(0, 3);
+  if (!candidates.length) return;
+
+  autoTranscribeRunning = true;
+  let completed = 0;
+  let failed = 0;
+  try {
+    for (const video of candidates) {
+      autoTranscribeAttempted.add(video.id);
+      try {
+        await transcribeVideo(video, {
+          quiet: true,
+          onStatus: (stage) => {
+            els.transcriptionStatus.textContent = `Auto ${stage.toLowerCase()} ${clampText(video.title || "video", 70)}...`;
+          }
+        });
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        console.warn("Auto-transcribe skipped", video.title, error);
+      }
+    }
+  } finally {
+    autoTranscribeRunning = false;
+    if (completed) await refreshAll();
+    els.transcriptionStatus.textContent = completed
+      ? `Auto-transcribed ${completed}${failed ? `, ${failed} skipped` : ""}`
+      : failed
+        ? `${failed} auto-transcribe attempt(s) skipped`
+        : els.transcriptionStatus.textContent;
+  }
 }
 
 function isDirectMediaResource(resource) {
@@ -2196,7 +2275,18 @@ function reportError(error) {
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (!message || message.type !== "CRAWL_PROGRESS") return false;
+  if (!message) return false;
+  if (message.type === "MEDIA_DETECTED") {
+    const payload = message.payload || {};
+    const label = labelForKind(payload.kind || "media").toLowerCase();
+    setStatus(`Detected ${label}: ${clampText(payload.title || payload.page_title || "media", 80)}`);
+    if (detectedMediaRefreshTimer) window.clearTimeout(detectedMediaRefreshTimer);
+    detectedMediaRefreshTimer = window.setTimeout(() => {
+      refreshAll().catch(reportError);
+    }, 700);
+    return false;
+  }
+  if (message.type !== "CRAWL_PROGRESS") return false;
   const payload = message.payload || {};
   if (payload.status === "fetching") {
     const candidates = payload.candidates_seen ?? payload.resources ?? 0;
@@ -2238,7 +2328,7 @@ els.crawlBtn.addEventListener("click", () =>
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
 els.importDetectedCaptionsBtn.addEventListener("click", () => importDetectedCaptions().catch(reportError));
-els.transcribeAllBtn.addEventListener("click", () => transcribeAllMissingVideos().catch(reportError));
+els.transcribeAllBtn.addEventListener("click", () => handleTranscriptAction().catch(reportError));
 els.chatForm.addEventListener("submit", handleAsk);
 els.transcriptFile.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];
