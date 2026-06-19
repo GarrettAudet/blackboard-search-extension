@@ -111,10 +111,10 @@
             <span id="videoStatus"></span>
           </div>
           <div class="button-row">
-            <button id="crawlBtn" type="button">Index Blackboard</button>
-            <button id="scanBtn" class="secondary" type="button">Scan Current Page</button>
-            <button id="importBtn" type="button">Import Transcripts</button>
-            <button id="clearBtn" class="secondary" type="button">Clear</button>
+            <button id="crawlBtn" type="button" title="Index Blackboard courses and organizations">Index</button>
+            <button id="scanBtn" class="secondary" type="button" title="Scan the current Blackboard page">Scan</button>
+            <button id="importBtn" type="button" title="Import transcript JSON">Import</button>
+            <button id="clearBtn" class="secondary" type="button" title="Clear the local index">Clear</button>
             <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
           </div>
           <p id="crawlState" class="panel-note">Default crawl starts at the Blackboard portal, scans My Courses and My Organizations, and indexes up to 1500 pages.</p>
@@ -128,7 +128,7 @@
             <span id="detectedMediaStatus">play a video to detect media</span>
           </div>
           <div class="button-row">
-            <button id="importDetectedCaptionsBtn" class="secondary" type="button">Captions imported</button>
+            <button id="importDetectedCaptionsBtn" class="secondary" type="button" title="Import detected caption tracks">Captions</button>
           </div>
           <p class="panel-note">Open a Blackboard video and press play. Captions are imported automatically when the player exposes them; direct media is added as a transcribable candidate when available.</p>
           <div id="detectedMediaList" class="missing-video-list"></div>
@@ -139,7 +139,7 @@
             <span id="transcriptionStatus">idle</span>
           </div>
           <div class="button-row">
-            <button id="transcribeAllBtn" type="button">Transcribe direct</button>
+            <button id="transcribeAllBtn" type="button" title="Transcribe available direct media">Transcribe</button>
           </div>
           <div id="missingVideoList" class="missing-video-list"></div>
         </section>

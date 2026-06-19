@@ -216,22 +216,34 @@ async function mergeDetectedDirectMedia(detection) {
   const type = /audio\//i.test(detection.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(detection.url)
     ? "audio"
     : "video";
+  const sourceTitle = detectedMediaSourceTitle(detection);
   const result = await mergeScrape({
     resources: [
       {
         type,
-        title: detection.page_title || detection.title || fileNameFromUrl(detection.url) || "Detected media",
+        title: sourceTitle,
         url: detection.url,
         preserve_url: true,
         page_url: detection.page_url || detection.document_url || detection.url,
-        page_title: detection.page_title || "Detected media",
-        section: "Detected media request",
+        page_title: sourceTitle,
+        section: sourceTitle,
         context: ["Detected while playing video", detection.document_url, detection.initiator].filter(Boolean).join(" - "),
         discovered_at: new Date().toISOString()
       }
     ]
   });
   emitMediaDetected({ ...detection, resource_status: result.ok ? "indexed" : "index_failed" });
+}
+
+function detectedMediaSourceTitle(detection) {
+  const candidates = [detection?.page_title, detection?.title, fileNameFromUrl(detection?.url), "Blackboard video"];
+  for (const candidate of candidates) {
+    const cleaned = cleanText(candidate, 240);
+    if (cleaned && !/^(detected media request|detected media|fragmented\.mp4|index\.m3u8|master\.m3u8)$/i.test(cleaned)) {
+      return cleaned;
+    }
+  }
+  return "Blackboard video";
 }
 
 function bestResourceForDetection(detection, resources) {

@@ -386,6 +386,13 @@ label,
   flex-wrap: wrap;
 }
 
+#transcriptsView .button-row button {
+  min-width: 88px;
+  padding: 8px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 input[type="search"],
 input[type="url"],
 input[type="number"],
@@ -587,7 +594,7 @@ input[readonly] {
 
 .transcript-preview-text {
   overflow: auto;
-  max-height: 160px;
+  max-height: min(420px, 58vh);
   margin: 0;
   white-space: pre-wrap;
   color: var(--text);

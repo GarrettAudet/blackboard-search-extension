@@ -139,7 +139,7 @@ async function scanActiveTab() {
 
 async function crawlSite() {
   els.crawlBtn.disabled = true;
-  els.crawlBtn.textContent = "Crawling...";
+  els.crawlBtn.textContent = "Crawling";
   setStatus("Starting crawl...");
   const response = await sendMessage("CRAWL_SITE", {
     max_pages: 1500,
@@ -255,7 +255,7 @@ function renderDetectedMedia() {
   const pendingCaptions = captions.filter((item) => !item.imported_transcript_id);
   els.detectedMediaStatus.textContent = detectedMediaStatusLabel(captions.length, direct.length, manifests.length);
   els.importDetectedCaptionsBtn.disabled = !pendingCaptions.length;
-  els.importDetectedCaptionsBtn.textContent = pendingCaptions.length ? `Import captions (${pendingCaptions.length})` : "Captions imported";
+  els.importDetectedCaptionsBtn.textContent = pendingCaptions.length ? `Captions (${pendingCaptions.length})` : "Captions";
   els.detectedMediaList.textContent = "";
 
   if (!detections.length) {
@@ -302,7 +302,7 @@ function detectedMediaStatusLabel(captionCount, directCount, manifestCount) {
 function groupDetectedMediaByPage(detections) {
   const groups = new Map();
   for (const item of detections) {
-    const title = clampText(item.page_title || item.document_url || item.page_url || "Detected media", 110);
+    const title = firstMeaningfulTitleWithFallback("Blackboard media", item.page_title, item.title, item.document_url, item.page_url);
     if (!groups.has(title)) groups.set(title, []);
     groups.get(title).push(item);
   }
@@ -371,7 +371,7 @@ function renderMissingVideos() {
 
   els.missingVideoList.textContent = "";
   els.transcribeAllBtn.textContent = directMissingVideos.length
-    ? `Transcribe direct (${directMissingVideos.length})`
+    ? `Transcribe (${directMissingVideos.length})`
     : embeddedMissingVideos.length
       ? "Open to detect"
       : "Complete";
@@ -443,7 +443,13 @@ function groupMissingVideosByPage(videos) {
 }
 
 function safeVideoGroupTitle(video) {
-  return safeGroupTitle(video, { source_hint: video.source_hint || "" });
+  return firstMeaningfulTitleWithFallback(
+    "Blackboard video",
+    video?.section,
+    video?.page_title,
+    video?.title,
+    video?.source_hint
+  );
 }
 
 function renderMissingVideoRow(video) {
@@ -696,7 +702,7 @@ function renderTranscriptRow(item) {
   const details = document.createElement("details");
   details.className = "transcript-preview";
   const summary = document.createElement("summary");
-  summary.textContent = "Preview / verify";
+  summary.textContent = "Full transcript";
   const body = document.createElement("div");
   body.className = "transcript-preview-body";
   const statLine = document.createElement("div");
@@ -704,7 +710,7 @@ function renderTranscriptRow(item) {
   statLine.textContent = stats.detail;
   const preview = document.createElement("pre");
   preview.className = "transcript-preview-text";
-  preview.textContent = transcriptPreviewText(item.transcript);
+  preview.textContent = transcriptFullText(item.transcript);
   body.append(statLine, preview);
   details.append(summary, body);
 
@@ -737,7 +743,7 @@ function transcriptVerificationStats(transcript) {
   }
 
   return {
-    summary: `${segmentText} • ${wordText} • ${timestampText}`,
+    summary: `${segmentText}; ${wordText}; ${timestampText}`,
     detail: `${segmentText}; ${wordText}; ${timestampText}; ${durationText}. ${reason}`,
     quality,
     label,
@@ -747,11 +753,10 @@ function transcriptVerificationStats(transcript) {
   };
 }
 
-function transcriptPreviewText(transcript) {
+function transcriptFullText(transcript) {
   const segments = Array.isArray(transcript?.segments) ? transcript.segments : [];
   const lines = segments
     .filter((segment) => normalizeTranscriptText(segment.text || ""))
-    .slice(0, 5)
     .map((segment) => {
       const stamp = segment.start || segment.end ? `[${segment.start || "--:--"}${segment.end ? `-${segment.end}` : ""}] ` : "";
       return `${stamp}${normalizeTranscriptText(segment.text || "")}`;
@@ -771,16 +776,17 @@ async function ensureDetectedMediaResource(item) {
   const type = /audio\//i.test(item.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(item.url)
     ? "audio"
     : "video";
+  const sourceTitle = detectedMediaSourceTitle(item);
   const response = await sendMessage("SCRAPE_PAGE", {
     resources: [
       {
         type,
-        title: item.page_title || item.title || fileNameFromUrl(item.url, item.content_type || "") || "Detected media",
+        title: sourceTitle,
         url: item.url,
         preserve_url: true,
         page_url: item.page_url || item.document_url || item.url,
-        page_title: item.page_title || "Detected media",
-        section: "Detected media request",
+        page_title: sourceTitle,
+        section: sourceTitle,
         context: ["Detected while playing video", item.document_url, item.initiator].filter(Boolean).join(" - "),
         discovered_at: new Date().toISOString()
       }
@@ -801,6 +807,15 @@ function normalizeUrlForCompare(url) {
   } catch (_error) {
     return String(url || "");
   }
+}
+
+function detectedMediaSourceTitle(item) {
+  return firstMeaningfulTitleWithFallback(
+    "Blackboard video",
+    item?.page_title,
+    item?.title,
+    fileNameFromUrl(item?.url, item?.content_type || "")
+  );
 }
 
 async function transcribeAllMissingVideos() {
@@ -1826,8 +1841,31 @@ function isUsableSearchContent(text) {
 }
 
 function safeGroupTitle(resource, transcript) {
-  const raw = resource?.section || resource?.page_title || transcript.source_hint || "Imported transcript bundle";
-  const parts = String(raw)
+  return firstMeaningfulTitle(
+    resource?.section,
+    resource?.page_title,
+    resource?.title,
+    transcript?.source_hint,
+    transcript?.title,
+    "Imported transcript bundle"
+  );
+}
+
+function firstMeaningfulTitle(...values) {
+  return firstMeaningfulTitleWithFallback("Imported transcript bundle", ...values);
+}
+
+function firstMeaningfulTitleWithFallback(fallback, ...values) {
+  for (const value of values) {
+    const parts = titleParts(value);
+    const meaningful = parts.filter((part) => !isGenericDetectedTitle(part));
+    if (meaningful.length) return clampText(meaningful[meaningful.length - 1], 110);
+  }
+  return fallback;
+}
+
+function titleParts(value) {
+  return String(value || "")
     .replace(/\s+>\s+/g, "\n")
     .replace(/\s+[\u2013\u2014]\s+/g, "\n")
     .replace(/\s+--\s+/g, "\n")
@@ -1835,7 +1873,10 @@ function safeGroupTitle(resource, transcript) {
     .split(/\n|\r|\/+/)
     .map((part) => part.trim())
     .filter(Boolean);
-  return parts[parts.length - 1] || raw;
+}
+
+function isGenericDetectedTitle(value) {
+  return /^(detected media request|detected media|detected caption file|blackboard video|fragmented\.mp4|index\.m3u8|master\.m3u8)$/i.test(String(value || "").trim());
 }
 
 function seedIntroMessage(force = false) {
@@ -2859,7 +2900,7 @@ function reportError(error) {
   console.error(error);
   setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
   els.crawlBtn.disabled = false;
-  els.crawlBtn.textContent = "Index Blackboard";
+  els.crawlBtn.textContent = "Index";
 }
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -2885,7 +2926,7 @@ chrome.runtime.onMessage.addListener((message) => {
     setStatus(`Crawl complete. Pages ${payload.pages}; stored ${stored}.`);
     els.crawlState.textContent = "complete";
     els.crawlBtn.disabled = false;
-    els.crawlBtn.textContent = "Index Blackboard";
+    els.crawlBtn.textContent = "Index";
   } else if (payload.status === "started") {
     setStatus("Crawl started.");
     els.crawlState.textContent = "running";
@@ -2910,7 +2951,7 @@ els.crawlBtn.addEventListener("click", () =>
     .catch(reportError)
     .finally(() => {
       els.crawlBtn.disabled = false;
-      els.crawlBtn.textContent = "Index Blackboard";
+      els.crawlBtn.textContent = "Index";
     })
 );
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
