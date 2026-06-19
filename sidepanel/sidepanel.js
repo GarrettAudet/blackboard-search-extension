@@ -217,17 +217,19 @@ function renderMissingVideos() {
     .filter((video) => !(video.transcript_ids || []).length)
     .sort((a, b) => String(a.page_title || a.title).localeCompare(String(b.page_title || b.title)));
   const directMissingVideos = missingVideos.filter(isDirectMediaResource);
+  const embeddedMissingVideos = missingVideos.filter((video) => !isDirectMediaResource(video));
   const canTranscribe = canUseVideoTranscription();
 
   els.missingVideoList.textContent = "";
-  const attemptableVideos = missingVideos.filter((video) => video.url);
   els.transcribeAllBtn.textContent = directMissingVideos.length
     ? `Transcribe direct (${directMissingVideos.length})`
-    : `Try embedded (${attemptableVideos.length})`;
-  els.transcribeAllBtn.disabled = !attemptableVideos.length || !canTranscribe;
-  els.transcribeAllBtn.title = canTranscribe
-    ? "Try to resolve each missing video to a direct media file, then transcribe what can be resolved"
-    : "Select OpenAI in Setup and save an API key to transcribe videos";
+    : "Import embedded";
+  els.transcribeAllBtn.disabled = !directMissingVideos.length || !canTranscribe;
+  els.transcribeAllBtn.title = directMissingVideos.length
+    ? canTranscribe
+      ? "Auto-transcribe every direct audio/video file missing a transcript"
+      : "Select OpenAI in Setup and save an API key to transcribe direct videos"
+    : "Detected videos are embedded players. Open them and import/export transcripts or direct media when available.";
 
   if (!missingVideos.length) {
     els.missingVideoList.append(emptyNode("Every detected video has an attached transcript."));
@@ -236,6 +238,13 @@ function renderMissingVideos() {
   }
 
   els.transcriptionStatus.textContent = transcriptionReadinessLabel(missingVideos.length, directMissingVideos.length);
+
+  if (embeddedMissingVideos.length && !directMissingVideos.length) {
+    const note = document.createElement("p");
+    note.className = "panel-note embedded-note";
+    note.textContent = "These are embedded player links. Bulk transcription only works when Blackboard exposes direct audio/video files. Use Open to check for a transcript/download option, then Import Transcripts.";
+    els.missingVideoList.append(note);
+  }
 
   const groups = groupMissingVideosByPage(missingVideos);
   groups.forEach((group, index) => {
@@ -357,7 +366,7 @@ function isDirectMediaResource(resource) {
 function transcriptionReadinessLabel(missingCount, directCount) {
   if (!state.settings.hasApiKey) return `${missingCount} missing; add API key`;
   if (state.settings.provider !== "openai") return `${missingCount} missing; choose OpenAI`;
-  if (!directCount) return `${missingCount} missing; try embedded`;
+  if (!directCount) return `${missingCount} embedded; import needed`;
   if (directCount === missingCount) return `${missingCount} missing`;
   return `${missingCount} missing; ${directCount} direct`;
 }
@@ -426,9 +435,12 @@ function renderTranscriptRow(item) {
 async function transcribeAllMissingVideos() {
   const missingVideos = state.resources
     .filter(isVideoResource)
+    .filter(isDirectMediaResource)
     .filter((video) => video.url)
     .filter((video) => !(video.transcript_ids || []).length);
-  if (!missingVideos.length) return;
+  if (!missingVideos.length) {
+    throw new Error("No direct audio/video files are available for bulk transcription. Embedded videos need transcript import or a direct media download link.");
+  }
   if (!state.settings.hasApiKey) throw new Error("Add an API key in Setup before transcribing videos.");
   if (state.settings.provider !== "openai") {
     throw new Error("Video transcription currently requires OpenAI as the selected API provider.");
@@ -693,7 +705,7 @@ async function withTimeout(promise, timeoutMs, timeoutMessage) {
 function readableErrorMessage(error) {
   const message = String(error && error.message ? error.message : error || "Unknown error");
   if (/failed to fetch/i.test(message)) {
-    return "provider blocked the embedded media fetch or the network failed";
+    return "embedded provider blocked the media fetch. Open the video and import/export a transcript or direct media file if available";
   }
   return clampText(message, 160);
 }
