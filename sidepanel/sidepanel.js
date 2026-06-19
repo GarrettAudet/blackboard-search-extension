@@ -4,6 +4,9 @@ const MAX_MEMORY_TURNS = 6;
 const MEDIA_RESOLVE_TIMEOUT_MS = 30000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const TRANSCRIPTION_TIMEOUT_MS = 60 * 60 * 1000;
+const TRANSCRIPTION_MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+const TRANSCRIPTION_CHUNK_BYTES = 20 * 1024 * 1024;
+const MAX_TRANSCRIPTION_CHUNKS = 30;
 
 const state = {
   resources: [],
@@ -764,9 +767,11 @@ async function transcribeVideo(video, options = {}) {
     if (!options.quiet) els.transcriptionStatus.textContent = `${stage} ${clampText(video.title || "video", 90)}...`;
   };
   report("Resolving");
-  const media = await fetchMediaBlob(video);
-  report("Uploading");
-  const transcription = await callOpenAiTranscription(media.blob, media.fileName);
+  const media = await fetchMediaPayload(video);
+  report(media.mode === "range" || media.mode === "blob_chunks" ? "Chunking" : "Uploading");
+  const transcription = media.mode === "range" || media.mode === "blob_chunks"
+    ? await callOpenAiChunkedTranscription(media, video, report)
+    : await callOpenAiTranscription(media.blob, media.fileName);
   const text = normalizeTranscriptText(transcription.text || "");
   assertUsableTranscript(text, video);
 
@@ -776,7 +781,7 @@ async function transcribeVideo(video, options = {}) {
     source_hint: [video.page_title, video.section].filter(Boolean).join(" - "),
     video_url: video.url || "",
     matched_resource_ids: [video.id],
-    segments: standardizeTranscriptSegments(transcription, text)
+    segments: transcription.preparedSegments || standardizeTranscriptSegments(transcription, text)
   };
 
   const response = await sendMessage("IMPORT_TRANSCRIPTS", { transcripts: [transcript] });
@@ -788,14 +793,41 @@ async function transcribeVideo(video, options = {}) {
   return transcript;
 }
 
-async function fetchMediaBlob(video) {
+async function fetchMediaPayload(video) {
   const media = await fetchMediaResponse(video.url);
   const response = media.response;
   const contentType = response.headers.get("content-type") || "";
+  const fileName = fileNameFromUrl(media.url, contentType);
 
-  const contentLength = Number(response.headers.get("content-length") || 0);
-  if (contentLength && contentLength > 24 * 1024 * 1024) {
-    throw new Error("This media file is too large for browser-side transcription. Try importing a prepared transcript.");
+  let contentLength = Number(response.headers.get("content-length") || 0);
+  if (!contentLength && acceptsByteRanges(response)) {
+    const probedLength = await probeMediaContentLength(media.url).catch(() => 0);
+    if (probedLength) {
+      contentLength = probedLength;
+      await cancelResponseBody(response);
+      if (contentLength > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+        return {
+          mode: "range",
+          url: media.url,
+          contentType,
+          contentLength,
+          fileName
+        };
+      }
+      const blob = await fetchRangeBlob(media.url, 0, contentLength - 1, contentType);
+      return { mode: "blob", blob, fileName };
+    }
+  }
+
+  if (contentLength && contentLength > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+    await cancelResponseBody(response);
+    return {
+      mode: "range",
+      url: media.url,
+      contentType,
+      contentLength,
+      fileName
+    };
   }
 
   const blob = await withTimeout(
@@ -803,16 +835,78 @@ async function fetchMediaBlob(video) {
     MEDIA_DOWNLOAD_TIMEOUT_MS,
     "Timed out downloading this media file; skipping it."
   );
-  if (blob.size > 24 * 1024 * 1024) {
-    throw new Error("This media file is too large for browser-side transcription. Try importing a prepared transcript.");
+  if (blob.size > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+    return {
+      mode: "blob_chunks",
+      blob,
+      contentType: blob.type || contentType,
+      contentLength: blob.size,
+      fileName
+    };
   }
 
   return {
+    mode: "blob",
     blob,
-    fileName: fileNameFromUrl(media.url, contentType)
+    fileName
   };
 }
 
+async function probeMediaContentLength(url) {
+  const response = await fetchWithTimeout(
+    url,
+    {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Range: "bytes=0-0" }
+    },
+    MEDIA_RESOLVE_TIMEOUT_MS,
+    "Timed out probing this media file for byte-range support."
+  );
+  try {
+    if (response.status !== 206) return 0;
+    const contentRange = response.headers.get("content-range") || "";
+    const match = contentRange.match(/\/(\d+)\s*$/);
+    return match ? Number(match[1]) : 0;
+  } finally {
+    await cancelResponseBody(response);
+  }
+}
+
+async function fetchRangeBlob(url, start, end, contentType) {
+  const response = await fetchWithTimeout(
+    url,
+    {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Range: `bytes=${start}-${end}` }
+    },
+    MEDIA_DOWNLOAD_TIMEOUT_MS,
+    "Timed out downloading a media chunk; skipping this video."
+  );
+  if (response.status !== 206) {
+    await cancelResponseBody(response);
+    throw new Error("The media server did not honor byte-range requests, so the extension cannot chunk this large video in-browser.");
+  }
+  const blob = await withTimeout(
+    response.blob(),
+    MEDIA_DOWNLOAD_TIMEOUT_MS,
+    "Timed out reading a media chunk; skipping this video."
+  );
+  return blob.type ? blob : new Blob([blob], { type: contentType || "audio/mpeg" });
+}
+
+function acceptsByteRanges(response) {
+  return /bytes/i.test(response.headers.get("accept-ranges") || "");
+}
+
+async function cancelResponseBody(response) {
+  try {
+    await response?.body?.cancel?.();
+  } catch (_error) {
+    // Some browser streams are already locked or consumed; nothing to clean up.
+  }
+}
 async function fetchMediaResponse(url, depth = 0, seen = new Set()) {
   if (!url || seen.has(url) || depth > 2) {
     throw new Error("Could not resolve this embedded video to a direct audio/video file.");
@@ -897,11 +991,12 @@ function isLikelyTranscribableMediaUrl(url) {
   return /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(\?|$)/i.test(String(url || ""));
 }
 
-async function callOpenAiTranscription(blob, fileName) {
+async function callOpenAiTranscription(blob, fileName, options = {}) {
   const form = new FormData();
   form.append("model", "whisper-1");
   form.append("response_format", "verbose_json");
   form.append("timestamp_granularities[]", "segment");
+  if (options.prompt) form.append("prompt", options.prompt.slice(-1200));
   form.append("file", new File([blob], fileName, { type: blob.type || "audio/mpeg" }));
 
   const response = await fetchWithTimeout(
@@ -931,6 +1026,145 @@ async function callOpenAiTranscription(blob, fileName) {
     throw new Error(json.error?.message || text || `Transcription failed with HTTP ${response.status}`);
   }
   return json;
+}
+
+async function callOpenAiChunkedTranscription(media, video, report) {
+  const totalBytes = media.contentLength || media.blob?.size || 0;
+  if (!totalBytes) throw new Error("Could not determine media size for chunked transcription.");
+
+  const chunkSize = Math.min(TRANSCRIPTION_CHUNK_BYTES, TRANSCRIPTION_MAX_UPLOAD_BYTES);
+  const chunkCount = Math.ceil(totalBytes / chunkSize);
+  if (chunkCount > MAX_TRANSCRIPTION_CHUNKS) {
+    throw new Error(`This media would require ${chunkCount} transcription chunks. Refusing to auto-upload that many chunks from the browser.`);
+  }
+
+  const textParts = [];
+  const combinedSegments = [];
+  let offsetSeconds = 0;
+  let prompt = "";
+
+  for (let index = 0; index < chunkCount; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(totalBytes, start + chunkSize) - 1;
+    report(`Chunking ${index + 1}/${chunkCount}`);
+    const blob = media.mode === "range"
+      ? await fetchRangeBlob(media.url, start, end, media.contentType)
+      : media.blob.slice(start, end + 1, media.contentType || media.blob.type || "audio/mpeg");
+
+    if (blob.size > TRANSCRIPTION_MAX_UPLOAD_BYTES) {
+      throw new Error(`Chunk ${index + 1}/${chunkCount} is still over the transcription upload limit.`);
+    }
+
+    report(`Transcribing chunk ${index + 1}/${chunkCount}`);
+    let partial;
+    try {
+      partial = await callOpenAiTranscription(blob, chunkedFileName(media.fileName, index), { prompt });
+    } catch (error) {
+      throw new Error(`Chunk ${index + 1}/${chunkCount} could not be transcribed. Browser byte chunks are not always decodable for every video format: ${readableErrorMessage(error)}`);
+    }
+
+    const chunkText = normalizeTranscriptText(partial.text || "");
+    if (!chunkText) continue;
+    textParts.push(chunkText);
+
+    const rawSegments = standardizeTranscriptSegments(partial, chunkText);
+    const shiftedSegments = rawSegments.some((segment) => segment.start || segment.end)
+      ? shiftTranscriptSegments(rawSegments, offsetSeconds)
+      : rawSegments;
+    const baseIndex = combinedSegments.length;
+    shiftedSegments.forEach((segment, segmentIndex) => {
+      combinedSegments.push({ ...segment, id: String(baseIndex + segmentIndex) });
+    });
+
+    const segmentDuration = durationFromSegments(rawSegments);
+    const mediaDuration = segmentDuration || await estimateBlobDurationSeconds(blob).catch(() => 0);
+    offsetSeconds += mediaDuration || estimateSpeechDurationSeconds(chunkText);
+    prompt = transcriptPromptTail(textParts.join(" "));
+  }
+
+  const text = textParts.join("\n").trim();
+  return {
+    text,
+    preparedSegments: combinedSegments.length ? combinedSegments : segmentTranscriptText(text)
+  };
+}
+
+function chunkedFileName(fileName, index) {
+  const cleanName = fileName || "blackboard-media.mp4";
+  const match = cleanName.match(/^(.*?)(\.[a-z0-9]{2,5})$/i);
+  const suffix = `.part${String(index + 1).padStart(3, "0")}`;
+  return match ? `${match[1]}${suffix}${match[2]}` : `${cleanName}${suffix}.mp4`;
+}
+
+function transcriptPromptTail(text) {
+  return String(text || "")
+    .split(/\s+/)
+    .slice(-120)
+    .join(" ")
+    .trim();
+}
+
+function shiftTranscriptSegments(segments, offsetSeconds) {
+  return segments.map((segment) => ({
+    ...segment,
+    start: shiftTranscriptTimestamp(segment.start, offsetSeconds),
+    end: shiftTranscriptTimestamp(segment.end, offsetSeconds)
+  }));
+}
+
+function shiftTranscriptTimestamp(value, offsetSeconds) {
+  const seconds = parseTranscriptTimestamp(value);
+  if (!Number.isFinite(seconds)) return value || "";
+  return formatTranscriptTimestamp(seconds + offsetSeconds);
+}
+
+function parseTranscriptTimestamp(value) {
+  if (value === undefined || value === null || value === "") return NaN;
+  if (typeof value === "number") return value;
+  const text = String(value).trim();
+  const direct = Number(text);
+  if (Number.isFinite(direct)) return direct;
+  const parts = text.split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return NaN;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return NaN;
+}
+
+function durationFromSegments(segments) {
+  let maxSeconds = 0;
+  for (const segment of segments || []) {
+    const end = parseTranscriptTimestamp(segment.end);
+    const start = parseTranscriptTimestamp(segment.start);
+    if (Number.isFinite(end)) maxSeconds = Math.max(maxSeconds, end);
+    if (Number.isFinite(start)) maxSeconds = Math.max(maxSeconds, start);
+  }
+  return maxSeconds;
+}
+
+async function estimateBlobDurationSeconds(blob) {
+  if (!blob || !blob.size) return 0;
+  const element = document.createElement((blob.type || "").startsWith("video/") ? "video" : "audio");
+  element.preload = "metadata";
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    return await withTimeout(
+      new Promise((resolve, reject) => {
+        element.onloadedmetadata = () => resolve(Number.isFinite(element.duration) ? element.duration : 0);
+        element.onerror = () => reject(new Error("Could not read chunk duration"));
+        element.src = objectUrl;
+      }),
+      8000,
+      "Timed out reading chunk duration."
+    );
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function estimateSpeechDurationSeconds(text) {
+  const words = String(text || "").match(/[a-z0-9']+/gi) || [];
+  return Math.max(20, words.length / 2.3);
 }
 
 async function fetchWithTimeout(url, options, timeoutMs, timeoutMessage) {

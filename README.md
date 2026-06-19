@@ -29,7 +29,8 @@ preparing transcript/index data.
   source hints match.
 - Watches video-player network requests after the user presses play, detects caption files, manifests, and direct media candidates, and imports detected captions when available.
 - Shows detected videos that do not have transcripts and can transcribe direct
-  audio/video files through OpenAI, then cache the searchable transcript locally.
+  audio/video files through OpenAI, chunking large direct files when the browser
+  can fetch byte ranges, then cache the searchable transcript locally.
 - Searches normal resources and video transcript segments together in a chat-like
   local retrieval view.
 - Includes a setup screen for OpenAI, DeepSeek, or OpenRouter API settings.
@@ -83,9 +84,12 @@ Supported providers:
   `openai/gpt-4.1-mini`, or `deepseek/deepseek-chat`.
 
 Video transcription currently uses OpenAI audio transcription. The extension
-downloads the detected media with the user's logged-in Blackboard session,
-sends that media to OpenAI, checks that the returned transcript looks usable,
-and stores the resulting searchable transcript locally.
+fetches detected media with the user's logged-in Blackboard session, sends the
+media to OpenAI, checks that the returned transcript looks usable, and stores
+the resulting searchable transcript locally. OpenAI audio uploads have a file
+size ceiling, so large direct media is split into roughly 20 MB chunks when the
+server supports browser byte-range requests. The extension merges returned
+segment timestamps into one transcript and does not save the source video file.
 
 ## Search Architecture
 
@@ -109,13 +113,14 @@ The extension treats transcript creation as a one-time preparation step:
 Open/play a Blackboard video
 -> detect caption files, media manifests, and direct media requests
 -> import captions automatically when exposed by the player
--> if direct media is exposed, click Transcribe or auto-transcribe once with OpenAI from memory
--> quality-check and chunk transcript text
--> store transcript locally in Chrome and discard the in-memory media blob
+-> if direct media is exposed, click Transcribe or auto-transcribe with OpenAI
+-> for large direct files, fetch/transcribe byte-range chunks when supported
+-> quality-check and merge transcript segments
+-> store transcript locally in Chrome and discard the in-memory media blob/chunks
 -> transcript is cached locally and searched forever
 ```
 
-For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
+For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. Large direct files are chunked best-effort; if the server rejects byte-range requests or the sliced media chunks are not independently decodable, the extension reports that clearly. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
 
 ## Transcript Bundle Format
 
