@@ -419,14 +419,21 @@ async function dismissMediaCandidate(payload) {
 }
 async function getIndex() {
   const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
-  const resources = data[RESOURCE_KEY] || [];
-  const transcripts = data[TRANSCRIPT_KEY] || [];
+  let resources = data[RESOURCE_KEY] || [];
+  let transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
   const detectedMedia = data[DETECTED_MEDIA_KEY] || [];
   const ignoredKeys = ignoredMediaKeys(data[IGNORED_MEDIA_KEY]);
   const prunedDetectedMedia = pruneDetectedMediaToTsinghua(detectedMedia).filter((item) => !mediaCandidateIsIgnored(item, ignoredKeys));
   if (prunedDetectedMedia.length !== detectedMedia.length) {
     await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: prunedDetectedMedia });
+  }
+  const deduped = dedupeTranscriptIndex(resources, transcripts);
+  resources = deduped.resources;
+  transcripts = deduped.transcripts;
+  if (deduped.changed) {
+    matchTranscriptsToResources(resources, transcripts);
+    await saveIndex(resources, transcripts, contentStore);
   }
   const meta = data[META_KEY] || { resource_count: resources.length, transcript_count: transcripts.length };
   return { ok: true, resources, transcripts, detected_media: prunedDetectedMedia, content_store: contentStore, meta };
@@ -494,7 +501,10 @@ async function mergeScrape(payload) {
     transcripts = Array.from(transcriptById.values());
   }
 
-  const resources = Array.from(byId.values());
+  let resources = Array.from(byId.values());
+  const deduped = dedupeTranscriptIndex(resources, transcripts);
+  resources = deduped.resources;
+  transcripts = deduped.transcripts;
   matchTranscriptsToResources(resources, transcripts);
   await saveIndex(resources, transcripts, contentStore);
   return {
@@ -519,7 +529,9 @@ async function importTranscripts(payload) {
     byId.set(transcript.id, mergeTranscriptRecords(byId.get(transcript.id), transcript));
   }
 
-  const transcripts = Array.from(byId.values());
+  let transcripts = Array.from(byId.values());
+  const deduped = dedupeTranscriptIndex(resources, transcripts);
+  transcripts = deduped.transcripts;
   const matchSummary = matchTranscriptsToResources(resources, transcripts);
   await saveIndex(resources, transcripts);
   return {
@@ -1580,6 +1592,46 @@ function anonymizedSpeakerLabel(rawSpeaker, speakerMap) {
   return speakerMap.get(key);
 }
 
+function dedupeTranscriptIndex(resources, transcripts) {
+  const next = [];
+  const byKey = new Map();
+  const idRemap = new Map();
+
+  for (const transcript of transcripts || []) {
+    const key = transcriptDedupeKey(transcript) || `id:${transcript.id}`;
+    const existingIndex = byKey.get(key);
+    if (existingIndex === undefined) {
+      byKey.set(key, next.length);
+      next.push(transcript);
+      continue;
+    }
+
+    const keeper = next[existingIndex];
+    const keeperId = keeper.id;
+    const merged = mergeTranscriptRecords(keeper, transcript);
+    next[existingIndex] = { ...merged, id: keeperId };
+    if (transcript.id && transcript.id !== keeperId) idRemap.set(transcript.id, keeperId);
+  }
+
+  if (!idRemap.size) return { resources, transcripts: next, changed: next.length !== (transcripts || []).length };
+
+  for (const resource of resources || []) {
+    resource.transcript_ids = uniqueStrings((resource.transcript_ids || []).map((id) => idRemap.get(id) || id));
+  }
+  for (const transcript of next) {
+    transcript.matched_resource_ids = uniqueStrings(transcript.matched_resource_ids || []);
+  }
+  return { resources, transcripts: next, changed: true };
+}
+
+function transcriptDedupeKey(transcript) {
+  const mediaKey = mediaCandidateKey(transcript?.video_url || transcript?.url || "");
+  if (mediaKey) return `media:${mediaKey}`;
+  const title = normalizeText(transcript?.title || transcript?.video_title || "");
+  if (!title) return "";
+  const hint = normalizeText(transcript?.source_hint || "");
+  return `title:${title}|${hint}`;
+}
 function matchTranscriptsToResources(resources, transcripts) {
   let autoAttached = 0;
   for (const transcript of transcripts) {

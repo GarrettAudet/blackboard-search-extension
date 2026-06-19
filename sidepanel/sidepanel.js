@@ -723,7 +723,19 @@ async function runAutoTranscriptionQueue() {
 function isDirectMediaResource(resource) {
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
-  return /^(audio|video)$/.test(type) || isLikelyTranscribableMediaUrl(url);
+  const contentType = String(resource.content_type || resource.contentType || "").toLowerCase();
+  if (isEmbeddedVideoViewerUrl(url)) return false;
+  if (/^(audio|video)\//i.test(contentType)) return true;
+  if (isLikelyTranscribableMediaUrl(url)) return true;
+  return /^(audio|video)$/.test(type) && isLikelyDirectMediaContainerUrl(url);
+}
+
+function isEmbeddedVideoViewerUrl(url) {
+  return /\/Panopto\/Pages\/Viewer\.aspx/i.test(String(url || ""));
+}
+
+function isLikelyDirectMediaContainerUrl(url) {
+  return /\/Panopto\/Content\//i.test(String(url || ""));
 }
 
 function transcriptionReadinessLabel(missingCount, directCount) {
@@ -1080,6 +1092,12 @@ async function transcribeVideo(video, options = {}) {
   }
   if (!video.url) throw new Error("This video does not have a URL to fetch or resolve.");
 
+  const existingTranscript = existingTranscriptForVideo(video);
+  if (existingTranscript) {
+    if (!options.quiet) els.transcriptionStatus.textContent = "Transcript already exists locally";
+    return existingTranscript;
+  }
+
   const report = (stage) => {
     if (options.onStatus) options.onStatus(stage);
     if (!options.quiet) els.transcriptionStatus.textContent = `${stage} ${clampText(video.title || "video", 90)}...`;
@@ -1096,7 +1114,7 @@ async function transcribeVideo(video, options = {}) {
   assertUsableTranscript(text, video);
 
   const transcript = {
-    id: `transcript_${video.id}_${Date.now()}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 120),
+    id: transcriptIdForVideo(video),
     title: video.title || video.page_title || "Video transcript",
     source_hint: [video.page_title, video.section].filter(Boolean).join(" - "),
     video_url: video.url || "",
@@ -1113,7 +1131,40 @@ async function transcribeVideo(video, options = {}) {
   return transcript;
 }
 
+function existingTranscriptForVideo(video) {
+  const identityKey = transcriptIdentityKeyForVideo(video);
+  const resourceIds = new Set([video?.id].filter(Boolean));
+  for (const resource of state.resources || []) {
+    if (resource.id === video?.id) resourceIds.add(resource.id);
+    if (identityKey && transcriptIdentityKeyForVideo(resource) === identityKey) resourceIds.add(resource.id);
+  }
+  return (state.transcripts || []).find((transcript) => {
+    if ((transcript.matched_resource_ids || []).some((id) => resourceIds.has(id))) return true;
+    return identityKey && mediaCandidateKey(transcript.video_url || "") === identityKey;
+  }) || null;
+}
+
+function transcriptIdForVideo(video) {
+  return `transcript_${hashString(transcriptIdentityKeyForVideo(video) || video?.id || video?.title || "video")}`;
+}
+
+function transcriptIdentityKeyForVideo(video) {
+  return mediaCandidateKey(video?.url || video?.video_url || "") || normalizeText([video?.page_title, video?.section, video?.title].filter(Boolean).join(" "));
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  const input = String(value || "");
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0).toString(36);
+}
 async function fetchMediaPayload(video) {
+  if (isEmbeddedVideoViewerUrl(video.url)) {
+    throw new Error("Open this embedded Panopto player and press play so the detector can capture captions or direct media. Browser CORS blocks fetching the viewer page from the side panel.");
+  }
   const media = await fetchMediaResponse(video.url);
   const response = media.response;
   const contentType = response.headers.get("content-type") || "";
@@ -1345,7 +1396,9 @@ function normalizeAbsoluteUrl(rawUrl, baseUrl) {
 }
 
 function isLikelyTranscribableMediaUrl(url) {
-  return /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(\?|$)/i.test(String(url || ""));
+  const value = String(url || "");
+  if (isEmbeddedVideoViewerUrl(value)) return false;
+  return /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(value) || isLikelyDirectMediaContainerUrl(value);
 }
 
 function canByteChunkMedia(contentType, fileName) {
@@ -1857,9 +1910,11 @@ function shouldHydrateResourceContent(resource) {
   if (state.contentStore && state.contentStore[resource.id]) return false;
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
+  if (isEmbeddedVideoViewerUrl(url) || /\/panopto\/pages\/viewer\.aspx/i.test(url)) return false;
+  if (/^(video|audio|video_embed)$/.test(type)) return false;
   return (
     ["pdf", "document", "slides", "spreadsheet"].includes(type) ||
-    /\.(pdf|docx|pptx|xlsx)(\?|$)/i.test(url)
+    /\.(pdf|docx|pptx|xlsx)(?:[?#]|$)/i.test(url)
   );
 }
 
