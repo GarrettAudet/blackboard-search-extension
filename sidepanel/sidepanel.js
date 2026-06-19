@@ -178,7 +178,7 @@ async function clearIndex() {
 }
 
 function render() {
-  const videos = state.resources.filter(isVideoResource);
+  const videos = state.resources.filter(isTranscriptCandidateResource);
   els.resourceCount.textContent = String(state.resources.length);
   els.videoCount.textContent = String(videos.length);
   els.transcriptCount.textContent = String(state.transcripts.length);
@@ -200,7 +200,7 @@ function renderSettings() {
 }
 
 function renderTranscripts() {
-  const videos = state.resources.filter(isVideoResource);
+  const videos = state.resources.filter(isTranscriptCandidateResource);
   const attached = videos.filter((video) => (video.transcript_ids || []).length).length;
   els.videoStatus.textContent = videos.length ? `${attached}/${videos.length} videos attached` : "no videos found";
   els.transcriptGroups.textContent = "";
@@ -292,6 +292,7 @@ function renderDetectedMedia() {
 
 function isUsefulDetectedMedia(item) {
   if (!item || !item.url) return false;
+  if (!isAllowedTranscriptSource(item)) return false;
   if (item.kind === "caption") return !item.imported_transcript_id;
   if (item.kind !== "direct_media") return false;
   if (item.imported_transcript_id || item.transcript_status === "imported") return false;
@@ -404,7 +405,7 @@ function renderDetectedMediaRow(item) {
 function renderMissingVideos() {
   const missingVideos = dedupeVideoResources(
     state.resources
-      .filter(isVideoResource)
+      .filter(isTranscriptCandidateResource)
       .filter((video) => !(video.transcript_ids || []).length)
   ).sort((a, b) => String(a.page_title || a.title).localeCompare(String(b.page_title || b.title)));
   const directMissingVideos = missingVideos.filter(isDirectMediaResource);
@@ -640,7 +641,7 @@ function autoTranscribeEnabled() {
 async function handleTranscriptAction() {
   const missingVideos = dedupeVideoResources(
     state.resources
-      .filter(isVideoResource)
+      .filter(isTranscriptCandidateResource)
       .filter((video) => !(video.transcript_ids || []).length)
   );
   const directMissingVideos = missingVideos.filter(isDirectMediaResource);
@@ -669,7 +670,7 @@ async function runAutoTranscriptionQueue() {
   if (!autoTranscribeEnabled() || autoTranscribeRunning) return;
   const candidates = dedupeVideoResources(
     state.resources
-      .filter(isVideoResource)
+      .filter(isTranscriptCandidateResource)
       .filter(isDirectMediaResource)
       .filter((video) => video.url)
       .filter((video) => !(video.transcript_ids || []).length)
@@ -946,7 +947,7 @@ function detectedMediaSourceTitle(item) {
 async function transcribeAllMissingVideos() {
   const missingVideos = dedupeVideoResources(
     state.resources
-      .filter(isVideoResource)
+      .filter(isTranscriptCandidateResource)
       .filter(isDirectMediaResource)
       .filter((video) => video.url)
       .filter((video) => !(video.transcript_ids || []).length)
@@ -2169,7 +2170,7 @@ function videoResultCandidates(results, searchText) {
 
 function isLikelySearchableVideoResource(resource) {
   const haystack = `${resource.type || ""} ${resource.title || ""} ${resource.url || ""}`;
-  return /video_embed|kaltura|panopto|echo360|yuja|mediasite|bbcollab|youtube|vimeo|recording|webinar|video/i.test(haystack);
+  return isAllowedTranscriptSource(resource) && /video_embed|kaltura|panopto|echo360|yuja|mediasite|bbcollab|recording|webinar|video|audio/i.test(haystack);
 }
 
 function resourceTranscriptSegmentCount(resource) {
@@ -2985,6 +2986,32 @@ function isVideoResource(resource) {
   return /video|audio|recording|media|webinar/i.test(`${resource.type || ""} ${resource.title || ""} ${resource.url || ""}`);
 }
 
+function isTranscriptCandidateResource(resource) {
+  return isVideoResource(resource) && isAllowedTranscriptSource(resource);
+}
+
+function isAllowedTranscriptSource(resource) {
+  const text = transcriptSourceText(resource);
+  if (!text) return false;
+  if (/(youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com)/i.test(text)) return false;
+  return /(lms\.sc\.tsinghua\.edu\.cn|panopto\.sc\.tsinghua\.edu\.cn|\.tsinghua\.edu\.cn|blackboard\.com|bbcollab\.com|kaltura\.com|panopto\.com|echo360\.(?:org|com)|yuja\.com|mediasite\.com)/i.test(text);
+}
+
+function transcriptSourceText(resource) {
+  return [
+    resource?.url,
+    resource?.page_url,
+    resource?.document_url,
+    resource?.initiator,
+    resource?.context,
+    resource?.section,
+    resource?.page_title,
+    resource?.title
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
 function labelForKind(kind) {
   if (kind === "video_transcript") return "transcript";
   if (kind === "video_embed") return "video";

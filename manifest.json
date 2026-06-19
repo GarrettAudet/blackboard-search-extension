@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Blackboard Search Extension",
-  "version": "0.2.25",
+  "version": "0.2.26",
   "description": "Integrated Blackboard crawling, resource search, transcript search, and API-powered Q&A.",
   "permissions": ["activeTab", "scripting", "sidePanel", "storage", "tabs", "unlimitedStorage", "webRequest"],
   "host_permissions": [
-    "https://*/*",
     "https://lms.sc.tsinghua.edu.cn/*",
+    "https://*.tsinghua.edu.cn/*",
     "https://*.blackboard.com/*",
     "https://*.bbcollab.com/*",
     "https://*.kaltura.com/*",
@@ -15,9 +15,6 @@
     "https://*.echo360.com/*",
     "https://*.yuja.com/*",
     "https://*.mediasite.com/*",
-    "https://*.youtube.com/*",
-    "https://*.youtu.be/*",
-    "https://*.vimeo.com/*",
     "https://openrouter.ai/*",
     "https://api.openai.com/*",
     "https://api.deepseek.com/*"

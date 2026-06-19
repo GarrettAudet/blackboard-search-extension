@@ -6,7 +6,8 @@ const DETECTED_MEDIA_KEY = "detected_media_store";
 const IGNORED_MEDIA_KEY = "ignored_media_store";
 const DEFAULT_CRAWL_SEED_URL =
   "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
-const TSINGHUA_MEDIA_URL_PATTERN = /tsinghua/i;
+const BLOCKED_EXTERNAL_MEDIA_HOST_PATTERN = /(^|\.)(youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com)$/i;
+const ALLOWED_TRANSCRIPT_MEDIA_HOST_PATTERN = /(^|\.)(tsinghua\.edu\.cn|blackboard\.com|bbcollab\.com|kaltura\.com|panopto\.com|echo360\.org|echo360\.com|yuja\.com|mediasite\.com)$/i;
 
 setupMediaRequestObservers();
 
@@ -102,7 +103,20 @@ function isLikelyChunkUrl(lowerUrl) {
 }
 
 function isTsinghuaMediaUrl(url) {
-  return TSINGHUA_MEDIA_URL_PATTERN.test(String(url || ""));
+  const raw = String(url || "");
+  if (/(youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com)/i.test(raw)) return false;
+  const host = hostnameFromUrl(raw);
+  if (!host) return /(tsinghua\.edu\.cn|blackboard\.com|bbcollab\.com|panopto|kaltura|echo360|yuja|mediasite)/i.test(raw);
+  if (BLOCKED_EXTERNAL_MEDIA_HOST_PATTERN.test(host)) return false;
+  return ALLOWED_TRANSCRIPT_MEDIA_HOST_PATTERN.test(host);
+}
+
+function hostnameFromUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch (_error) {
+    return "";
+  }
 }
 
 function pruneDetectedMediaToTsinghua(records) {
@@ -1617,7 +1631,7 @@ function inferType(url, title) {
   const text = `${url} ${title}`.toLowerCase();
   if (/\.(mp4|mov|m4v|webm|avi|mkv)(\?|$)/.test(text)) return "video";
   if (/\.(mp3|m4a|wav|aac|ogg)(\?|$)/.test(text)) return "audio";
-  if (/(kaltura|panopto|echo360|yuja|mediasite|bbcollab|youtube|vimeo)/.test(text)) return "video_embed";
+  if (/(kaltura|panopto|echo360|yuja|mediasite|bbcollab)/.test(text)) return "video_embed";
   if (/\.pdf(\?|$)/.test(text)) return "pdf";
   if (/\.(doc|docx|rtf|odt)(\?|$)/.test(text)) return "document";
   if (/\.(ppt|pptx)(\?|$)/.test(text)) return "slides";
