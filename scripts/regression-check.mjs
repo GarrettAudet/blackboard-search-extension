@@ -105,12 +105,23 @@ state.resources = [
     section: "Class of 2026-2027 Pre-program",
     context:
       "Actions All Items (0) What's Due Actions Select Date: Go Today (0) Nothing Due Today Tomorrow (0) This Week (0) Future (0) Last Updated: June 19, 2026 6:25 AM"
+  },
+  {
+    id: "language-study",
+    type: "page",
+    title: "Language Study - Class of 2026-2027 Pre-program",
+    url: "https://lms.sc.tsinghua.edu.cn/language-study",
+    page_title: "Language Study - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program",
+    context:
+      "Language Study Chinese language resources include Mandarin placement materials, course preparation notes, and recommended study resources for incoming students."
   }
 ];
 state.contentStore = {
   "todo-page": state.resources[0].context,
   "survey-link": state.resources[1].context,
-  "home-page": state.resources[2].context
+  "home-page": state.resources[2].context,
+  "language-study": state.resources[3].context
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
@@ -118,13 +129,16 @@ state.settings = { hasApiKey: true };
 const query = "What are the current to do's?";
 const results = searchIndex(query);
 const answer = buildDirectAnswer(query, results);
-globalThis.__regression = { results, answer };
+const mandarinQuery = "Have they gives us any mandarin resources to learn from?";
+const mandarinIsCapability = isCapabilityQuestion(mandarinQuery);
+const mandarinResults = searchIndex(mandarinQuery);
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -148,6 +162,13 @@ if (/\n\s*Sources\s*:/i.test(answer.text)) {
 }
 if (!answer.text.includes("I found 2 current To Do items")) {
   throw new Error(`Expected exactly two To Do items.\n\n${answer.text}`);
+}
+
+if (mandarinIsCapability) {
+  throw new Error("Mandarin resources query was incorrectly routed as a capability/index question.");
+}
+if (!mandarinResults.some((result) => result.resource_id === "language-study")) {
+  throw new Error(`Expected Mandarin query to retrieve language-study resource.\n\n${JSON.stringify(mandarinResults, null, 2)}`);
 }
 
 console.log("regression-check passed");

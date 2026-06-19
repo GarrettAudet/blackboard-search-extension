@@ -1274,7 +1274,25 @@ function stripInlineSourcesSection(text) {
 }
 
 function isCapabilityQuestion(query) {
-  return /\b(what can|what does|resources|topics|transcripts|videos|coverage|cover|search)\b/i.test(query);
+  const normalized = normalizeText(query);
+  if (!normalized) return false;
+
+  // "resources about X" is a content question, not a request for the tool's capabilities.
+  if (/\b(resources?|materials?|documents?|videos?|links?)\b.*\b(about|for|on|regarding|to learn|study|mandarin|chinese|language|packing|visa|permit|bank|banking|health|medicine|career|internship)\b/.test(normalized)) {
+    return false;
+  }
+  if (/\b(have|has|did|do|does|give|given|provide|provided|recommend|recommended|available)\b.*\b(resources?|materials?|documents?|videos?|links?)\b/.test(normalized)) {
+    return false;
+  }
+
+  return (
+    /\b(help|how do i use this|what can (you|this|the tool)|what does (this|the tool)|what questions can|what topics can)\b/.test(
+      normalized
+    ) ||
+    /\b(what resources (are indexed|can you search|does this cover|do you cover)|what videos|what transcripts|coverage|what is indexed|show index|list indexed)\b/.test(
+      normalized
+    )
+  );
 }
 
 function appendMessage(role, text, sources = []) {
@@ -1448,6 +1466,9 @@ function expandedTokens(query) {
     transcript: ["video", "webinar", "recording"],
     job: ["career", "internship", "resume", "interview"],
     career: ["job", "internship", "resume", "interview"],
+    mandarin: ["chinese", "language", "language study", "course", "study"],
+    chinese: ["mandarin", "language", "language study", "course"],
+    language: ["mandarin", "chinese", "language study", "course"],
     todo: ["to do", "task", "tasks", "action", "item", "deadline", "due", "mandatory", "survey"],
     task: ["to do", "todo", "action", "item", "deadline", "due", "mandatory", "survey"],
     tasks: ["to do", "todo", "task", "action", "item", "deadline", "due", "mandatory", "survey"],
