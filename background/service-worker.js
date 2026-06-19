@@ -246,7 +246,7 @@ async function crawlSite(payload) {
       const page = await fetchCrawlPage(currentUrl);
       resources.push(...page.resources);
 
-      const candidateUrls = page.course_urls?.length && isDefaultPortalUrl(currentUrl) ? page.course_urls : page.child_urls;
+      const candidateUrls = page.portal_entry_urls?.length && isDefaultPortalUrl(currentUrl) ? page.portal_entry_urls : page.child_urls;
       for (const candidate of candidateUrls) {
         const childUrl = normalizeUrlFrom(candidate, page.final_url || currentUrl);
         if (!canQueuePage(childUrl, { allowedPrefix, seedOrigin, visited, queued })) continue;
@@ -315,7 +315,7 @@ function extractResourcesFromHtml(html, pageUrl) {
   const section = breadcrumbTextFromDocument(document);
   const resources = [];
   const childUrls = [];
-  const courseUrls = myCoursesUrlsFromDocument(document, pageUrl);
+  const portalEntryUrls = portalEntryUrlsFromDocument(document, pageUrl);
   const seen = new Set();
 
   function add(resource) {
@@ -400,8 +400,9 @@ function extractResourcesFromHtml(html, pageUrl) {
   return {
     final_url: pageUrl,
     resources,
-    child_urls: uniqueStrings([...courseUrls, ...childUrls]),
-    course_urls: uniqueStrings(courseUrls)
+    child_urls: uniqueStrings([...portalEntryUrls, ...childUrls]),
+    portal_entry_urls: uniqueStrings(portalEntryUrls),
+    course_urls: uniqueStrings(portalEntryUrls)
   };
 }
 
@@ -497,7 +498,7 @@ function isDefaultPortalUrl(url) {
   }
 }
 
-function myCoursesUrlsFromDocument(document, pageUrl) {
+function portalEntryUrlsFromDocument(document, pageUrl) {
   const candidates = [];
   const headingSelectors = [
     "h1",
@@ -511,7 +512,7 @@ function myCoursesUrlsFromDocument(document, pageUrl) {
     "[id*='module']"
   ];
   const headings = Array.from(document.querySelectorAll(headingSelectors.join(","))).filter((node) =>
-    /^my courses$/i.test(cleanText(node.textContent, 80))
+    /^my\s+(courses|organizations)$/i.test(cleanText(node.textContent, 80))
   );
 
   for (const heading of headings) {
@@ -519,7 +520,7 @@ function myCoursesUrlsFromDocument(document, pageUrl) {
     for (let depth = 0; container && depth < 5; depth += 1) {
       const links = Array.from(container.querySelectorAll("a[href]"))
         .map((anchor) => normalizeUrlFrom(anchor.getAttribute("href") || "", pageUrl))
-        .filter(isCourseUrl);
+        .filter(isCourseOrOrganizationUrl);
       candidates.push(...links);
       if (links.length) break;
       container = container.parentElement;
@@ -530,16 +531,18 @@ function myCoursesUrlsFromDocument(document, pageUrl) {
     document.querySelectorAll("a[href]").forEach((anchor) => {
       const url = normalizeUrlFrom(anchor.getAttribute("href") || "", pageUrl);
       const text = cleanText(anchor.textContent || anchor.getAttribute("title") || "", 200);
-      if (isCourseUrl(url) || /class of|pre-program|course/i.test(text)) candidates.push(url);
+      if (isCourseOrOrganizationUrl(url) || /class of|pre-program|course|organization|language learning resources/i.test(text)) {
+        candidates.push(url);
+      }
     });
   }
 
   return uniqueStrings(candidates.filter(Boolean));
 }
 
-function isCourseUrl(url) {
+function isCourseOrOrganizationUrl(url) {
   if (!url) return false;
-  return /\/webapps\/blackboard\/(execute\/launcher|content\/listContent|execute\/courseMain|course\/toc)|course_id=|course_id%3D/i.test(
+  return /\/webapps\/blackboard\/(execute\/launcher|content\/listContent|execute\/courseMain|course\/toc)|course_id=|course_id%3D|org_id=|org_id%3D|organization_id=|organization_id%3D|type=(course|organization)/i.test(
     url
   );
 }

@@ -119,7 +119,8 @@ async function crawlSite() {
   setStatus("Starting crawl...");
   const response = await sendMessage("CRAWL_SITE", {
     max_pages: 1500,
-    delay_ms: 120
+    delay_ms: 120,
+    include_organizations: true
   });
   if (!response.ok) throw new Error(response.error || "Crawl failed");
   await refreshAll();
@@ -216,12 +217,13 @@ function renderMissingVideos() {
   const canTranscribe = canUseVideoTranscription();
 
   els.missingVideoList.textContent = "";
+  const attemptableVideos = missingVideos.filter((video) => video.url);
   els.transcribeAllBtn.textContent = directMissingVideos.length
     ? `Transcribe direct (${directMissingVideos.length})`
-    : "Transcribe direct";
-  els.transcribeAllBtn.disabled = !directMissingVideos.length || !canTranscribe;
+    : `Try embedded (${attemptableVideos.length})`;
+  els.transcribeAllBtn.disabled = !attemptableVideos.length || !canTranscribe;
   els.transcribeAllBtn.title = canTranscribe
-    ? "Auto-transcribe every direct audio/video file missing a transcript"
+    ? "Try to resolve each missing video to a direct media file, then transcribe what can be resolved"
     : "Select OpenAI in Setup and save an API key to transcribe videos";
 
   if (!missingVideos.length) {
@@ -301,18 +303,28 @@ function renderMissingVideoRow(video) {
   if (isDirectMedia) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = "Auto-transcribe";
+    button.textContent = isDirectMedia ? "Auto-transcribe" : "Try transcribe";
     button.disabled = !canUseVideoTranscription();
     button.title = button.disabled
       ? "Select OpenAI in Setup and save an API key to transcribe this video"
       : "Create a timestamped local transcript with anonymized speakers";
     button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
     actions.append(button);
+  } else if (video.url) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Try transcribe";
+    button.disabled = !canUseVideoTranscription();
+    button.title = button.disabled
+      ? "Select OpenAI in Setup and save an API key to try resolving this embedded video"
+      : "Try to resolve this embedded player to a direct media file, then transcribe it";
+    button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
+    actions.append(button);
   } else {
     const status = document.createElement("span");
     status.className = "video-status-pill";
     status.textContent = "source needed";
-    status.title = "Embedded videos need a transcript import or a direct media URL before auto-transcription can run.";
+    status.title = "This video needs an imported transcript or a direct media URL before auto-transcription can run.";
     actions.append(status);
   }
   if (video.url) {
@@ -336,13 +348,13 @@ function canUseVideoTranscription() {
 function isDirectMediaResource(resource) {
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
-  return /^(audio|video)$/.test(type) || /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(\?|$)/i.test(url);
+  return /^(audio|video)$/.test(type) || isLikelyTranscribableMediaUrl(url);
 }
 
 function transcriptionReadinessLabel(missingCount, directCount) {
   if (!state.settings.hasApiKey) return `${missingCount} missing; add API key`;
   if (state.settings.provider !== "openai") return `${missingCount} missing; choose OpenAI`;
-  if (!directCount) return `${missingCount} missing; import embedded`;
+  if (!directCount) return `${missingCount} missing; try embedded`;
   if (directCount === missingCount) return `${missingCount} missing`;
   return `${missingCount} missing; ${directCount} direct`;
 }
@@ -411,7 +423,7 @@ function renderTranscriptRow(item) {
 async function transcribeAllMissingVideos() {
   const missingVideos = state.resources
     .filter(isVideoResource)
-    .filter(isDirectMediaResource)
+    .filter((video) => video.url)
     .filter((video) => !(video.transcript_ids || []).length);
   if (!missingVideos.length) return;
   if (!state.settings.hasApiKey) throw new Error("Add an API key in Setup before transcribing videos.");
@@ -448,7 +460,7 @@ async function transcribeVideo(video, options = {}) {
   if (state.settings.provider !== "openai") {
     throw new Error("Video transcription currently requires OpenAI as the selected API provider.");
   }
-  if (!video.url) throw new Error("This video does not have a direct URL to fetch.");
+  if (!video.url) throw new Error("This video does not have a URL to fetch or resolve.");
 
   if (!options.quiet) els.transcriptionStatus.textContent = `Downloading ${video.title || "video"}...`;
   const media = await fetchMediaBlob(video);
@@ -476,16 +488,9 @@ async function transcribeVideo(video, options = {}) {
 }
 
 async function fetchMediaBlob(video) {
-  const response = await fetch(video.url, {
-    credentials: "include",
-    cache: "no-store"
-  });
-  if (!response.ok) throw new Error(`Could not fetch media: HTTP ${response.status}`);
-
+  const media = await fetchMediaResponse(video.url);
+  const response = media.response;
   const contentType = response.headers.get("content-type") || "";
-  if (!/^(audio|video)\//i.test(contentType)) {
-    throw new Error("This looks like an embedded video page, not a direct audio/video file. Import a transcript manually for now.");
-  }
 
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (contentLength && contentLength > 24 * 1024 * 1024) {
@@ -499,8 +504,83 @@ async function fetchMediaBlob(video) {
 
   return {
     blob,
-    fileName: fileNameFromUrl(video.url, contentType)
+    fileName: fileNameFromUrl(media.url, contentType)
   };
+}
+
+async function fetchMediaResponse(url, depth = 0, seen = new Set()) {
+  if (!url || seen.has(url) || depth > 2) {
+    throw new Error("Could not resolve this embedded video to a direct audio/video file.");
+  }
+  seen.add(url);
+  const response = await fetch(url, {
+    credentials: "include",
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error(`Could not fetch media: HTTP ${response.status}`);
+
+  const contentType = response.headers.get("content-type") || "";
+  if (/^(audio|video)\//i.test(contentType)) return { response, url };
+
+  if (/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+    const html = await response.text();
+    const candidates = mediaUrlsFromHtml(html, url);
+    for (const candidate of candidates) {
+      try {
+        return await fetchMediaResponse(candidate, depth + 1, seen);
+      } catch (_error) {
+        // Try the next candidate from the embedded player page.
+      }
+    }
+  }
+
+  throw new Error("This embedded player did not expose a direct audio/video file the extension can transcribe.");
+}
+
+function mediaUrlsFromHtml(html, baseUrl) {
+  const candidates = [];
+  const add = (rawUrl) => {
+    const url = normalizeAbsoluteUrl(rawUrl, baseUrl);
+    if (url && isLikelyTranscribableMediaUrl(url)) candidates.push(url);
+  };
+  try {
+    const document = new DOMParser().parseFromString(html, "text/html");
+    document.querySelectorAll("video[src], video source[src], audio[src], audio source[src], a[href]").forEach((node) => {
+      add(node.getAttribute("src") || node.getAttribute("href") || "");
+    });
+  } catch (_error) {
+    // Fall through to regex extraction.
+  }
+
+  const attrPattern = /(?:src|href|file|url)[\s:=]+["']([^"']+)["']/gi;
+  let match = attrPattern.exec(html);
+  while (match) {
+    add(match[1].replace(/\\\//g, "/"));
+    match = attrPattern.exec(html);
+  }
+
+  const absolutePattern = /https?:\\?\/\\?\/[^\s"'<>]+\.(?:mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(?:\?[^\s"'<>]*)?/gi;
+  match = absolutePattern.exec(html);
+  while (match) {
+    add(match[0].replace(/\\\//g, "/"));
+    match = absolutePattern.exec(html);
+  }
+
+  return Array.from(new Set(candidates));
+}
+
+function normalizeAbsoluteUrl(rawUrl, baseUrl) {
+  if (!rawUrl) return "";
+  const cleaned = String(rawUrl).replace(/&amp;/g, "&").trim();
+  try {
+    return new URL(cleaned, baseUrl).href;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function isLikelyTranscribableMediaUrl(url) {
+  return /\.(mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg)(\?|$)/i.test(String(url || ""));
 }
 
 async function callOpenAiTranscription(blob, fileName) {
