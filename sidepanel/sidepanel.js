@@ -1,6 +1,9 @@
 const SETTINGS_KEY = "assistant_settings";
 const MAX_CONTENT_CHARS = 20000;
 const MAX_MEMORY_TURNS = 6;
+const MEDIA_RESOLVE_TIMEOUT_MS = 30000;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 60000;
+const TRANSCRIPTION_TIMEOUT_MS = 300000;
 
 const state = {
   resources: [],
@@ -308,7 +311,7 @@ function renderMissingVideoRow(video) {
     button.title = button.disabled
       ? "Select OpenAI in Setup and save an API key to transcribe this video"
       : "Create a timestamped local transcript with anonymized speakers";
-    button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
+    button.addEventListener("click", () => transcribeSingleVideo(video).catch(reportError));
     actions.append(button);
   } else if (video.url) {
     const button = document.createElement("button");
@@ -318,7 +321,7 @@ function renderMissingVideoRow(video) {
     button.title = button.disabled
       ? "Select OpenAI in Setup and save an API key to try resolving this embedded video"
       : "Try to resolve this embedded player to a direct media file, then transcribe it";
-    button.addEventListener("click", () => transcribeVideo(video).catch(reportError));
+    button.addEventListener("click", () => transcribeSingleVideo(video).catch(reportError));
     actions.append(button);
   } else {
     const status = document.createElement("span");
@@ -435,24 +438,48 @@ async function transcribeAllMissingVideos() {
   const startedAt = Date.now();
   let completed = 0;
   let failed = 0;
+  let lastFailure = "";
 
-  for (const video of missingVideos) {
-    const elapsedMs = Date.now() - startedAt;
-    const averageMs = completed + failed ? elapsedMs / (completed + failed) : 0;
-    const eta = averageMs ? formatDuration(averageMs * (missingVideos.length - completed - failed)) : "calculating";
-    els.transcriptionStatus.textContent = `${completed + failed + 1}/${missingVideos.length}; ETA ${eta}`;
-    try {
-      await transcribeVideo(video, { quiet: true });
-      completed += 1;
-    } catch (error) {
-      failed += 1;
-      console.warn("Video transcription failed", video.title, error);
+  try {
+    for (let index = 0; index < missingVideos.length; index += 1) {
+      const video = missingVideos[index];
+      const updateBatchStatus = (stage) => {
+        const processed = completed + failed;
+        const elapsedMs = Date.now() - startedAt;
+        const averageMs = processed ? elapsedMs / processed : 0;
+        const eta = averageMs ? formatDuration(averageMs * (missingVideos.length - processed)) : "calculating";
+        els.transcriptionStatus.textContent = `${stage} ${index + 1}/${missingVideos.length}; saved ${completed}; failed ${failed}; ETA ${eta}`;
+      };
+
+      updateBatchStatus("Resolving");
+      try {
+        await transcribeVideo(video, {
+          quiet: true,
+          onStatus: (stage) => updateBatchStatus(stage)
+        });
+        completed += 1;
+        updateBatchStatus("Saved");
+      } catch (error) {
+        failed += 1;
+        lastFailure = readableErrorMessage(error);
+        els.transcriptionStatus.textContent = `Skipped ${index + 1}/${missingVideos.length}: ${lastFailure}`;
+        console.warn("Video transcription failed", video.title, error);
+      }
     }
+  } finally {
+    await refreshAll();
+    els.transcriptionStatus.textContent = `${completed} transcribed${failed ? `, ${failed} failed${lastFailure ? `; last: ${lastFailure}` : ""}` : ""}`;
+    els.transcribeAllBtn.disabled = false;
   }
+}
 
-  await refreshAll();
-  els.transcriptionStatus.textContent = `${completed} transcribed${failed ? `, ${failed} failed` : ""}`;
-  els.transcribeAllBtn.disabled = false;
+async function transcribeSingleVideo(video) {
+  try {
+    return await transcribeVideo(video);
+  } catch (error) {
+    els.transcriptionStatus.textContent = `Failed: ${readableErrorMessage(error)}`;
+    throw error;
+  }
 }
 
 async function transcribeVideo(video, options = {}) {
@@ -462,9 +489,13 @@ async function transcribeVideo(video, options = {}) {
   }
   if (!video.url) throw new Error("This video does not have a URL to fetch or resolve.");
 
-  if (!options.quiet) els.transcriptionStatus.textContent = `Downloading ${video.title || "video"}...`;
+  const report = (stage) => {
+    if (options.onStatus) options.onStatus(stage);
+    if (!options.quiet) els.transcriptionStatus.textContent = `${stage} ${clampText(video.title || "video", 90)}...`;
+  };
+  report("Resolving");
   const media = await fetchMediaBlob(video);
-  if (!options.quiet) els.transcriptionStatus.textContent = `Transcribing ${video.title || "video"}...`;
+  report("Uploading");
   const transcription = await callOpenAiTranscription(media.blob, media.fileName);
   const text = normalizeTranscriptText(transcription.text || "");
   assertUsableTranscript(text, video);
@@ -497,7 +528,11 @@ async function fetchMediaBlob(video) {
     throw new Error("This media file is too large for browser-side transcription. Try importing a prepared transcript.");
   }
 
-  const blob = await response.blob();
+  const blob = await withTimeout(
+    response.blob(),
+    MEDIA_DOWNLOAD_TIMEOUT_MS,
+    "Timed out downloading this media file; skipping it."
+  );
   if (blob.size > 24 * 1024 * 1024) {
     throw new Error("This media file is too large for browser-side transcription. Try importing a prepared transcript.");
   }
@@ -513,17 +548,26 @@ async function fetchMediaResponse(url, depth = 0, seen = new Set()) {
     throw new Error("Could not resolve this embedded video to a direct audio/video file.");
   }
   seen.add(url);
-  const response = await fetch(url, {
-    credentials: "include",
-    cache: "no-store"
-  });
+  const response = await fetchWithTimeout(
+    url,
+    {
+      credentials: "include",
+      cache: "no-store"
+    },
+    MEDIA_RESOLVE_TIMEOUT_MS,
+    "Timed out resolving this embedded video; skipping it."
+  );
   if (!response.ok) throw new Error(`Could not fetch media: HTTP ${response.status}`);
 
   const contentType = response.headers.get("content-type") || "";
   if (/^(audio|video)\//i.test(contentType)) return { response, url };
 
   if (/text\/html|application\/xhtml\+xml/i.test(contentType)) {
-    const html = await response.text();
+    const html = await withTimeout(
+      response.text(),
+      MEDIA_RESOLVE_TIMEOUT_MS,
+      "Timed out reading this embedded player page; skipping it."
+    );
     const candidates = mediaUrlsFromHtml(html, url);
     for (const candidate of candidates) {
       try {
@@ -590,14 +634,23 @@ async function callOpenAiTranscription(blob, fileName) {
   form.append("timestamp_granularities[]", "segment");
   form.append("file", new File([blob], fileName, { type: blob.type || "audio/mpeg" }));
 
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${state.settings.apiKey}`
+  const response = await fetchWithTimeout(
+    "https://api.openai.com/v1/audio/transcriptions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.settings.apiKey}`
+      },
+      body: form
     },
-    body: form
-  });
-  const text = await response.text();
+    TRANSCRIPTION_TIMEOUT_MS,
+    "Timed out waiting for the transcription provider; skipping it."
+  );
+  const text = await withTimeout(
+    response.text(),
+    MEDIA_RESOLVE_TIMEOUT_MS,
+    "Timed out reading the transcription provider response."
+  );
   let json = {};
   try {
     json = text ? JSON.parse(text) : {};
@@ -608,6 +661,41 @@ async function callOpenAiTranscription(blob, fileName) {
     throw new Error(json.error?.message || text || `Transcription failed with HTTP ${response.status}`);
   }
   return json;
+}
+
+async function fetchWithTimeout(url, options, timeoutMs, timeoutMessage) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error && error.name === "AbortError") throw new Error(timeoutMessage);
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function withTimeout(promise, timeoutMs, timeoutMessage) {
+  let timeoutId = 0;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timeoutId = window.setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
+}
+
+function readableErrorMessage(error) {
+  const message = String(error && error.message ? error.message : error || "Unknown error");
+  if (/failed to fetch/i.test(message)) {
+    return "provider blocked the embedded media fetch or the network failed";
+  }
+  return clampText(message, 160);
 }
 
 function normalizeTranscriptText(value) {
@@ -788,10 +876,15 @@ async function extractSearchableResourceText(resource) {
 }
 
 async function fetchResourceArrayBuffer(url) {
-  const response = await fetch(url, {
-    credentials: "include",
-    cache: "no-store"
-  });
+  const response = await fetchWithTimeout(
+    url,
+    {
+      credentials: "include",
+      cache: "no-store"
+    },
+    MEDIA_RESOLVE_TIMEOUT_MS,
+    "Timed out fetching this resource."
+  );
   if (!response.ok) throw new Error(`Could not fetch resource: HTTP ${response.status}`);
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (contentLength && contentLength > 25 * 1024 * 1024) {
