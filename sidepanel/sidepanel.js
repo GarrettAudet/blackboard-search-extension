@@ -218,7 +218,7 @@ function renderTranscripts() {
   for (const group of groups) {
     const section = document.createElement("details");
     section.className = "transcript-group";
-    section.open = true;
+    section.open = false;
 
     const summary = document.createElement("summary");
     summary.className = "group-summary";
@@ -278,7 +278,7 @@ function renderDetectedMedia() {
   for (const group of groups) {
     const section = document.createElement("details");
     section.className = "video-group";
-    section.open = groups.length === 1;
+    section.open = false;
     const summary = document.createElement("summary");
     summary.className = "group-summary";
     const title = document.createElement("span");
@@ -311,10 +311,11 @@ function isUsefulDetectedMedia(item) {
 }
 
 function detectedMediaHasTranscript(item) {
-  const itemKey = mediaCandidateKey(item.url) || normalizeUrlForCompare(item.url);
+  const itemKey = canonicalVideoKey(item);
+  if (!itemKey) return false;
   return state.resources.some((resource) =>
-    (mediaCandidateKey(resource.url) || normalizeUrlForCompare(resource.url)) === itemKey && (resource.transcript_ids || []).length
-  );
+    canonicalVideoKey(resource) === itemKey && (resource.transcript_ids || []).length
+  ) || state.transcripts.some((transcript) => canonicalVideoKey(transcript) === itemKey);
 }
 
 function detectedMediaStatusLabel(captionCount, directCount, manifestCount) {
@@ -333,19 +334,21 @@ function detectedMediaStatusLabel(captionCount, directCount, manifestCount) {
 function dedupeDetectedMedia(items) {
   const byKey = new Map();
   for (const item of items) {
-    const key = mediaCandidateKey(item.url) || item.id || item.url;
+    const key = canonicalVideoKey(item) || mediaCandidateKey(item.url) || item.id || item.url;
     const existing = byKey.get(key);
     if (!existing) {
       byKey.set(key, { ...item, duplicate_count: 0 });
       continue;
     }
-    byKey.set(key, {
+    const merged = {
       ...existing,
       ...withoutEmptyObject(item),
       duplicate_count: (existing.duplicate_count || 0) + 1,
       first_seen_at: existing.first_seen_at || item.first_seen_at,
       last_seen_at: String(item.last_seen_at || "") > String(existing.last_seen_at || "") ? item.last_seen_at : existing.last_seen_at
-    });
+    };
+    if (existing.kind === "caption" && item.kind !== "caption") merged.kind = existing.kind;
+    byKey.set(key, merged);
   }
   return Array.from(byKey.values());
 }
@@ -455,7 +458,7 @@ function renderMissingVideos() {
   groups.forEach((group, index) => {
     const section = document.createElement("details");
     section.className = "video-group";
-    section.open = groups.length === 1 || index === 0;
+    section.open = false;
 
     const summary = document.createElement("summary");
     summary.className = "group-summary";
@@ -500,8 +503,7 @@ function dedupeVideoResources(videos) {
 }
 
 function videoResourceDedupeKey(video) {
-  if (isDirectMediaResource(video)) return mediaCandidateKey(video.url) || video.id || video.url;
-  return normalizeUrlForCompare(video.url) || normalizeText(`${video.page_title || ""} ${video.title || ""}`) || video.id;
+  return canonicalVideoKey(video) || normalizeUrlForCompare(video.url) || normalizeText(`${video.page_title || ""} ${video.title || ""}`) || video.id;
 }
 
 function groupMissingVideosByPage(videos) {
@@ -750,14 +752,10 @@ function groupTranscriptsByPage() {
   const resourceById = new Map(state.resources.map((resource) => [resource.id, resource]));
   const groups = new Map();
 
-  for (const transcript of state.transcripts) {
-    const resources = (transcript.matched_resource_ids || [])
-      .map((id) => resourceById.get(id))
-      .filter(Boolean);
-    const primary = resources[0];
-    const groupTitle = safeGroupTitle(primary, transcript);
+  for (const item of dedupeTranscriptsForDisplay(state.transcripts, resourceById)) {
+    const groupTitle = safeGroupTitle(item.resource, item.transcript);
     if (!groups.has(groupTitle)) groups.set(groupTitle, []);
-    groups.get(groupTitle).push({ transcript, resource: primary });
+    groups.get(groupTitle).push(item);
   }
 
   return Array.from(groups.entries())
@@ -768,6 +766,47 @@ function groupTranscriptsByPage() {
     .sort((a, b) => a.title.localeCompare(b.title));
 }
 
+function dedupeTranscriptsForDisplay(transcripts, resourceById) {
+  const byKey = new Map();
+  for (const transcript of transcripts || []) {
+    const resources = (transcript.matched_resource_ids || [])
+      .map((id) => resourceById.get(id))
+      .filter(Boolean);
+    const primary = resources[0];
+    const key = transcriptDisplayDedupeKey(transcript, primary);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { transcript, resource: primary });
+      continue;
+    }
+    const better = preferFullerTranscript(existing.transcript, transcript);
+    byKey.set(key, {
+      transcript: better,
+      resource: better === transcript ? primary : existing.resource
+    });
+  }
+  return Array.from(byKey.values());
+}
+
+function transcriptDisplayDedupeKey(transcript, resource) {
+  return canonicalVideoKey(transcript) || canonicalVideoKey(resource) || [
+    normalizeText(transcript?.title || transcript?.video_title || ""),
+    transcriptContentFingerprint(transcript)
+  ].filter(Boolean).join("|");
+}
+
+function transcriptContentFingerprint(transcript) {
+  const text = (transcript?.segments || []).slice(0, 8).map((segment) => segment.text || "").join(" ");
+  return normalizeText(text).slice(0, 320);
+}
+
+function preferFullerTranscript(first, second) {
+  return transcriptTextSize(second) > transcriptTextSize(first) ? second : first;
+}
+
+function transcriptTextSize(transcript) {
+  return (transcript?.segments || []).reduce((sum, segment) => sum + String(segment.text || "").length, 0);
+}
 function cleanGroupTitle(resource, transcript) {
   const raw = resource?.section || resource?.page_title || transcript.source_hint || "Imported transcript bundle";
   const parts = String(raw)
@@ -890,7 +929,12 @@ async function transcribeDetectedMedia(item, options = {}) {
 }
 
 async function ensureDetectedMediaResource(item) {
-  const existing = state.resources.find((resource) => resource.url === item.url || normalizeUrlForCompare(resource.url) === normalizeUrlForCompare(item.url));
+  const itemKey = canonicalVideoKey(item);
+  const existing = state.resources.find((resource) =>
+    (itemKey && canonicalVideoKey(resource) === itemKey && isDirectMediaResource(resource)) ||
+    resource.url === item.url ||
+    normalizeUrlForCompare(resource.url) === normalizeUrlForCompare(item.url)
+  );
   if (existing) return existing;
 
   const type = /audio\//i.test(item.content_type || "") || /\.(mp3|m4a|wav|aac|ogg)(?:[?#]|$)/i.test(item.url)
@@ -904,6 +948,7 @@ async function ensureDetectedMediaResource(item) {
         title: sourceTitle,
         url: item.url,
         preserve_url: true,
+        canonical_key: itemKey || mediaCandidateKey(item.url),
         page_url: item.page_url || item.document_url || item.url,
         page_title: sourceTitle,
         section: sourceTitle,
@@ -914,7 +959,11 @@ async function ensureDetectedMediaResource(item) {
   });
   if (!response.ok) throw new Error(response.error || "Could not index detected media before transcription.");
   await refreshAll();
-  const created = state.resources.find((resource) => resource.url === item.url || normalizeUrlForCompare(resource.url) === normalizeUrlForCompare(item.url));
+  const created = state.resources.find((resource) =>
+    (itemKey && canonicalVideoKey(resource) === itemKey && isDirectMediaResource(resource)) ||
+    resource.url === item.url ||
+    normalizeUrlForCompare(resource.url) === normalizeUrlForCompare(item.url)
+  );
   if (!created) throw new Error("Detected media was indexed, but could not be found for transcription.");
   return created;
 }
@@ -942,6 +991,34 @@ function mediaCandidateKey(url) {
       .replace(/\/$/, "")
       .toLowerCase();
   }
+}
+
+function canonicalVideoKey(record) {
+  const panoptoKey = panoptoSessionKey(record);
+  if (panoptoKey) return panoptoKey;
+  const mediaKey = mediaCandidateKey(record?.canonical_key || record?.url || record?.video_url || record?.videoUrl || "");
+  if (mediaKey) return `media:${mediaKey}`;
+  return normalizeText([record?.page_title, record?.section, record?.title, record?.video_title, record?.source_hint].filter(Boolean).join(" "));
+}
+
+function panoptoSessionKey(record) {
+  const values = [
+    record?.canonical_key,
+    record?.url,
+    record?.video_url,
+    record?.videoUrl,
+    record?.page_url,
+    record?.document_url,
+    record?.initiator,
+    record?.context
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const viewer = values.match(/\/Panopto\/Pages\/Viewer\.aspx\?[^#\s]*\bid=([0-9a-f-]{20,})/i);
+  if (viewer) return `panopto:${viewer[1].toLowerCase()}`;
+  const content = values.match(/\/Panopto\/Content\/Sessions\d*\/([0-9a-f-]{20,})/i);
+  if (content) return `panopto:${content[1].toLowerCase()}`;
+  return "";
 }
 
 function withoutEmptyObject(object) {
@@ -1140,7 +1217,7 @@ function existingTranscriptForVideo(video) {
   }
   return (state.transcripts || []).find((transcript) => {
     if ((transcript.matched_resource_ids || []).some((id) => resourceIds.has(id))) return true;
-    return identityKey && mediaCandidateKey(transcript.video_url || "") === identityKey;
+    return identityKey && canonicalVideoKey(transcript) === identityKey;
   }) || null;
 }
 
@@ -1149,7 +1226,7 @@ function transcriptIdForVideo(video) {
 }
 
 function transcriptIdentityKeyForVideo(video) {
-  return mediaCandidateKey(video?.url || video?.video_url || "") || normalizeText([video?.page_title, video?.section, video?.title].filter(Boolean).join(" "));
+  return canonicalVideoKey(video) || normalizeText([video?.page_title, video?.section, video?.title].filter(Boolean).join(" "));
 }
 
 function hashString(value) {
@@ -3107,7 +3184,15 @@ function isVideoResource(resource) {
 }
 
 function isTranscriptCandidateResource(resource) {
-  return isVideoResource(resource) && isAllowedTranscriptSource(resource);
+  return isActualVideoResource(resource) && isAllowedTranscriptSource(resource);
+}
+
+function isActualVideoResource(resource) {
+  const type = String(resource?.type || "").toLowerCase();
+  const url = String(resource?.url || "");
+  if (/^(audio|video|video_embed)$/.test(type)) return true;
+  if (isEmbeddedVideoViewerUrl(url) || isLikelyTranscribableMediaUrl(url)) return true;
+  return /(panopto|kaltura|echo360|yuja|mediasite|bbcollab)/i.test(url);
 }
 
 function isAllowedTranscriptSource(resource) {

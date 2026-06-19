@@ -46,22 +46,33 @@ async function captureMediaRequest(details, contentType = "") {
   const classification = classifyMediaRequest(details, contentType);
   if (!classification) return;
   const mediaKey = mediaCandidateKey(details.url);
-  if (mediaKey && (await isIgnoredMediaKey(mediaKey))) return;
 
   const tab = await getTabSnapshot(details.tabId);
+  const title = cleanText(fileNameFromUrl(details.url) || tab.title || classification.kind, 240);
+  const seed = {
+    url: details.url,
+    document_url: details.documentUrl || details.frameUrl || "",
+    initiator: details.initiator || "",
+    page_url: tab.url || details.documentUrl || details.initiator || "",
+    page_title: tab.title || "",
+    title
+  };
+  const canonicalKey = canonicalVideoKey(seed) || (mediaKey ? `media:${mediaKey}` : "");
+  if ((canonicalKey && (await isIgnoredMediaKey(canonicalKey))) || (mediaKey && (await isIgnoredMediaKey(mediaKey)))) return;
+
   const detection = {
-    id: stableId(["detected_media", classification.kind, mediaKey || details.url]),
-    canonical_key: mediaKey,
+    id: stableId(["detected_media", classification.kind, canonicalKey || mediaKey || details.url]),
+    canonical_key: canonicalKey || mediaKey,
     kind: classification.kind,
     url: details.url,
     content_type: contentType || classification.contentType || "",
     request_type: details.type || "",
-    document_url: details.documentUrl || details.frameUrl || "",
-    initiator: details.initiator || "",
+    document_url: seed.document_url,
+    initiator: seed.initiator,
     tab_id: details.tabId,
-    page_url: tab.url || details.documentUrl || details.initiator || "",
-    page_title: tab.title || "",
-    title: cleanText(fileNameFromUrl(details.url) || tab.title || classification.kind, 240),
+    page_url: seed.page_url,
+    page_title: seed.page_title,
+    title,
     first_seen_at: new Date().toISOString(),
     last_seen_at: new Date().toISOString(),
     seen_count: 1
@@ -238,10 +249,12 @@ async function mergeDetectedDirectMedia(detection) {
     ? "audio"
     : "video";
   const sourceTitle = detectedMediaSourceTitle(detection);
+  const canonicalKey = canonicalVideoKey(detection) || (mediaCandidateKey(detection.url) ? `media:${mediaCandidateKey(detection.url)}` : detection.url);
   const result = await mergeScrape({
     resources: [
       {
-        id: stableId(["resource", type, mediaCandidateKey(detection.url) || detection.url]),
+        id: stableId(["resource", "video_resource", canonicalKey]),
+        canonical_key: canonicalKey,
         type,
         title: sourceTitle,
         url: detection.url,
@@ -270,9 +283,11 @@ function detectedMediaSourceTitle(detection) {
 
 function bestResourceForDetection(detection, resources) {
   const videos = resources.filter(isVideoResource);
+  const detectionKey = canonicalVideoKey(detection);
   const pageUrl = normalizeUrl(detection.page_url || "");
   const documentUrl = normalizeUrl(detection.document_url || "");
   return (
+    videos.find((resource) => detectionKey && canonicalVideoKey(resource) === detectionKey) ||
     videos.find((resource) => normalizeUrl(resource.url || "") === documentUrl) ||
     videos.find((resource) => normalizeUrl(resource.page_url || "") === pageUrl) ||
     videos.find((resource) => normalizeText(resource.page_title || "") === normalizeText(detection.page_title || "")) ||
@@ -1446,9 +1461,12 @@ function normalizeResource(raw) {
   const url = preserveUrl ? rawUrl : normalizeUrl(rawUrl);
   const title = cleanText(rawTitle || url || "Untitled resource", 240);
   const type = preliminaryType || cleanText(inferType(url, title), 80);
-  const mediaKey = /^(audio|video)$/.test(type) ? mediaCandidateKey(url) : "";
+  const mediaKey = /^(audio|video|video_embed)$/.test(type)
+    ? canonicalVideoKey({ ...raw, url, title, context: raw.context || raw.description || "" })
+    : "";
   const resource = {
-    id: cleanText(raw.id || stableId(["resource", type, mediaKey || url, mediaKey ? "" : title]), 120),
+    id: cleanText(raw.id || stableId(["resource", mediaKey ? "video_resource" : type, mediaKey || url, mediaKey ? "" : title]), 120),
+    canonical_key: mediaKey || cleanText(raw.canonical_key || raw.canonicalKey || "", 240),
     type,
     title,
     url,
@@ -1625,12 +1643,16 @@ function dedupeTranscriptIndex(resources, transcripts) {
 }
 
 function transcriptDedupeKey(transcript) {
-  const mediaKey = mediaCandidateKey(transcript?.video_url || transcript?.url || "");
-  if (mediaKey) return `media:${mediaKey}`;
+  const videoKey = canonicalVideoKey(transcript);
+  if (videoKey) return `video:${videoKey}`;
   const title = normalizeText(transcript?.title || transcript?.video_title || "");
   if (!title) return "";
-  const hint = normalizeText(transcript?.source_hint || "");
-  return `title:${title}|${hint}`;
+  return `title:${title}|content:${transcriptContentFingerprint(transcript) || normalizeText(transcript?.source_hint || "")}`;
+}
+
+function transcriptContentFingerprint(transcript) {
+  const text = (transcript?.segments || []).slice(0, 8).map((segment) => segment.text || "").join(" ");
+  return normalizeText(text).slice(0, 320);
 }
 function matchTranscriptsToResources(resources, transcripts) {
   let autoAttached = 0;
@@ -1766,8 +1788,47 @@ function mediaCandidateKey(url) {
   }
 }
 
+function canonicalVideoKey(record) {
+  const panoptoKey = panoptoSessionKey(record);
+  if (panoptoKey) return panoptoKey;
+  const existing = String(record?.canonical_key || "");
+  if (/^(panopto|media):/i.test(existing)) return existing.toLowerCase();
+  const mediaKey = mediaCandidateKey(existing || record?.url || record?.video_url || record?.videoUrl || "");
+  if (mediaKey) return `media:${mediaKey}`;
+  return normalizeText([record?.page_title, record?.section, record?.title, record?.video_title, record?.source_hint].filter(Boolean).join(" "));
+}
+
+function panoptoSessionKey(record) {
+  const values = [
+    record?.canonical_key,
+    record?.url,
+    record?.video_url,
+    record?.videoUrl,
+    record?.page_url,
+    record?.document_url,
+    record?.initiator,
+    record?.context
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const viewer = values.match(/\/Panopto\/Pages\/Viewer\.aspx\?[^#\s]*\bid=([0-9a-f-]{20,})/i);
+  if (viewer) return `panopto:${viewer[1].toLowerCase()}`;
+  const content = values.match(/\/Panopto\/Content\/Sessions\d*\/([0-9a-f-]{20,})/i);
+  if (content) return `panopto:${content[1].toLowerCase()}`;
+  return "";
+}
+
 function mediaCandidateKeys(candidate) {
-  return uniqueStrings([candidate?.canonical_key, candidate?.url, candidate?.video_url, candidate?.videoUrl].map((value) => candidate?.canonical_key === value ? value : mediaCandidateKey(value)));
+  const keys = [];
+  const canonical = canonicalVideoKey(candidate);
+  if (canonical) keys.push(canonical);
+  for (const value of [candidate?.canonical_key, candidate?.url, candidate?.video_url, candidate?.videoUrl]) {
+    const text = String(value || "");
+    if (!text) continue;
+    if (/^(panopto|media):/i.test(text)) keys.push(text.toLowerCase());
+    else keys.push(mediaCandidateKey(text));
+  }
+  return uniqueStrings(keys);
 }
 
 function ignoredMediaKeys(records) {
