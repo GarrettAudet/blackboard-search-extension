@@ -104,13 +104,13 @@
 
       </section>
 
-      <section id="transcriptsView" class="view" aria-label="Transcripts collected">
-        <section class="panel">
+      <section id="transcriptsView" class="view" aria-label="Library">
+        <section class="panel library-panel">
           <div class="panel-heading">
             <h2>Library</h2>
             <span id="videoStatus"></span>
           </div>
-          <div class="button-row">
+          <div class="button-row library-actions">
             <button id="crawlBtn" type="button" title="Index Blackboard courses and organizations">Index</button>
             <button id="scanBtn" class="secondary" type="button" title="Scan the current Blackboard page">Scan</button>
             <button id="importBtn" type="button" title="Import transcript JSON">Import</button>
@@ -118,30 +118,37 @@
             <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
           </div>
           <p id="crawlState" class="panel-note">Default crawl starts at the Blackboard portal, scans My Courses and My Organizations, and indexes up to 1500 pages.</p>
-          <div id="transcriptGroups" class="transcript-groups"></div>
-        </section>
 
+          <section id="missingVideoSection" class="library-section">
+            <div class="library-section-heading">
+              <h3>Videos Needing Transcripts</h3>
+              <span id="transcriptionStatus">idle</span>
+            </div>
+            <div class="button-row compact-actions">
+              <button id="transcribeAllBtn" type="button" title="Transcribe available direct media">Transcribe all</button>
+            </div>
+            <div id="missingVideoList" class="missing-video-list"></div>
+          </section>
 
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Detected Media</h2>
-            <span id="detectedMediaStatus">play a video to detect media</span>
-          </div>
-          <div class="button-row">
-            <button id="importDetectedCaptionsBtn" class="secondary" type="button" title="Import detected caption tracks">Captions</button>
-          </div>
-          <p class="panel-note">Open a Blackboard video and press play. Captions are imported automatically when the player exposes them; direct media is added as a transcribable candidate when available.</p>
-          <div id="detectedMediaList" class="missing-video-list"></div>
-        </section>
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Videos Needing Transcripts</h2>
-            <span id="transcriptionStatus">idle</span>
-          </div>
-          <div class="button-row">
-            <button id="transcribeAllBtn" type="button" title="Transcribe available direct media">Transcribe</button>
-          </div>
-          <div id="missingVideoList" class="missing-video-list"></div>
+          <section id="detectedMediaSection" class="library-section">
+            <div class="library-section-heading">
+              <h3>Detected Media</h3>
+              <span id="detectedMediaStatus">play a video to detect media</span>
+            </div>
+            <div class="button-row compact-actions">
+              <button id="importDetectedCaptionsBtn" class="secondary" type="button" title="Import detected caption tracks">Captions</button>
+            </div>
+            <p class="panel-note">Only detected captions and direct media that can become searchable transcripts are shown here.</p>
+            <div id="detectedMediaList" class="missing-video-list"></div>
+          </section>
+
+          <section class="library-section">
+            <div class="library-section-heading">
+              <h3>Transcribed Resources</h3>
+              <span id="transcribedStatus">none yet</span>
+            </div>
+            <div id="transcriptGroups" class="transcript-groups"></div>
+          </section>
         </section>
       </section>
     </main>

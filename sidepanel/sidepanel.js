@@ -62,11 +62,14 @@ const els = {
   videoStatus: document.getElementById("videoStatus"),
   transcriptionStatus: document.getElementById("transcriptionStatus"),
   transcribeAllBtn: document.getElementById("transcribeAllBtn"),
+  detectedMediaSection: document.getElementById("detectedMediaSection"),
   detectedMediaStatus: document.getElementById("detectedMediaStatus"),
   importDetectedCaptionsBtn: document.getElementById("importDetectedCaptionsBtn"),
   detectedMediaList: document.getElementById("detectedMediaList"),
+  missingVideoSection: document.getElementById("missingVideoSection"),
   missingVideoList: document.getElementById("missingVideoList"),
   transcriptGroups: document.getElementById("transcriptGroups"),
+  transcribedStatus: document.getElementById("transcribedStatus"),
   messageTemplate: document.getElementById("messageTemplate"),
   sourceTemplate: document.getElementById("sourceTemplate")
 };
@@ -203,8 +206,11 @@ function renderTranscripts() {
   els.transcriptGroups.textContent = "";
 
   const groups = groupTranscriptsByPage();
+  els.transcribedStatus.textContent = groups.length
+    ? `${state.transcripts.length} transcript${state.transcripts.length === 1 ? "" : "s"}`
+    : "none yet";
   if (!groups.length) {
-    els.transcriptGroups.append(emptyNode("No transcripts imported yet. Import a transcript bundle after crawling Blackboard."));
+    els.transcriptGroups.append(emptyNode("No transcripts yet. Use Transcribe all, transcribe one video, or import a transcript bundle."));
     return;
   }
 
@@ -248,22 +254,19 @@ async function importDetectedCaptions() {
 }
 
 function renderDetectedMedia() {
-  const detections = state.detectedMedia || [];
-  const captions = detections.filter((item) => item.kind === "caption");
-  const direct = detections.filter((item) => item.kind === "direct_media");
-  const manifests = detections.filter((item) => item.kind === "manifest");
+  const actionable = (state.detectedMedia || []).filter(isUsefulDetectedMedia);
+  const captions = actionable.filter((item) => item.kind === "caption");
+  const direct = actionable.filter((item) => item.kind === "direct_media");
   const pendingCaptions = captions.filter((item) => !item.imported_transcript_id);
-  els.detectedMediaStatus.textContent = detectedMediaStatusLabel(captions.length, direct.length, manifests.length);
+  els.detectedMediaSection.hidden = !actionable.length;
+  els.detectedMediaStatus.textContent = detectedMediaStatusLabel(captions.length, direct.length, 0);
   els.importDetectedCaptionsBtn.disabled = !pendingCaptions.length;
   els.importDetectedCaptionsBtn.textContent = pendingCaptions.length ? `Captions (${pendingCaptions.length})` : "Captions";
   els.detectedMediaList.textContent = "";
 
-  if (!detections.length) {
-    els.detectedMediaList.append(emptyNode("Open a Blackboard video and press play. The extension will watch for captions, manifests, and direct media requests."));
-    return;
-  }
+  if (!actionable.length) return;
 
-  const groups = groupDetectedMediaByPage(detections.slice(0, 80));
+  const groups = groupDetectedMediaByPage(actionable.slice(0, 80));
   for (const group of groups) {
     const section = document.createElement("details");
     section.className = "video-group";
@@ -284,6 +287,21 @@ function renderDetectedMedia() {
     section.append(list);
     els.detectedMediaList.append(section);
   }
+}
+
+function isUsefulDetectedMedia(item) {
+  if (!item || !item.url) return false;
+  if (item.kind === "caption") return !item.imported_transcript_id;
+  if (item.kind !== "direct_media") return false;
+  if (item.imported_transcript_id || item.transcript_status === "imported") return false;
+  return !detectedMediaHasTranscript(item);
+}
+
+function detectedMediaHasTranscript(item) {
+  const itemUrl = normalizeUrlForCompare(item.url);
+  return state.resources.some((resource) =>
+    normalizeUrlForCompare(resource.url) === itemUrl && (resource.transcript_ids || []).length
+  );
 }
 
 function detectedMediaStatusLabel(captionCount, directCount, manifestCount) {
@@ -370,10 +388,11 @@ function renderMissingVideos() {
   const canTranscribe = canUseVideoTranscription();
 
   els.missingVideoList.textContent = "";
+  els.missingVideoSection.hidden = !missingVideos.length;
   els.transcribeAllBtn.textContent = directMissingVideos.length
-    ? `Transcribe (${directMissingVideos.length})`
+    ? `Transcribe all (${directMissingVideos.length})`
     : embeddedMissingVideos.length
-      ? "Open to detect"
+      ? "Open first"
       : "Complete";
   els.transcribeAllBtn.disabled = directMissingVideos.length ? !canTranscribe : !embeddedMissingVideos.length;
   els.transcribeAllBtn.title = directMissingVideos.length
@@ -383,7 +402,6 @@ function renderMissingVideos() {
     : "Open the first embedded player. Press play once so Blackboard exposes captions or media requests for detection.";
 
   if (!missingVideos.length) {
-    els.missingVideoList.append(emptyNode("Every detected video has an attached transcript."));
     els.transcriptionStatus.textContent = "complete";
     return;
   }
@@ -526,8 +544,8 @@ async function runTranscriptionWithButton(button, title, task) {
   try {
     const result = await task(update);
     button.textContent = "Saved";
-    els.transcriptionStatus.textContent = "Transcript saved locally. Open Library preview to verify segment count and text.";
-    setStatus("Transcript saved locally. Open Library preview to verify segment count and text.");
+    els.transcriptionStatus.textContent = "Transcript saved locally. Open Library to verify segment count and full text.";
+    setStatus("Transcript saved locally. Open Library to verify segment count and full text.");
     return result;
   } catch (error) {
     button.textContent = "Failed";
@@ -710,7 +728,12 @@ function renderTranscriptRow(item) {
   statLine.textContent = stats.detail;
   const preview = document.createElement("pre");
   preview.className = "transcript-preview-text";
-  preview.textContent = transcriptFullText(item.transcript);
+  preview.textContent = "Open to load the full transcript.";
+  details.addEventListener("toggle", () => {
+    if (!details.open || details.dataset.loaded === "true") return;
+    preview.textContent = transcriptFullText(item.transcript);
+    details.dataset.loaded = "true";
+  });
   body.append(statLine, preview);
   details.append(summary, body);
 
@@ -2896,6 +2919,13 @@ function resetToDefaultView(event) {
   setView("chat");
 }
 
+async function refreshIndexAndResetChat() {
+  state.conversation = [];
+  els.chatMessages.textContent = "";
+  await refreshAll();
+  setStatus("Index refreshed; chat memory reset.");
+}
+
 function reportError(error) {
   console.error(error);
   setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
@@ -2934,7 +2964,7 @@ chrome.runtime.onMessage.addListener((message) => {
   return false;
 });
 
-els.refreshBtn.addEventListener("click", () => refreshAll().catch(reportError));
+els.refreshBtn.addEventListener("click", () => refreshIndexAndResetChat().catch(reportError));
 els.chatViewBtn.addEventListener("click", () => setView("chat"));
 els.transcriptsViewBtn.addEventListener("click", () => setView("transcripts"));
 els.setupViewBtn.addEventListener("click", () => setView("setup"));
