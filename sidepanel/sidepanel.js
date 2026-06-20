@@ -2328,7 +2328,7 @@ async function handleAsk(event) {
   }
 }
 function searchIndex(query) {
-  const scored = buildSearchDocs()
+  const scored = buildSearchDocs(query)
     .map((doc) => ({ ...doc, score: scoreDoc(query, doc) }))
     .filter((doc) => doc.score > 0)
     .sort((a, b) => b.score - a.score);
@@ -2337,7 +2337,7 @@ function searchIndex(query) {
 
 function diversifySearchResults(scored, query) {
   const wantsVideo = wantsVideoHeavySearch(query);
-  const videoLimit = wantsVideo ? 6 : 3;
+  const videoLimit = wantsVideo ? 6 : 1;
   const selected = [];
   const deferredVideos = [];
   let videoCount = 0;
@@ -3016,13 +3016,14 @@ function renderSourceDisclosure(sources) {
   return details;
 }
 
-function buildSearchDocs() {
+function buildSearchDocs(query = "") {
   const docs = [];
   const resourceById = new Map(state.resources.map((resource) => [resource.id, resource]));
+  const wantsVideo = wantsVideoHeavySearch(query);
 
   for (const resource of state.resources) {
     const storedContent = state.contentStore?.[resource.id] || "";
-    if (shouldSkipResourceSearchDoc(resource, storedContent)) continue;
+    if (shouldSkipResourceSearchDoc(resource, storedContent, wantsVideo)) continue;
     const baseDoc = {
       resource_id: resource.id,
       kind: resource.type || "resource",
@@ -3076,11 +3077,14 @@ function buildSearchDocs() {
   return docs;
 }
 
-function shouldSkipResourceSearchDoc(resource, storedContent) {
+function shouldSkipResourceSearchDoc(resource, storedContent, wantsVideo = false) {
   const type = String(resource?.type || "").toLowerCase();
   const context = clampText(resource?.context || "", 200);
+  const isVideoMetadata = /^(audio|video|video_embed)$/.test(type);
+  const hasTranscript = resourceTranscriptSegmentCount(resource) > 0 || (resource?.transcript_ids || []).length > 0;
+  if (isVideoMetadata && !wantsVideo && !storedContent && !hasTranscript) return true;
   if (/^(audio|video)$/.test(type) && !storedContent && !context) return true;
-  if (type === "video_embed" && !storedContent && !context && !(resource?.transcript_ids || []).length) return true;
+  if (type === "video_embed" && !storedContent && !context && !hasTranscript) return true;
   return false;
 }
 
@@ -3154,7 +3158,7 @@ function scoreDoc(query, doc) {
   if (phrase && text.includes(phrase)) score += isTranscript ? 12 : 25;
   if (phrase && title.includes(phrase)) score += 35;
   if (doc.kind === "page") score += pageIntentBoost(query, title, source, haystack);
-  if (isTranscript && !wantsVideoHeavySearch(query)) score = Math.max(0, score - 10);
+  if (isTranscript && !wantsVideoHeavySearch(query)) score = Math.max(0, score - 24);
   return score;
 }
 
