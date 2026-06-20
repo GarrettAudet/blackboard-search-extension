@@ -1,4 +1,5 @@
 const SETTINGS_KEY = "assistant_settings";
+const FEEDBACK_REPO_SLUG = "GarrettAudet/blackboard-search-extension-feedback";
 const MAX_CONTENT_CHARS = 20000;
 const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
 const MAX_MEMORY_TURNS = 6;
@@ -175,10 +176,12 @@ async function scanActiveTab() {
 }
 
 async function crawlSite() {
-  els.crawlBtn.disabled = true;
-  els.crawlBtn.textContent = "Crawling";
-  els.crawlState.textContent = "starting";
-  setStatus("Starting crawl...");
+  if (els.crawlBtn) {
+    els.crawlBtn.disabled = true;
+    els.crawlBtn.textContent = "Crawling";
+  }
+  if (els.crawlState) els.crawlState.textContent = "starting";
+  setStatus("Starting Blackboard index...");
   const response = await sendMessage("CRAWL_SITE", {
     max_pages: 1500,
     delay_ms: 120,
@@ -186,11 +189,12 @@ async function crawlSite() {
   });
   if (!response.ok) throw new Error(response.error || "Crawl failed");
   if (response.started) {
-    setStatus("Crawl started. Keep the side panel open for progress.");
-    els.crawlState.textContent = "running";
-    return;
+    setStatus("Indexing started. Keep Blackboard open and stay logged in while it runs.");
+    if (els.crawlState) els.crawlState.textContent = "running";
+    return response;
   }
   await handleCrawlComplete(response);
+  return response;
 }
 
 function crawlSummary(payload) {
@@ -2529,6 +2533,7 @@ function seedIntroMessage(force = false) {
 function introMessageText() {
   return [
     "Hi, I'm Blackboard Search. I can search your locally indexed Blackboard course pages, announcements, linked documents, and PDFs.",
+    "If this is your first time using the extension, log into Blackboard and send /index to build or refresh the local index.",
     "Good questions include deadlines and to-dos, visa or packing guidance, language-study materials, career resources, and where a document lives.",
     "Use /feedback followed by a note to report a bad answer, missing resource, or feature request."
   ].join("\n\n");
@@ -2562,6 +2567,23 @@ function inferIndexedAreas() {
   addIf("career materials", /\b(career|internship|interview|job)\b/);
   addIf("webinars/videos", /\b(webinar|video|recording|transcript)\b/);
   return areas.slice(0, 5);
+}
+
+function isIndexCommand(query) {
+  return /^\/(?:re)?index(?:\s+|$)/i.test(String(query || "").trim());
+}
+
+async function handleIndexCommand() {
+  const pending = appendMessage("assistant", "Starting a fresh Blackboard index. Keep Blackboard open and stay logged in while it runs.");
+  try {
+    const response = await crawlSite();
+    const text = response && response.started
+      ? "Indexing started. Watch the status line at the top for progress. You can ask questions after it finishes."
+      : "Indexing finished. You can ask questions from the refreshed local resources now.";
+    updateMessage(pending, text);
+  } catch (error) {
+    updateMessage(pending, `I could not start indexing: ${readableErrorMessage(error)}`);
+  }
 }
 
 function isFeedbackCommand(query) {
@@ -2604,7 +2626,7 @@ function buildFeedbackIssueUrl(feedback) {
     `Transcripts: ${(state.transcripts || []).length}`,
     `Timestamp: ${new Date().toISOString()}`
   ].join("\n");
-  const url = new URL("https://github.com/GarrettAudet/blackboard-search-extension/issues/new");
+  const url = new URL(`https://github.com/${FEEDBACK_REPO_SLUG}/issues/new`);
   url.searchParams.set("title", title);
   url.searchParams.set("body", body);
   return url.href;
@@ -2623,6 +2645,10 @@ async function handleAsk(event) {
   els.queryInput.value = "";
   const memory = getConversationMemory();
   appendMessage("user", query);
+  if (isIndexCommand(query)) {
+    await handleIndexCommand();
+    return;
+  }
   if (isFeedbackCommand(query)) {
     await handleFeedbackCommand(query);
     setIndexStatusSummary();
@@ -3559,8 +3585,10 @@ async function refreshIndexAndResetChat() {
 function reportError(error) {
   console.error(error);
   setStatus(`Error: ${readableErrorMessage(error)}`);
-  els.crawlBtn.disabled = false;
-  els.crawlBtn.textContent = "Index";
+  if (els.crawlBtn) {
+    els.crawlBtn.disabled = false;
+    els.crawlBtn.textContent = "Index";
+  }
 }
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -3582,21 +3610,25 @@ chrome.runtime.onMessage.addListener((message) => {
     const rawSeen = payload.raw_candidates_seen ?? payload.resources_seen ?? 0;
     const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
     setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; unique resources ${uniqueSeen}${rawText}.`);
-    els.crawlState.textContent = `${payload.pages} pages`;
+    if (els.crawlState) els.crawlState.textContent = `${payload.pages} pages`;
   } else if (payload.status === "complete") {
-    els.crawlState.textContent = "complete";
-    els.crawlBtn.disabled = false;
-    els.crawlBtn.textContent = "Index";
+    if (els.crawlState) els.crawlState.textContent = "complete";
+    if (els.crawlBtn) {
+      els.crawlBtn.disabled = false;
+      els.crawlBtn.textContent = "Index";
+    }
     handleCrawlComplete(payload).catch(reportError);
   } else if (payload.status === "error") {
     const error = payload.error || "unknown crawl error";
     setStatus(`Crawl failed: ${error}`);
-    els.crawlState.textContent = "failed";
-    els.crawlBtn.disabled = false;
-    els.crawlBtn.textContent = "Index";
+    if (els.crawlState) els.crawlState.textContent = "failed";
+    if (els.crawlBtn) {
+      els.crawlBtn.disabled = false;
+      els.crawlBtn.textContent = "Index";
+    }
   } else if (payload.status === "started") {
     setStatus("Crawl started.");
-    els.crawlState.textContent = "running";
+    if (els.crawlState) els.crawlState.textContent = "running";
   }
   return false;
 });
@@ -3616,8 +3648,10 @@ els.crawlBtn.addEventListener("click", () =>
   crawlSite()
     .catch(reportError)
     .finally(() => {
-      els.crawlBtn.disabled = false;
-      els.crawlBtn.textContent = "Index";
+      if (els.crawlBtn) {
+        els.crawlBtn.disabled = false;
+        els.crawlBtn.textContent = "Index";
+      }
     })
 );
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));

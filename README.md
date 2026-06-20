@@ -8,7 +8,7 @@ The launch version on `main` is intentionally focused on text and document searc
 
 ![Blackboard Search Extension demo](docs/demo/blackboard-search-demo.gif)
 
-The demo shows the core flow: ask a question, get an answer grounded in indexed Blackboard resources, expand the source list, and open the underlying source.
+The extension-only demo shows the core flow: ask a question, get an answer grounded in indexed Blackboard resources, expand the source list, and open the underlying source.
 
 ## What It Does
 
@@ -18,7 +18,8 @@ The demo shows the core flow: ask a question, get an answer grounded in indexed 
 - Lets the user choose OpenAI, DeepSeek, or OpenRouter and save their own API key locally.
 - Retrieves relevant snippets first, then sends only the question and matched snippets to the selected API provider.
 - Shows expandable sources so users can inspect where an answer came from.
-- Supports `/feedback <message>` to open a pre-filled GitHub issue for bugs, missing resources, or bad answers.
+- Supports `/index` to refresh the local Blackboard index from chat.
+- Supports `/feedback <message>` to open a pre-filled private-repo GitHub issue for bugs, missing resources, or bad answers.
 
 ## What It Does Not Do
 
@@ -36,10 +37,26 @@ The demo shows the core flow: ask a question, get an answer grounded in indexed 
 5. Select the repo folder, for example `C:\repos\BlackboardSearchExtension`.
 6. Open Blackboard and log in normally.
 7. Open the extension side panel.
-8. Add your API provider, model, and API key in **Setup**.
-9. Ask questions from your indexed Blackboard resources.
+8. Send `/index` after logging into Blackboard to build the local resource index.
+9. Add your API provider, model, and API key in **Setup**.
+10. Ask questions from your indexed Blackboard resources.
 
 If you pull updates from GitHub, reload the extension on `chrome://extensions` before using it again.
+
+## Chat Commands
+
+```text
+/index
+```
+
+Builds or refreshes the local Blackboard index. Use this after first install, after Blackboard content changes, or when a source seems missing.
+
+```text
+/feedback <your note>
+```
+
+Opens a pre-filled GitHub issue for bug reports, missing resources, or bad answers. The configured target is `GarrettAudet/blackboard-search-extension-feedback`, which should remain private if you want feedback collected outside the public extension repo. Users need access to that private repo to submit the issue; do not embed a GitHub token in the extension.
+
 
 ## Recommended Models
 
@@ -90,8 +107,11 @@ Before publishing to the Chrome Web Store:
 - Keep `main` focused on the production feature set.
 - Verify the manifest name, description, permissions, and version.
 - Reload the unpacked extension and test a clean install.
-- Confirm API setup, a normal question, source expansion, source opening, and `/feedback` behavior.
+- Run `node scripts\prepublish-check.mjs`.
+- Confirm API setup, `/index`, a normal question, source expansion, source opening, and `/feedback` behavior.
 - Package the `main` branch as the extension zip.
+
+See [docs/testing.md](docs/testing.md) for the full publish and merge checklist.
 
 ## Development
 

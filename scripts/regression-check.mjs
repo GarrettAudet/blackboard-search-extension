@@ -356,13 +356,14 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
 delete state.contentStore["packing-pdf"];
 const feedbackIssueUrl = buildFeedbackIssueUrl("The packing answer missed medications.");
 const introText = introMessageText();
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText };
+const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -476,10 +477,13 @@ if (!strippedLinkAnswer.includes("These resources help students study Chinese [1
   throw new Error(`Answer cleanup should preserve the actual answer text and citations.\n\n${strippedLinkAnswer}`);
 }
 
-if (!/github\.com\/GarrettAudet\/blackboard-search-extension\/issues\/new/.test(feedbackIssueUrl) || !/The\+packing\+answer\+missed\+medications/.test(feedbackIssueUrl)) {
-  throw new Error(`Expected feedback command to build a pre-filled GitHub issue URL.\n\n${feedbackIssueUrl}`);
+if (!/github\.com\/GarrettAudet\/blackboard-search-extension-feedback\/issues\/new/.test(feedbackIssueUrl) || !/The\+packing\+answer\+missed\+medications/.test(feedbackIssueUrl)) {
+  throw new Error(`Expected feedback command to build a pre-filled private-repo GitHub issue URL.\n\n${feedbackIssueUrl}`);
 }
-if (/Current index:|resources indexed|Transcript groups include/i.test(introText) || !/\/feedback/.test(introText)) {
-  throw new Error(`Intro text should be friendly and avoid internal index dumps.\n\n${introText}`);
+if (!indexCommandChecks.every(Boolean)) {
+  throw new Error(`Expected /index and /reindex to be recognized without treating normal index questions as commands.\n\n${JSON.stringify(indexCommandChecks)}`);
+}
+if (/Current index:|resources indexed|Transcript groups include/i.test(introText) || !/\/feedback/.test(introText) || !/\/index/.test(introText)) {
+  throw new Error(`Intro text should be friendly, mention /index and /feedback, and avoid internal index dumps.\n\n${introText}`);
 }
 console.log("regression-check passed");
