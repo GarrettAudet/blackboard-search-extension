@@ -19,7 +19,7 @@ The extension-only demo shows the core flow: ask a question, get an answer groun
 - Retrieves relevant snippets first, then sends only the question and matched snippets to the selected API provider.
 - Shows expandable sources so users can inspect where an answer came from.
 - Supports `/index` to refresh the local Blackboard index from chat.
-- Supports `/feedback <message>` to open a configured feedback form for bugs, missing resources, or bad answers.
+- Supports `/feedback` to open a configured two-question feedback form.
 
 ## What It Does Not Do
 
@@ -52,27 +52,46 @@ If you pull updates from GitHub, reload the extension on `chrome://extensions` b
 Builds or refreshes the local Blackboard index. Use this after first install, after Blackboard content changes, or when a source seems missing.
 
 ```text
-/feedback <your note>
+/feedback [optional note]
 ```
 
-Opens the configured feedback form with the user's note and basic extension context attached. If no form URL is configured, the extension tells the user to send the note directly to the maintainer.
+Opens the configured feedback form. If the user includes a note after `/feedback`, the extension pre-fills the first form question with that note. If no form URL is configured, the extension explains that feedback collection is not live yet.
 
 ## Feedback Form Setup
 
-Create a lightweight form in Google Forms, Tally, Airtable Forms, or a similar service. Then set these constants near the top of `sidepanel/sidepanel.js` before packaging the extension:
+Create a lightweight form in Google Forms, Tally, Airtable Forms, or a similar service.
+
+Recommended title:
+
+```text
+Blackboard Search Feedback
+```
+
+Recommended visible questions:
+
+```text
+Suggestions for the bot
+```
+
+```text
+Any other issues you're experiencing that software could help with?
+```
+
+Then set these constants near the top of `sidepanel/sidepanel.js` before packaging the extension:
 
 ```js
 const FEEDBACK_FORM_URL = "https://your-form-url";
 const FEEDBACK_FORM_FIELD_MAP = {
-  feedback: "feedback",
-  version: "version",
-  resources: "resources",
+  suggestions: "suggestions_for_bot",
+  otherIssues: "other_issues_or_software_needs",
+  version: "extension_version",
+  resources: "indexed_resources",
   searchableBodies: "searchable_bodies",
-  timestamp: "timestamp"
+  timestamp: "submitted_at"
 };
 ```
 
-Tally-style hidden fields can use readable names like `feedback`. Google Forms prefilled links use `entry.<id>` field names, so update `FEEDBACK_FORM_FIELD_MAP` with the relevant entry IDs. Do not embed GitHub tokens, API tokens, or private write credentials in the extension.
+Tally-style hidden fields can use readable names like `suggestions_for_bot`. Google Forms prefilled links use `entry.<id>` field names, so update `FEEDBACK_FORM_FIELD_MAP` with the relevant entry IDs for both visible questions and any optional metadata fields. Do not embed GitHub tokens, API tokens, or private write credentials in the extension.
 
 ## Recommended Models
 

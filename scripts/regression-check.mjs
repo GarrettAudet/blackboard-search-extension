@@ -358,7 +358,8 @@ const feedbackFormUrl = buildFeedbackFormUrl(
   "The packing answer missed medications.",
   "https://example.com/feedback?source=extension",
   {
-    feedback: "note",
+    suggestions: "bot_suggestions",
+    otherIssues: "software_issues",
     version: "version",
     resources: "resource_count",
     searchableBodies: "searchable_bodies",
@@ -488,7 +489,7 @@ if (!strippedLinkAnswer.includes("These resources help students study Chinese [1
   throw new Error(`Answer cleanup should preserve the actual answer text and citations.\n\n${strippedLinkAnswer}`);
 }
 
-if (!/example\.com\/feedback/.test(feedbackFormUrl) || !/note=The\+packing\+answer\+missed\+medications/.test(feedbackFormUrl) || !/version=test-version/.test(feedbackFormUrl) || !/resource_count=/.test(feedbackFormUrl) || !/searchable_bodies=/.test(feedbackFormUrl) || !/sent_at=/.test(feedbackFormUrl)) {
+if (!/example\.com\/feedback/.test(feedbackFormUrl) || !/bot_suggestions=The\+packing\+answer\+missed\+medications/.test(feedbackFormUrl) || !/software_issues=/.test(feedbackFormUrl) || !/version=test-version/.test(feedbackFormUrl) || !/resource_count=/.test(feedbackFormUrl) || !/searchable_bodies=/.test(feedbackFormUrl) || !/sent_at=/.test(feedbackFormUrl)) {
   throw new Error(`Expected feedback command to build a pre-filled feedback form URL with context.\n\n${feedbackFormUrl}`);
 }
 if (unconfiguredFeedbackFormUrl !== "") {

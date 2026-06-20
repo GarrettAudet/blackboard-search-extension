@@ -21,7 +21,7 @@ This verifies:
 - PDF/document readiness fails closed when file body text is unreadable.
 - Citation numbering stays compact with no gaps.
 - Raw Blackboard URL sections are stripped from main answers.
-- `/feedback` builds a pre-filled feedback form URL when configured.
+- `/feedback` builds a two-question feedback form URL when configured.
 - `/index` and `/reindex` are treated as commands.
 
 ## Clean Install Smoke Test
@@ -61,7 +61,7 @@ For each answer, verify:
 
 ## Feedback Test
 
-Before packaging, set `FEEDBACK_FORM_URL` in `sidepanel/sidepanel.js` if you want live feedback collection. For Google Forms, also set the `FEEDBACK_FORM_FIELD_MAP` values to the form's `entry.<id>` field names.
+Before packaging, create the feedback form and set FEEDBACK_FORM_URL in sidepanel/sidepanel.js. The form should have two visible questions: Suggestions for the bot and Any other issues you're experiencing that software could help with?. For Google Forms, also set the FEEDBACK_FORM_FIELD_MAP values to the form's entry.<id> field names.
 
 Send:
 
@@ -71,9 +71,10 @@ Send:
 
 Expected behavior:
 
-- If configured, the extension opens the feedback form with the note and metadata attached.
+- If configured, `/feedback` opens the feedback form.
+- If configured, `/feedback Test feedback from launch QA` opens the form with the first question prefilled.
 - Metadata includes extension version, indexed resource count, searchable body count, and timestamp.
-- If no form URL is configured, the extension tells the user to send the note directly to the maintainer.
+- If no form URL is configured, the extension explains that feedback collection is not live yet and shows the intended form questions.
 - No private write tokens or GitHub tokens are embedded in the extension.
 
 ## Video Branch Merge Gate

@@ -1,11 +1,12 @@
 const SETTINGS_KEY = "assistant_settings";
 const FEEDBACK_FORM_URL = "";
 const FEEDBACK_FORM_FIELD_MAP = {
-  feedback: "feedback",
-  version: "version",
-  resources: "resources",
+  suggestions: "suggestions_for_bot",
+  otherIssues: "other_issues_or_software_needs",
+  version: "extension_version",
+  resources: "indexed_resources",
   searchableBodies: "searchable_bodies",
-  timestamp: "timestamp"
+  timestamp: "submitted_at"
 };
 const MAX_CONTENT_CHARS = 20000;
 const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
@@ -2542,7 +2543,7 @@ function introMessageText() {
     "Hi, I'm Blackboard Search. I can search your locally indexed Blackboard course pages, announcements, linked documents, and PDFs.",
     "If this is your first time using the extension, log into Blackboard and send /index to build or refresh the local index.",
     "Good questions include deadlines and to-dos, visa or packing guidance, language-study materials, career resources, and where a document lives.",
-    "Use /feedback followed by a note to report a bad answer, missing resource, or feature request."
+    "Use /feedback to open the feedback form. Add a note after the command to prefill it."
   ].join("\n\n");
 }
 
@@ -2553,7 +2554,7 @@ function summarizeAvailableTopics() {
     ? "I can search the Blackboard material currently indexed in this browser: course pages, announcements, linked files, and PDFs."
     : "I can search Blackboard course pages, announcements, linked files, and PDFs once the local index has material.";
   const areaText = areas.length ? `Indexed areas I can see include ${areas.join(", ")}.` : "Useful topics usually include deadlines, to-dos, arrival prep, visas, packing, language study, career materials, and resource locations.";
-  return `${intro}\n\n${areaText}\n\nUse /feedback <your note> to report a bad answer or missing resource.`;
+  return `${intro}\n\n${areaText}\n\nUse /feedback to open the feedback form, or add a note after the command to prefill it.`;
 }
 
 function inferIndexedAreas() {
@@ -2598,22 +2599,21 @@ function isFeedbackCommand(query) {
 }
 
 async function handleFeedbackCommand(query) {
-  const feedback = String(query || "").replace(/^\/feedback\s*/i, "").trim();
-  if (!feedback) {
-    appendMessage("assistant", "Use /feedback followed by your note, for example: /feedback The packing answer missed medications.");
-    return;
-  }
+  const suggestions = String(query || "").replace(/^\/feedback\s*/i, "").trim();
 
   let formUrl = "";
   try {
-    formUrl = buildFeedbackFormUrl(feedback);
+    formUrl = buildFeedbackFormUrl(suggestions);
   } catch (error) {
     appendMessage("assistant", "The feedback form is misconfigured. Please tell the maintainer to check FEEDBACK_FORM_URL in the extension code.");
     return;
   }
 
   if (!formUrl) {
-    appendMessage("assistant", `Feedback form is not configured yet. For now, send this note directly to the extension maintainer:\n\n${feedback}`);
+    appendMessage(
+      "assistant",
+      "Feedback form is not configured yet. The launch form should ask:\n\n1. Suggestions for the bot\n2. Any other issues you're experiencing that software could help with"
+    );
     return;
   }
 
@@ -2623,16 +2623,17 @@ async function handleFeedbackCommand(query) {
     } else {
       window.open(formUrl, "_blank", "noopener");
     }
-    appendMessage("assistant", "Thanks - I opened the feedback form with your note attached.");
+    appendMessage("assistant", suggestions ? "Thanks - I opened the feedback form with your suggestion attached." : "Thanks - I opened the feedback form.");
   } catch (error) {
     appendMessage("assistant", `Thanks - I could not open the feedback form automatically, but you can submit it here:\n${formUrl}`);
   }
 }
 
-function feedbackPayload(feedback) {
+function feedbackPayload(suggestions) {
   const manifestVersion = chrome?.runtime?.getManifest ? chrome.runtime.getManifest().version : "unknown";
   return {
-    feedback: String(feedback || "").trim(),
+    suggestions: String(suggestions || "").trim(),
+    otherIssues: "",
     version: manifestVersion,
     resources: String((state.resources || []).length),
     searchableBodies: String(Object.keys(state.contentStore || {}).length),
