@@ -3,7 +3,8 @@ import vm from "node:vm";
 
 const modulePaths = [
   new URL("../lib/answer-formatting.js", import.meta.url),
-  new URL("../lib/llm-client.js", import.meta.url)
+  new URL("../lib/llm-client.js", import.meta.url),
+  new URL("../lib/search-index.js", import.meta.url)
 ];
 const moduleSource = modulePaths.map((path) => fs.readFileSync(path, "utf8")).join("\n\n");
 const sidepanelPath = new URL("../sidepanel/sidepanel.js", import.meta.url);
