@@ -24,13 +24,6 @@
         </span>
       </button>
       <nav class="header-icons" aria-label="Tools">
-        <button id="transcriptsViewBtn" class="tool-button" title="Library" type="button" aria-label="Library">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Z" />
-            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20" />
-            <path d="M7 19V3" />
-          </svg>
-        </button>
         <button id="refreshBtn" class="tool-button" title="Refresh index" type="button" aria-label="Refresh index">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20 11a8 8 0 1 0-2.34 5.66" />
@@ -50,8 +43,6 @@
       <section id="chatView" class="view active" aria-label="Assistant chat">
         <div class="stats-strip" aria-label="Index statistics">
           <span><strong id="resourceCount">0</strong> resources</span>
-          <span><strong id="videoCount">0</strong> videos</span>
-          <span><strong id="transcriptCount">0</strong> transcripts</span>
         </div>
 
         <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
@@ -93,17 +84,9 @@
             <label for="apiKeyInput">API key</label>
             <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Stored locally in Chrome" />
 
-            <label for="autoTranscribeInput">Auto-transcribe</label>
-            <label class="checkbox-row">
-              <input id="autoTranscribeInput" type="checkbox" />
-              <span>Transcribe detected direct media in memory; store only the transcript.</span>
-            </label>
-
             <p class="setup-note">
-              API answering sends your question and the top matched Blackboard snippets/transcript segments to the
-              selected provider. For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.
-              Video transcription currently uses OpenAI audio transcription, so select OpenAI before transcribing
-              detected videos.
+              API answering sends your question and the top matched Blackboard snippets to the selected provider.
+              For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.
             </p>
 
             <button id="saveSettingsBtn" type="button">Save setup</button>
@@ -111,10 +94,10 @@
             <div class="button-row setup-actions developer-maintenance" hidden>
               <button id="crawlBtn" type="button" title="Reindex Blackboard courses and organizations">Reindex Blackboard</button>
               <button id="scanBtn" class="secondary" type="button" title="Scan the current Blackboard page">Scan current page</button>
-              <button id="restoreDismissedBtn" class="secondary" type="button" title="Clear dismissed media ignores from this browser">Restore dismissed media</button>
+              <button id="restoreDismissedBtn" class="secondary" type="button" title="Restore hidden crawler ignores from this browser">Restore hidden items</button>
               <button id="clearBtn" class="secondary" type="button" title="Clear the local index">Clear index</button>
             </div>
-            <p id="maintenanceState" class="setup-note developer-maintenance" hidden>Reindex from Blackboard after logging in, or restore dismissed media if a prior dismiss hid too many videos.</p>
+            <p id="maintenanceState" class="setup-note developer-maintenance" hidden>Reindex from Blackboard after logging in if the local index looks stale.</p>
             <div class="button-row setup-actions developer-maintenance" hidden>
               <button id="ragAuditBtn" class="secondary" type="button" title="Audit indexed text and document extraction quality">Audit RAG</button>
             </div>
@@ -122,52 +105,6 @@
           </div>
         </section>
 
-      </section>
-
-      <section id="transcriptsView" class="view" aria-label="Library">
-        <section class="panel library-panel">
-          <div class="panel-heading library-heading">
-            <div class="library-heading-copy">
-              <h2>Library</h2>
-              <span id="videoStatus"></span>
-            </div>
-            <button id="importBtn" type="button" title="Import transcript JSON">Import</button>
-          </div>
-          <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
-          <p id="crawlState" class="panel-note">Import prepared transcript JSON. Use the header refresh button to reload the local index and reset chat memory.</p>
-
-          <section id="missingVideoSection" class="library-section">
-            <div class="library-section-heading">
-              <h3>Videos Needing Transcripts</h3>
-              <span id="transcriptionStatus">idle</span>
-            </div>
-            <div class="button-row compact-actions">
-              <button id="transcribeAllBtn" type="button" title="Transcribe available direct media">Transcribe all</button>
-            </div>
-            <div id="missingVideoList" class="missing-video-list"></div>
-          </section>
-
-          <section id="detectedMediaSection" class="library-section">
-            <div class="library-section-heading">
-              <h3>Detected Media</h3>
-              <span id="detectedMediaStatus">play a video to detect media</span>
-            </div>
-            <div class="button-row compact-actions">
-              <button id="transcribeDetectedAllBtn" type="button" title="Transcribe all detected direct media">Transcribe all</button>
-              <button id="importDetectedCaptionsBtn" class="secondary" type="button" title="Import detected caption tracks">Captions</button>
-            </div>
-            <p class="panel-note">Only detected captions and direct media that can become searchable transcripts are shown here.</p>
-            <div id="detectedMediaList" class="missing-video-list"></div>
-          </section>
-
-          <section class="library-section">
-            <div class="library-section-heading">
-              <h3>Transcribed Resources</h3>
-              <span id="transcribedStatus">none yet</span>
-            </div>
-            <div id="transcriptGroups" class="transcript-groups"></div>
-          </section>
-        </section>
       </section>
     </main>
 
