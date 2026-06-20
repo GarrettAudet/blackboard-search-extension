@@ -2297,16 +2297,17 @@ async function handleAsk(event) {
     results = searchIndex(retrievalQuery);
   }
 
-  const directAnswer = buildDirectAnswer(query, results);
+  const answerSources = prepareAnswerSources(results, retrievalQuery);
+  const directAnswer = buildDirectAnswer(query, answerSources);
   if (directAnswer) {
-    appendMessage("assistant", directAnswer.text, directAnswer.sources);
+    appendMessage("assistant", directAnswer.text, prepareAnswerSources(directAnswer.sources || answerSources, retrievalQuery));
     rememberTurn(query, directAnswer.text);
     return;
   }
-  const localAnswer = buildLocalAnswer(query, results, retrievalQuery);
+  const localAnswer = buildLocalAnswer(query, answerSources, retrievalQuery);
 
-  if (!shouldUseLlm(query, results)) {
-    appendMessage("assistant", localAnswer, results);
+  if (!shouldUseLlm(query, answerSources)) {
+    appendMessage("assistant", localAnswer, answerSources);
     rememberTurn(query, localAnswer);
     return;
   }
@@ -2315,12 +2316,12 @@ async function handleAsk(event) {
   els.searchBtn.classList.add("is-loading");
   const pending = appendMessage("assistant", "Reading the top local matches and asking the selected API...");
   try {
-    const answer = await buildApiAnswer(query, results, memory, retrievalQuery);
-    updateMessage(pending, answer, results);
+    const answer = await buildApiAnswer(query, answerSources, memory, retrievalQuery);
+    updateMessage(pending, answer, answerSources);
     rememberTurn(query, answer);
   } catch (error) {
     const fallback = `${localAnswer}\n\nAPI call failed: ${error && error.message ? error.message : String(error)}`;
-    updateMessage(pending, fallback, results);
+    updateMessage(pending, fallback, answerSources);
     rememberTurn(query, fallback);
   } finally {
     els.searchBtn.disabled = false;
@@ -2357,6 +2358,55 @@ function diversifySearchResults(scored, query) {
     selected.push(doc);
   }
   return selected;
+}
+
+function prepareAnswerSources(results, query = "") {
+  const wantsVideo = wantsVideoHeavySearch(query);
+  const selected = [];
+  const seen = new Set();
+  for (const result of results || []) {
+    if (!result || result.score <= 0) continue;
+    if (isLowValueSearchResult(result)) continue;
+    if (!wantsVideo && isVideoResultKind(result.kind)) continue;
+    const key = sourceDedupeKey(result);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(result);
+    if (selected.length >= 8) break;
+  }
+  return selected;
+}
+
+function isLowValueSearchResult(result) {
+  const title = normalizeText(cleanSourceTitle(result));
+  const source = normalizeText(compactSourceTrail(result));
+  if (/^(quick links?|open quick links?|tabs|notifications dashboard)$/.test(title)) return true;
+  if (title === "quick links" || /open quick links|notifications dashboard|my institution/.test(source)) return true;
+  return false;
+}
+
+function sourceDedupeKey(result) {
+  const url = normalizeSourceUrl(result.url || "");
+  const title = normalizeText(cleanSourceTitle(result));
+  const source = normalizeText(compactSourceTrail(result));
+  const text = normalizeText(result.text || "").slice(0, 180);
+  if (title && source) return `source:${title}|${source}`;
+  if (title && text) return `title:${title}|${text}`;
+  if (url) return `url:${url}|${title}`;
+  return `text:${title}|${source}|${text}`;
+}
+
+function normalizeSourceUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    ["session", "cache", "nonce", "token", "auth", "one_hash", "x-bb-session", "download", "mode"].forEach((key) =>
+      parsed.searchParams.delete(key)
+    );
+    parsed.hash = "";
+    return parsed.href.toLowerCase();
+  } catch (_error) {
+    return String(value || "").split(/[?#]/)[0].replace(/\/+$/g, "").toLowerCase();
+  }
 }
 
 function wantsVideoHeavySearch(query) {
@@ -2813,7 +2863,7 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
         "Do not include a separate Sources section; the interface shows sources separately. " +
         "Keep the answer complete but compact. Prefer the most relevant details over exhaustive lists. " +
         "Do not say downloaded. Refer to materials as indexed Blackboard resources or imported transcripts. " +
-        "Use concise prose and cite sources like [1], [2]."
+        "Use concise prose and cite only source IDs listed below. Separate adjacent citations with comma-space, like [1], [2], never [1][2]."
     },
     {
       role: "user",
@@ -2829,9 +2879,25 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
     model: state.settings.model || defaultModel(state.settings.provider),
     messages
   });
-  return stripInlineSourcesSection(response.trim());
+  return cleanAnswerText(response, context.length);
 }
 
+function cleanAnswerText(value, sourceCount = 0) {
+  let text = stripInlineSourcesSection(String(value || "").trim());
+  text = text.replace(/\]\s*\[/g, "], [");
+  if (sourceCount > 0) {
+    text = text.replace(/\[(\d+)\]/g, (match, numberText) => {
+      const number = Number.parseInt(numberText, 10);
+      return number >= 1 && number <= sourceCount ? match : "";
+    });
+  }
+  return text
+    .replace(/\s+,/g, ",")
+    .replace(/\s+\./g, ".")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 async function callChatCompletion({ provider, apiKey, model, messages }) {
   const config = providerConfig(provider, apiKey);
   const response = await fetch(config.url, {
