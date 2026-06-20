@@ -136,24 +136,34 @@ button.secondary {
 }
 
 .brand-icon {
-  width: 22px;
-  height: 22px;
+  width: 25px;
+  height: 25px;
 }
 
-.brand-icon-book {
-  fill: rgba(255, 255, 255, 0.18);
-  stroke: rgba(255, 255, 255, 0.92);
+.brand-icon-page {
+  fill: rgba(255, 255, 255, 0.2);
+  stroke: rgba(255, 255, 255, 0.94);
   stroke-linejoin: round;
-  stroke-width: 1.45;
+  stroke-width: 1.85;
+}
+
+.brand-icon-page-back {
+  opacity: 0.45;
+  transform: translate(2px, 2px);
 }
 
 .brand-icon-line,
-.brand-icon-search {
+.brand-icon-lens,
+.brand-icon-handle {
   fill: none;
   stroke: #fff;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.65;
+  stroke-width: 2.15;
+}
+
+.brand-icon-lens {
+  fill: rgba(12, 10, 20, 0.16);
 }
 
 .app-title {
@@ -316,9 +326,9 @@ main {
 .send-button {
   display: grid;
   place-items: center;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
   padding: 0;
   border-radius: 50%;
   background: linear-gradient(145deg, #7c3aed, #9b72ff);
@@ -326,8 +336,8 @@ main {
 }
 
 .send-button svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: #fff;
   stroke-linecap: round;
