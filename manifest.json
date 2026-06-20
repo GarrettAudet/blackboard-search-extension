@@ -2,19 +2,19 @@
   "manifest_version": 3,
   "name": "Blackboard Search Extension",
   "version": "1.0.0",
-  "description": "Integrated Blackboard crawling, resource search, transcript search, and API-powered Q&A.",
-  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "tabs", "unlimitedStorage", "webRequest"],
+  "description": "Local Blackboard resource search and API-powered Q&A.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "sidePanel",
+    "storage",
+    "tabs",
+    "unlimitedStorage"
+  ],
   "host_permissions": [
     "https://lms.sc.tsinghua.edu.cn/*",
     "https://*.tsinghua.edu.cn/*",
     "https://*.blackboard.com/*",
-    "https://*.bbcollab.com/*",
-    "https://*.kaltura.com/*",
-    "https://*.panopto.com/*",
-    "https://*.echo360.org/*",
-    "https://*.echo360.com/*",
-    "https://*.yuja.com/*",
-    "https://*.mediasite.com/*",
     "https://openrouter.ai/*",
     "https://api.openai.com/*",
     "https://api.deepseek.com/*"
@@ -24,8 +24,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://lms.sc.tsinghua.edu.cn/*", "https://*.blackboard.com/*"],
-      "js": ["content/scraper.js"],
+      "matches": [
+        "https://lms.sc.tsinghua.edu.cn/*",
+        "https://*.blackboard.com/*"
+      ],
+      "js": [
+        "content/scraper.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

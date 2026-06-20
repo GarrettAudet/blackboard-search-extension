@@ -1,184 +1,103 @@
 # Blackboard Search Extension
 
-Blackboard Search Extension is an independent local Chrome extension for
-crawling Blackboard, searching resources, importing video transcripts, and
-answering questions with a user-provided API key. It is not a fork of another
-extension. It follows the same general personal-search pattern: each user logs
-into Blackboard in Chrome, the extension indexes what their browser can already
-see, and everything stays in the user's browser storage except the matched
-snippets sent to the selected API provider for synthesized answers.
+Blackboard Search Extension is a local Chrome extension that lets students search the Blackboard resources their own logged-in browser can already access. It indexes Blackboard pages and downloadable course files, then uses a user-provided API key to answer questions from the matched sources.
 
-This repo is intentionally separate from the WhatsApp bot. The extension can be
-used as a standalone personal search tool or as an admin ingestion helper for
-preparing transcript/index data.
+The launch version on `main` is intentionally focused on text and document search. Video transcript detection and transcription work lives on the `video-functionality` branch until it is reliable enough to merge.
+
+## Demo
+
+![Blackboard Search Extension demo](docs/demo/blackboard-search-demo.gif)
+
+The demo shows the core flow: ask a question, get an answer grounded in indexed Blackboard resources, expand the source list, and open the underlying source.
 
 ## What It Does
 
-- Scans the active Blackboard tab for pages, links, files, embedded videos, and
-  MP4/audio resources.
-- Crawls nested Blackboard pages under an allowed URL prefix so course folders
-  and subfolders can be indexed without clicking every page manually.
-- Stores the local resource index in Chrome storage.
-- Stores extracted webpage/document body text in a separate local
-  `content_store` so search ranks actual content chunks, not just filenames or
-  link cards.
-- Extracts searchable text from Blackboard webpages, PDFs, DOCX, PPTX, XLSX,
-  and imported transcript segments when available.
-- Lets the user import a prepared transcript JSON bundle.
-- Automatically attaches transcripts to discovered videos when titles, URLs, or
-  source hints match.
-- Watches Tsinghua-hosted video-player network requests after the user presses play, detects caption files, manifests, and direct media candidates, and imports detected captions when available.
-- Shows detected videos that do not have transcripts and can transcribe direct
-  audio/video files through OpenAI. Large audio files use byte chunks when safe;
-  large MP4/WebM/M4A files use Chrome audio extraction into WAV chunks when the
-  browser can decode them, then cache the searchable transcript locally.
-- Searches normal resources and video transcript segments together in a chat-like
-  local retrieval view.
-- Includes a setup screen for OpenAI, DeepSeek, or OpenRouter API settings.
-  OpenRouter users can specify the exact sub-model in the model field.
+- Crawls the Blackboard areas available to the signed-in user.
+- Indexes Blackboard pages, announcements, links, PDFs, and common Office documents when readable in Chrome.
+- Stores the searchable index locally in Chrome storage.
+- Lets the user choose OpenAI, DeepSeek, or OpenRouter and save their own API key locally.
+- Retrieves relevant snippets first, then sends only the question and matched snippets to the selected API provider.
+- Shows expandable sources so users can inspect where an answer came from.
+- Supports `/feedback <message>` to open a pre-filled GitHub issue for bugs, missing resources, or bad answers.
 
-## What It Does Not Do Yet
+## What It Does Not Do
 
-- It does not bypass DRM, expiring access controls, or Blackboard permissions. If an embedded player only exposes encrypted/segmented media and no caption file, import a prepared transcript JSON bundle instead.
-- It does not upload course content or transcripts to a shared backend.
-- It only sees pages and video requests the user's logged-in browser can already access.
+- It does not bypass Blackboard permissions or login requirements.
+- It does not upload the full Blackboard corpus to a shared server.
+- It does not include production video transcription on `main`; that work is isolated in `video-functionality`.
+- It is not affiliated with Blackboard, Tsinghua University, or Schwarzman Scholars.
 
-## User Flow
+## Install Locally
 
-1. Install the extension locally:
-   - Open `chrome://extensions`.
-   - Enable Developer mode.
-   - Click Load unpacked.
-   - Select this repo folder: `C:\repos\BlackboardSearchExtension`.
-2. Open Blackboard and log in normally.
-3. Open the extension side panel.
-4. Click `Library`, then `Index Blackboard`.
-   - Crawling starts from the Blackboard portal page and looks for links under
-     `My Courses`.
-   - Course links are crawled first, then sub-links, resource pages, embedded
-     videos, and file links inside those course areas are indexed.
-   - The default crawl limit is fixed at 1500 pages.
-5. Use `Scan Current Page` for a quick one-page refresh when needed.
-6. Search the indexed resources.
-7. If videos are found, open `Library`.
-   - Open a video and press play. The `Detected Media` panel watches for caption files, media manifests, and direct media requests.
-   - Caption files are imported automatically when available; the `Import captions` button retries pending caption imports.
-   - Videos without transcripts appear under `Videos Needing Transcripts`.
-   - Select OpenAI in Setup and save an API key to use `Transcribe` or
-     `Transcribe All` for direct audio/video files.
-   - Or click `Import Transcripts` and select a prepared JSON transcript bundle.
-8. Future searches include transcript segments instantly. The MP4 does not need
-   to be transcribed again.
+1. Download or clone this repo.
+2. Open `chrome://extensions` in Chrome.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the repo folder, for example `C:\repos\BlackboardSearchExtension`.
+6. Open Blackboard and log in normally.
+7. Open the extension side panel.
+8. Add your API provider, model, and API key in **Setup**.
+9. Ask questions from your indexed Blackboard resources.
 
-## API Setup
+If you pull updates from GitHub, reload the extension on `chrome://extensions` before using it again.
 
-The setup screen stores the selected provider, model, and API key in local Chrome
-storage. The chat retrieves top local Blackboard matches first, then sends the
-user's question plus those matched snippets/transcript segments to the selected
-provider for a synthesized answer.
+## Recommended Models
 
-Supported providers:
+OpenAI:
 
-- OpenAI: use an OpenAI model name such as `gpt-4.1-mini`.
-- DeepSeek: use a DeepSeek model name such as `deepseek-chat`.
-- OpenRouter: use an OpenRouter route or sub-model, such as `openrouter/auto`,
-  `openai/gpt-4.1-mini`, or `deepseek/deepseek-chat`.
+```text
+gpt-4.1-mini
+```
 
-Video transcription currently uses OpenAI audio transcription. The extension
-fetches detected media with the user's logged-in Blackboard session, sends the
-media to OpenAI, checks that the returned transcript looks usable, and stores
-the resulting searchable transcript locally. OpenAI audio uploads have a file
-size ceiling, so large direct audio files are split into roughly 20 MB chunks
-when the server supports browser byte-range requests. For large MP4/WebM/M4A
-containers, the extension tries to download the media in memory, asks Chrome to
-extract the audio track, encodes roughly 8-minute mono WAV chunks, transcribes
-those chunks, and merges returned segment timestamps into one transcript. It
-does not save the source video file.
+DeepSeek:
+
+```text
+deepseek-chat
+```
+
+OpenRouter examples:
+
+```text
+openai/gpt-4.1-mini
+deepseek/deepseek-chat
+openrouter/auto
+```
 
 ## Search Architecture
 
-The extension keeps two local indexes:
+The extension keeps local browser-side indexes:
 
-- `resource_index`: lightweight inventory metadata such as title, URL, type,
-  section, and page title.
-- `content_store`: full searchable body text keyed by resource id. Blackboard
-  pages are stored here during crawl/scan. PDFs and Office files are fetched
-  with the user's logged-in session and parsed locally in Chrome when possible.
+- `resource_index`: lightweight metadata such as title, URL, type, section, and page title.
+- `content_store`: extracted searchable text from pages and readable documents.
 
-The chat builds itemized retrieval chunks from `content_store` and imported
-transcript segments, scores those chunks against the user's question, and sends
-only the top relevant chunks to the selected API provider.
+When a user asks a question, the extension ranks local chunks, sends the best matches to the selected API provider, and displays the answer with source cards. The source cards are part of the answer review loop: users should be able to verify the exact Blackboard page or document used.
 
-## Video Transcript Workflow
+## Privacy
 
-The extension treats transcript creation as a one-time preparation step:
+The Blackboard index and settings are stored in local Chrome storage. API keys are saved locally by the extension. When API answering is enabled, the extension sends the user's question and top matched snippets to the selected provider. It does not send the full local index by default.
 
-```text
-Open/play a Blackboard video
--> detect caption files, media manifests, and direct media requests
--> import captions automatically when exposed by the player
--> if direct media is exposed, click Transcribe or auto-transcribe with OpenAI
--> for large direct audio files, fetch/transcribe byte-range chunks when supported
--> for large MP4/WebM/M4A files, extract audio in Chrome and transcribe WAV chunks when possible
--> quality-check and merge transcript segments
--> store transcript locally in Chrome and discard the in-memory media blob/chunks
--> transcript is cached locally and searched forever
-```
+## Branch Strategy
 
-For embedded players that expose captions, the extension imports those captions instead of transcribing the full video. For embedded players that expose direct media only after playback, keep the sidepanel open, use `Open to detect`, press play once, then either click `Transcribe` on the detected media row or let Auto-transcribe process it. Large direct audio files are chunked best-effort when the format is likely to tolerate byte slicing. Large MP4/WebM/M4A video containers are not raw-byte chunked because later slices are usually not independently decodable; instead, the extension tries browser audio extraction into WAV chunks up to a local decode size limit. If Chrome cannot decode the media or the file is too large to prepare safely in memory, use exposed captions, import a prepared transcript, or split/remux the audio with a real media tool first. For embedded players that expose only encrypted or segmented streams, prepare a transcript outside the extension and import it as JSON. This avoids forcing every search to re-process the MP4. For a shared group, one admin can transcribe important videos once and distribute the transcript bundle.
+- `main`: production-oriented text and document search for Chrome Web Store packaging.
+- `video-functionality`: experimental video detection, transcript import, and transcription work.
 
-## Transcript Bundle Format
+Once the video branch is stable, tested, and no longer degrades text/document search quality, it can be merged back into `main`.
 
-The extension accepts either an array of transcript records or an object with a
-`transcripts` array.
+## Publishing Notes
 
-```json
-{
-  "version": 1,
-  "transcripts": [
-    {
-      "id": "c11-international-scholars-webinar-2026-04-28",
-      "title": "C11 International Scholars Webinar",
-      "source_hint": "April 28, 2026",
-      "video_url": "",
-      "segments": [
-        {
-          "start": "00:12:04",
-          "end": "00:12:39",
-          "text": "The X1 visa is valid for 30 days after entering China..."
-        }
-      ]
-    }
-  ]
-}
-```
+Before publishing to the Chrome Web Store:
 
-Matching uses:
+- Keep `main` focused on the production feature set.
+- Verify the manifest name, description, permissions, and version.
+- Reload the unpacked extension and test a clean install.
+- Confirm API setup, a normal question, source expansion, source opening, and `/feedback` behavior.
+- Package the `main` branch as the extension zip.
 
-- `video_url`, when available.
-- transcript `title` versus discovered video title/context.
-- `source_hint`, such as date, course, or session name.
-- manual attachment from the side panel when automatic matching is not confident.
+## Development
 
-## Repo Layout
+There is no build step. After editing files, reload the extension from `chrome://extensions`.
 
-```text
-manifest.json                    Chrome extension manifest
-background/service-worker.js      crawler, local storage, transcript import, matching
-content/scraper.js                Blackboard page/resource/video detector
-lib/                              local parsers used for document text extraction
-sidepanel/                        search and transcript UI
-scripts/                          local regression checks
-docs/                             additional notes
-sample-data/                      example transcript bundle
-```
-
-## Development Notes
-
-There is no build step. After editing files, reload the extension from
-`chrome://extensions` and reopen the side panel.
-
-Useful local validation:
+Useful checks:
 
 ```powershell
 node --check background\service-worker.js
@@ -187,10 +106,3 @@ node --check sidepanel\sidepanel.js
 node scripts\regression-check.mjs
 powershell -Command "Get-Content manifest.json | ConvertFrom-Json | Out-Null"
 ```
-
-## Privacy
-
-Resources, transcript bundles, and search history stay in local Chrome storage.
-LLM answering sends only the user's question plus top matched snippets to the
-selected provider. Video transcription is explicit and opt-in from the Library
-tab; generated transcripts are cached locally.
