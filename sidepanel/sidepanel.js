@@ -150,6 +150,7 @@ async function scanActiveTab() {
 async function crawlSite() {
   els.crawlBtn.disabled = true;
   els.crawlBtn.textContent = "Crawling";
+  els.crawlState.textContent = "starting";
   setStatus("Starting crawl...");
   const response = await sendMessage("CRAWL_SITE", {
     max_pages: 1500,
@@ -157,11 +158,29 @@ async function crawlSite() {
     include_organizations: true
   });
   if (!response.ok) throw new Error(response.error || "Crawl failed");
+  if (response.started) {
+    setStatus("Crawl started. Keep the side panel open for progress.");
+    els.crawlState.textContent = "running";
+    return;
+  }
+  await handleCrawlComplete(response);
+}
+
+function crawlSummary(payload) {
+  const pages = payload.pages_crawled ?? payload.pages ?? 0;
+  const stored = payload.resource_count ?? payload.resources ?? 0;
+  const failures = Array.isArray(payload.failures) ? payload.failures.length : Number(payload.failures || 0);
+  const failureText = failures ? ` ${failures} page(s) failed.` : "";
+  const uniqueSeen = payload.unique_candidates_seen ?? payload.candidates_seen ?? 0;
+  const rawSeen = payload.raw_candidates_seen ?? payload.resources_seen ?? 0;
+  const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
+  return `Crawl complete. Pages ${pages}; saw ${uniqueSeen} unique resource candidate${uniqueSeen === 1 ? "" : "s"}${rawText}; stored ${stored}.${failureText}`;
+}
+
+async function handleCrawlComplete(payload) {
+  const summary = crawlSummary(payload);
   await refreshAll();
-  const failureText = response.failures && response.failures.length ? ` ${response.failures.length} page(s) failed.` : "";
-  setStatus(
-    `Crawled ${response.pages_crawled} page(s), saw ${response.candidates_seen || response.resources_seen || 0} candidates, stored ${response.resource_count}.${failureText}`
-  );
+  setStatus(summary);
 }
 
 async function importTranscriptFile(file) {
@@ -3389,13 +3408,20 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type !== "CRAWL_PROGRESS") return false;
   const payload = message.payload || {};
   if (payload.status === "fetching") {
-    const candidates = payload.candidates_seen ?? payload.resources ?? 0;
-    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; candidates seen ${candidates}.`);
+    const uniqueSeen = payload.unique_candidates_seen ?? payload.candidates_seen ?? 0;
+    const rawSeen = payload.raw_candidates_seen ?? payload.resources_seen ?? 0;
+    const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
+    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; unique resources ${uniqueSeen}${rawText}.`);
     els.crawlState.textContent = `${payload.pages} pages`;
   } else if (payload.status === "complete") {
-    const stored = payload.resource_count ?? payload.resources ?? 0;
-    setStatus(`Crawl complete. Pages ${payload.pages}; stored ${stored}.`);
     els.crawlState.textContent = "complete";
+    els.crawlBtn.disabled = false;
+    els.crawlBtn.textContent = "Index";
+    handleCrawlComplete(payload).catch(reportError);
+  } else if (payload.status === "error") {
+    const error = payload.error || "unknown crawl error";
+    setStatus(`Crawl failed: ${error}`);
+    els.crawlState.textContent = "failed";
     els.crawlBtn.disabled = false;
     els.crawlBtn.textContent = "Index";
   } else if (payload.status === "started") {

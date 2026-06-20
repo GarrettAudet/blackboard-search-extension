@@ -317,7 +317,7 @@
         void chrome.runtime.lastError;
       });
       sendResponse({ ok: true, ...payload });
-      return true;
+      return false;
     }
     return false;
   });

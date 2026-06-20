@@ -20,6 +20,7 @@ try {
 }
 
 const captionImportInflight = new Set();
+let activeCrawlPromise = null;
 
 function setupMediaRequestObservers() {
   if (!chrome.webRequest || !chrome.webRequest.onBeforeRequest) return;
@@ -358,7 +359,7 @@ async function handleMessage(message) {
     case "SCAN_ACTIVE_TAB":
       return scanActiveTab();
     case "CRAWL_SITE":
-      return crawlSite(message.payload || {});
+      return startCrawlSite(message.payload || {});
     case "IMPORT_TRANSCRIPTS":
       return importTranscripts(message.payload || {});
     case "IMPORT_DETECTED_CAPTIONS":
@@ -875,6 +876,20 @@ async function storeContent(payload) {
   return { ok: true, resource_id: resourceId, content_length: content.length };
 }
 
+function startCrawlSite(payload) {
+  if (activeCrawlPromise) return { ok: false, error: "crawl_already_running" };
+  activeCrawlPromise = crawlSite(payload)
+    .catch((error) => {
+      emitCrawlProgress({
+        status: "error",
+        error: String(error && error.message ? error.message : error)
+      });
+    })
+    .finally(() => {
+      activeCrawlPromise = null;
+    });
+  return { ok: true, started: true };
+}
 async function crawlSite(payload) {
   const seedUrl = normalizeUrlFrom(payload.seed_url || payload.seedUrl || DEFAULT_CRAWL_SEED_URL, DEFAULT_CRAWL_SEED_URL);
   if (!seedUrl || !/^https?:\/\//i.test(seedUrl)) return { ok: false, error: "missing_or_invalid_seed_url" };
@@ -891,8 +906,31 @@ async function crawlSite(payload) {
   const visited = new Set();
   const resources = [];
   const failures = [];
+  const uniqueCandidateIds = new Set();
+  let rawCandidatesSeen = 0;
 
-  emitCrawlProgress({ status: "started", pages: 0, queued: queue.length, candidates_seen: 0, current_url: seedUrl });
+  function recordCandidateResources(pageResources) {
+    const items = Array.isArray(pageResources) ? pageResources : [];
+    rawCandidatesSeen += items.length;
+    for (const item of items) {
+      const normalized = normalizeResource(item);
+      if (!normalized.url && !normalized.title) continue;
+      uniqueCandidateIds.add(normalized.id);
+    }
+  }
+
+  function crawlProgress(extra = {}) {
+    return {
+      pages: visited.size,
+      queued: queue.length,
+      candidates_seen: uniqueCandidateIds.size,
+      unique_candidates_seen: uniqueCandidateIds.size,
+      raw_candidates_seen: rawCandidatesSeen,
+      ...extra
+    };
+  }
+
+  emitCrawlProgress({ status: "started", ...crawlProgress({ pages: 0, queued: queue.length, current_url: seedUrl }) });
 
   while (queue.length && visited.size < maxPages) {
     const currentUrl = queue.shift();
@@ -901,15 +939,14 @@ async function crawlSite(payload) {
 
     emitCrawlProgress({
       status: "fetching",
-      pages: visited.size,
-      queued: queue.length,
-      candidates_seen: resources.length,
-      current_url: currentUrl
+      ...crawlProgress({ current_url: currentUrl })
     });
 
     try {
       const page = await fetchCrawlPage(currentUrl);
-      resources.push(...page.resources);
+      const pageResources = Array.isArray(page.resources) ? page.resources : [];
+      resources.push(...pageResources);
+      recordCandidateResources(pageResources);
 
       const candidateUrls = page.portal_entry_urls?.length && isDefaultPortalUrl(currentUrl) ? page.portal_entry_urls : page.child_urls;
       for (const candidate of candidateUrls) {
@@ -932,18 +969,21 @@ async function crawlSite(payload) {
   const response = {
     ok: true,
     pages_crawled: visited.size,
-    candidates_seen: resources.length,
-    resources_seen: resources.length,
+    candidates_seen: uniqueCandidateIds.size,
+    unique_candidates_seen: uniqueCandidateIds.size,
+    raw_candidates_seen: rawCandidatesSeen,
+    resources_seen: rawCandidatesSeen,
     resource_count: mergeResult.resource_count,
     queued_remaining: queue.length,
     failures: failures.slice(0, 20)
   };
   emitCrawlProgress({
     status: "complete",
-    pages: visited.size,
-    queued: queue.length,
-    candidates_seen: resources.length,
-    resource_count: mergeResult.resource_count
+    ...crawlProgress({
+      pages: visited.size,
+      queued: queue.length,
+      resource_count: mergeResult.resource_count
+    })
   });
   return response;
 }
@@ -1058,6 +1098,19 @@ function extractResourcesFromHtml(html, pageUrl) {
     }
   });
 
+  panoptoViewerUrlsFromHtml(html, pageUrl).forEach((url) => {
+    add({
+      type: "video_embed",
+      title: fileNameFromUrl(url) || pageTitle,
+      url,
+      page_url: pageUrl,
+      page_title: pageTitle,
+      section,
+      context: pageTitle,
+      discovered_at: new Date().toISOString()
+    });
+  });
+
   const pageText = extractMainTextFromDocument(document, 10000);
   if (pageText) {
     add({
@@ -1081,6 +1134,32 @@ function extractResourcesFromHtml(html, pageUrl) {
   };
 }
 
+function panoptoViewerUrlsFromHtml(html, pageUrl) {
+  const text = decodeHtmlUrlText(html);
+  const urls = [];
+  const patterns = [
+    /https?:\/\/[^"'<>\s)]+\/Panopto\/Pages\/Viewer\.aspx\?[^"'<>\s)]+/gi,
+    /\/Panopto\/Pages\/Viewer\.aspx\?[^"'<>\s)]+/gi
+  ];
+  for (const pattern of patterns) {
+    let match = pattern.exec(text);
+    while (match) {
+      const url = normalizeUrlFrom(match[0], pageUrl);
+      if (url) urls.push(url);
+      match = pattern.exec(text);
+    }
+  }
+  return uniqueStrings(urls);
+}
+
+function decodeHtmlUrlText(value) {
+  return String(value || "")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#38;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
 function shouldStoreAnchorResource(url, title, type, pageUrl) {
   if (!url) return false;
   const resourceType = String(type || "").toLowerCase();
