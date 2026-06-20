@@ -92,6 +92,10 @@ function setStatus(message) {
   els.statusText.title = text;
 }
 
+function setIndexStatusSummary() {
+  setIndexStatusSummary();
+}
+
 function sanitizeLoadedContentStore(contentStore) {
   const next = { ...(contentStore || {}) };
   const resourcesById = new Map((state.resources || []).map((resource) => [resource.id, resource]));
@@ -2024,8 +2028,10 @@ async function hydrateMissingSearchableContentInner() {
     `Preparing searchable text for ${candidates.length} file(s)...`
   );
 
-  if (hydrated || failed) {
-    setStatus(`${hydrated} file(s) made searchable${failed ? `; ${failed} skipped` : ""}.`);
+  if (hydrated) {
+    setStatus(`${hydrated} file(s) made searchable.`);
+  } else if (failed) {
+    console.info(`${failed} background file hydration attempt(s) skipped.`);
   }
 }
 
@@ -2035,8 +2041,10 @@ async function hydrateLikelyResourceContentForQuery(query, currentResults = []) 
 
   const label = candidates.length === 1 ? `"${cleanSourceTitle(candidates[0])}"` : `${candidates.length} likely file(s)`;
   const { hydrated, failed } = await hydrateResourceContentBatch(candidates, `Reading ${label} before answering...`);
-  if (hydrated || failed) {
-    setStatus(`${hydrated} matching file(s) made searchable${failed ? `; ${failed} skipped` : ""}.`);
+  if (hydrated) {
+    setStatus(`${hydrated} matching file(s) made searchable.`);
+  } else if (failed) {
+    console.info(`${failed} matching file hydration attempt(s) skipped.`);
   }
   return { hydrated, failed, candidates };
 }
@@ -2591,12 +2599,14 @@ async function handleAsk(event) {
   if (documentReadinessIssue) {
     appendMessage("assistant", documentReadinessIssue.text, documentReadinessIssue.sources);
     rememberTurn(query, documentReadinessIssue.text);
+    setIndexStatusSummary();
     return;
   }
   const directAnswer = buildDirectAnswer(query, answerSources);
   if (directAnswer && !canUseApiPipeline) {
     appendMessage("assistant", directAnswer.text, prepareAnswerSources(directAnswer.sources || answerSources, retrievalQuery));
     rememberTurn(query, directAnswer.text);
+    setIndexStatusSummary();
     return;
   }
   const localAnswer = buildLocalAnswer(query, answerSources, retrievalQuery);
@@ -2604,6 +2614,7 @@ async function handleAsk(event) {
   if (!shouldUseLlm(query, answerSources)) {
     appendMessage("assistant", localAnswer, answerSources);
     rememberTurn(query, localAnswer);
+    setIndexStatusSummary();
     return;
   }
 
@@ -2625,6 +2636,7 @@ async function handleAsk(event) {
   } finally {
     els.searchBtn.disabled = false;
     els.searchBtn.classList.remove("is-loading");
+    setIndexStatusSummary();
   }
 }
 async function enrichVideoResultsForQuery(query, retrievalQuery, results) {
