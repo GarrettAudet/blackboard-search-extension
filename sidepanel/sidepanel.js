@@ -2883,6 +2883,7 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
         "If a source contains concrete tasks, deadlines, requirements, links, or dates, extract and list the actual items. " +
         "Do not answer with only a count; include the details from the excerpts. " +
         "Do not include a separate Sources section; the interface shows sources separately. " +
+        "Do not print raw URLs or link lists in the answer body; the interface shows source links separately. " +
         "Keep the answer complete but compact. Prefer the most relevant details over exhaustive lists. " +
         "Do not say downloaded. Refer to materials as indexed Blackboard resources or imported transcripts. " +
         "Use concise prose and cite only source IDs listed below. Every factual answer should cite at least one provided source. " +
@@ -2906,7 +2907,7 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
 }
 
 function cleanAnswerText(value, sourceCount = 0) {
-  let text = stripInlineSourcesSection(String(value || "").trim());
+  let text = stripInlineLinksSection(stripInlineSourcesSection(String(value || "").trim()));
   text = text.replace(/\]\s*\[/g, "], [");
   if (sourceCount > 0) {
     text = text.replace(/\[(\d+)\]/g, (match, numberText) => {
@@ -3078,6 +3079,42 @@ function stripInlineSourcesSection(text) {
   return String(text || "")
     .replace(/\n{2,}\s*(Sources|Resources used|References)\s*:\s*[\s\S]*$/i, "")
     .trim();
+}
+
+function stripInlineLinksSection(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const kept = [];
+  for (const line of lines) {
+    if (isStandaloneSourceUrlLine(line)) continue;
+    if (isInlineLinkHeading(line)) continue;
+    const withoutSourceUrls = line.replace(/\s*[-–—:]?\s*https?:\/\/[^\s)]+(?:blackboard|tsinghua|panopto)[^\s)]*/gi, "").trimEnd();
+    const withoutLinkHeading = stripTrailingInlineLinkHeading(withoutSourceUrls);
+    if (!withoutLinkHeading.trim() && line !== "") continue;
+    kept.push(withoutLinkHeading);
+  }
+  return kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isStandaloneSourceUrlLine(line) {
+  return /^\s*(?:[-*•]\s*)?https?:\/\/\S+\s*$/i.test(String(line || ""));
+}
+
+function stripTrailingInlineLinkHeading(line) {
+  return String(line || "")
+    .replace(
+      /\s*(?:links? to (?:the )?(?:relevant )?blackboard courses? are|relevant blackboard courses? are|blackboard links? are|direct links? are|for direct access(?: and further exploration)?(?:,? the course link is)?):?\s*$/i,
+      ""
+    )
+    .trimEnd();
+}
+
+function isInlineLinkHeading(line) {
+  return /^\s*(?:[-*•]\s*)?(?:links?|direct links?|relevant links?|blackboard links?|links? to (?:the )?(?:relevant )?blackboard courses?|for direct access(?: and further exploration)?)[^:]{0,120}:\s*$/i.test(
+    String(line || "")
+  );
 }
 
 function isCapabilityQuestion(query) {

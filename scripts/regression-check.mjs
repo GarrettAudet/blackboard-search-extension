@@ -161,13 +161,19 @@ const alignedCitations = alignAnswerCitations(
     { title: "Chinese source 5", score: 60, kind: "page", text: "five" }
   ]
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations };
+const strippedLinkAnswer = cleanAnswerText(
+  "These resources help students study Chinese [1], [2]. Links to the relevant Blackboard courses are:\\n" +
+    "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_771_1\\n" +
+    "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
+  2
+);
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -210,6 +216,12 @@ if (alignedCitations.text.includes("[5]") || !alignedCitations.text.includes("[1
 }
 if (alignedCitations.sources.length !== 2 || alignedCitations.sources[1].title !== "Chinese source 5") {
   throw new Error(`Displayed sources should be exactly the cited compacted sources.\n\n${JSON.stringify(alignedCitations.sources, null, 2)}`);
+}
+if (/https?:\/\//i.test(strippedLinkAnswer) || /Links to the relevant Blackboard courses/i.test(strippedLinkAnswer)) {
+  throw new Error(`Answer cleanup should remove raw Blackboard link sections.\n\n${strippedLinkAnswer}`);
+}
+if (!strippedLinkAnswer.includes("These resources help students study Chinese [1], [2].")) {
+  throw new Error(`Answer cleanup should preserve the actual answer text and citations.\n\n${strippedLinkAnswer}`);
 }
 
 console.log("regression-check passed");
