@@ -198,6 +198,24 @@ const courseListRawResults = [
   ...searchIndex(courseListQuery)
 ];
 const courseListSources = prepareAnswerSources(courseListRawResults, courseListQuery);
+const parsedPlannerJson = parseJsonObjectFromText(
+  "planner output: " +
+    JSON.stringify({
+      intent: "course_list",
+      rewritten_question: "Have they released the list of courses?",
+      retrieval_query: "released course list course calendar schedule",
+      source_preferences: ["course calendar", "class schedule", "academic calendar"],
+      needs_video_search: false,
+      scope: "in_scope",
+      confidence: 0.87
+    }) +
+    " end"
+);
+const normalizedPlanner = normalizeQueryPlan(parsedPlannerJson, courseListQuery, courseListQuery);
+const plannedCourseQuery = plannedRetrievalQuery(normalizedPlanner, courseListQuery, courseListQuery);
+const parsedReviewJson = parseJsonObjectFromText(
+  '{"approved":false,"answer":"The course calendar contains the released course list [1].","reason":"Removed unsupported text."}'
+);
 const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
 const preparedMandarinSources = prepareAnswerSources(
   [
@@ -234,13 +252,13 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -286,6 +304,15 @@ if (!courseListSources.length || courseListSources[0].resource_id !== "course-ca
 }
 if (courseListSources.some((source) => /Chinese Language Learning Resources|Capstone Preliminary Interest|Partner Organizations Proposed Topics/i.test(source.title || source.text || ""))) {
   throw new Error(`Course-list sources should exclude unrelated Chinese-language and capstone hits when a calendar match exists.\n\n${JSON.stringify(courseListSources, null, 2)}`);
+}
+if (normalizedPlanner.intent !== "course_list" || normalizedPlanner.scope !== "in_scope" || normalizedPlanner.confidence !== 0.87) {
+  throw new Error(`Expected fenced planner JSON to normalize correctly.\n\n${JSON.stringify(normalizedPlanner, null, 2)}`);
+}
+if (!/course calendar/i.test(plannedCourseQuery) || !/class schedule/i.test(plannedCourseQuery)) {
+  throw new Error(`Expected planned retrieval query to include source preferences.\n\n${plannedCourseQuery}`);
+}
+if (!parsedReviewJson || parsedReviewJson.answer !== "The course calendar contains the released course list [1].") {
+  throw new Error(`Expected reviewer JSON to parse cleanly.\n\n${JSON.stringify(parsedReviewJson, null, 2)}`);
 }
 if (!packingHydrationCandidates.some((resource) => resource.id === "packing-pdf")) {
   throw new Error(`Expected packing query to target the packing PDF for body-text extraction.\n\n${JSON.stringify(packingHydrationCandidates, null, 2)}`);
