@@ -131,13 +131,23 @@ state.resources = [
     page_title: "Resources - Class of 2026-2027 Pre-program",
     section: "Class of 2026-2027 Pre-program Resources",
     context: "Packing List for Students (2026).pdf"
+  },
+  {
+    id: "english-language-pdf",
+    type: "pdf",
+    title: "English Language Resources (2026).pdf",
+    url: "https://lms.sc.tsinghua.edu.cn/english-language.pdf",
+    page_title: "Language Study - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Language Study",
+    context: "English Language Resources (2026).pdf English language practice materials and writing resources."
   }
 ];
 state.contentStore = {
   "todo-page": state.resources[0].context,
   "survey-link": state.resources[1].context,
   "home-page": state.resources[2].context,
-  "language-study": state.resources[3].context
+  "language-study": state.resources[3].context,
+  "english-language-pdf": state.resources[5].context
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
@@ -148,6 +158,14 @@ const answer = buildDirectAnswer(query, results);
 const mandarinQuery = "Have they gives us any mandarin resources to learn from?";
 const mandarinIsCapability = isCapabilityQuestion(mandarinQuery);
 const mandarinResults = searchIndex(mandarinQuery);
+state.conversation = [
+  {
+    user: mandarinQuery,
+    assistant: "Chinese Language Learning Resources include Mandarin placement preparation, survival Chinese, and key vocabulary and grammar lists."
+  }
+];
+const mandarinFollowUpQuery = buildRetrievalQuery("Can you link me some specific resources", getConversationMemory());
+const mandarinFollowUpSources = prepareAnswerSources(searchIndex(mandarinFollowUpQuery), mandarinFollowUpQuery);
 const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
 const preparedMandarinSources = prepareAnswerSources(
   [
@@ -184,13 +202,13 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -221,6 +239,15 @@ if (mandarinIsCapability) {
 }
 if (!mandarinResults.some((result) => result.resource_id === "language-study")) {
   throw new Error(`Expected Mandarin query to retrieve language-study resource.\n\n${JSON.stringify(mandarinResults, null, 2)}`);
+}
+if (!/mandarin|chinese|language/i.test(mandarinFollowUpQuery)) {
+  throw new Error(`Expected Mandarin follow-up retrieval query to preserve prior topic.\n\n${mandarinFollowUpQuery}`);
+}
+if (!mandarinFollowUpSources.some((source) => source.resource_id === "language-study" || /Chinese Language Learning Resources/i.test(source.title || source.text || ""))) {
+  throw new Error(`Expected Mandarin follow-up source list to keep Chinese-language resources.\n\n${JSON.stringify(mandarinFollowUpSources, null, 2)}`);
+}
+if (mandarinFollowUpSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
+  throw new Error(`Mandarin follow-up sources should exclude English-language resource hits.\n\n${JSON.stringify(mandarinFollowUpSources, null, 2)}`);
 }
 if (!packingHydrationCandidates.some((resource) => resource.id === "packing-pdf")) {
   throw new Error(`Expected packing query to target the packing PDF for body-text extraction.\n\n${JSON.stringify(packingHydrationCandidates, null, 2)}`);
