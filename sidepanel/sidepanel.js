@@ -2532,24 +2532,93 @@ function isGenericDetectedTitle(value) {
 function seedIntroMessage(force = false) {
   if (!force && els.chatMessages.children.length) return;
   els.chatMessages.textContent = "";
-  const topics = summarizeAvailableTopics();
-  appendMessage(
-    "assistant",
-    `Ask questions across your indexed Blackboard resources and imported video transcripts.\n\n${topics}\n\nUse Setup to crawl Blackboard, import transcripts, and configure an API key for synthesized answers.`
-  );
+  appendMessage("assistant", introMessageText());
+}
+
+function introMessageText() {
+  return [
+    "Hi, I'm Blackboard Search. I can search your locally indexed Blackboard course pages, announcements, linked documents, PDFs, and imported video transcripts.",
+    "Good questions include deadlines and to-dos, visa or packing guidance, language-study materials, career resources, where a document lives, or what a recorded webinar covered once transcripts are available.",
+    "Use /feedback followed by a note to report a bad answer, missing resource, or feature request."
+  ].join("\n\n");
 }
 
 function summarizeAvailableTopics() {
-  const resourceTypes = countBy(state.resources.map((resource) => labelForKind(resource.type || "resource")));
-  const transcriptGroups = groupTranscriptsByPage().slice(0, 5).map((group) => group.title);
-  const contentCount = Object.keys(state.contentStore || {}).length;
-  const typeText = Object.entries(resourceTypes)
-    .slice(0, 6)
-    .map(([type, count]) => `${count} ${type}`)
-    .join(", ");
-  const transcriptText = transcriptGroups.length ? `Transcript groups include: ${transcriptGroups.join("; ")}.` : "No transcript groups yet.";
-  const contentText = contentCount ? `${contentCount} resources have searchable body text.` : "No extracted document/page bodies yet.";
-  return `Current index: ${typeText || "no resources yet"}. ${contentText} ${transcriptText}`;
+  const hasResources = state.resources.length > 0;
+  const hasTranscripts = state.transcripts.length > 0;
+  const areas = inferIndexedAreas();
+  const intro = hasResources
+    ? "I can search the Blackboard material currently indexed in this browser: course pages, announcements, linked files/PDFs, and any imported transcripts."
+    : "I can search Blackboard course pages, announcements, linked files/PDFs, and imported transcripts once the local index has material.";
+  const areaText = areas.length ? `Indexed areas I can see include ${areas.join(", ")}.` : "Useful topics usually include deadlines, to-dos, arrival prep, visas, packing, language study, career materials, and resource locations.";
+  const transcriptText = hasTranscripts ? "I can also search imported transcript text for video talking points and timestamps." : "For videos, import or generate transcripts first so I can answer from the spoken content.";
+  return `${intro}\n\n${areaText}\n\n${transcriptText}\n\nUse /feedback <your note> to report a bad answer or missing resource.`;
+}
+
+function inferIndexedAreas() {
+  const haystack = normalizeText(
+    (state.resources || [])
+      .slice(0, 500)
+      .map((resource) => [resource.title, resource.page_title, resource.section].filter(Boolean).join(" "))
+      .join(" ")
+  );
+  const areas = [];
+  const addIf = (label, pattern) => {
+    if (pattern.test(haystack)) areas.push(label);
+  };
+  addIf("to-dos/deadlines", /\b(to do|deadline|survey|application)\b/);
+  addIf("resources and PDFs", /\b(resources?|pdf|guide|faq)\b/);
+  addIf("visa and arrival prep", /\b(visa|x1|jw202|arrival|packing|wechat)\b/);
+  addIf("language study", /\b(language|mandarin|chinese|grammar|vocabulary)\b/);
+  addIf("career materials", /\b(career|internship|interview|job)\b/);
+  addIf("webinars/videos", /\b(webinar|video|recording|transcript)\b/);
+  return areas.slice(0, 5);
+}
+
+function isFeedbackCommand(query) {
+  return /^\/feedback(?:\s+|$)/i.test(String(query || "").trim());
+}
+
+async function handleFeedbackCommand(query) {
+  const feedback = String(query || "").replace(/^\/feedback\s*/i, "").trim();
+  if (!feedback) {
+    appendMessage("assistant", "Use /feedback followed by your note, for example: /feedback The packing answer missed medications.");
+    return;
+  }
+  const issueUrl = buildFeedbackIssueUrl(feedback);
+  try {
+    if (chrome?.tabs?.create) {
+      await chrome.tabs.create({ url: issueUrl, active: true });
+    } else {
+      window.open(issueUrl, "_blank", "noopener");
+    }
+    appendMessage("assistant", "Thanks - I opened a pre-filled GitHub issue so you can submit the feedback from your browser.");
+  } catch (error) {
+    appendMessage("assistant", `Thanks - I could not open the issue automatically, but you can submit it here:\n${issueUrl}`);
+  }
+}
+
+function buildFeedbackIssueUrl(feedback) {
+  const manifestVersion = chrome?.runtime?.getManifest ? chrome.runtime.getManifest().version : "unknown";
+  const firstLine = feedback.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "Blackboard Search feedback";
+  const title = clampText(`Feedback: ${firstLine}`, 90);
+  const body = [
+    "Feedback",
+    "--------",
+    feedback,
+    "",
+    "Context",
+    "-------",
+    `Extension version: ${manifestVersion}`,
+    `Resources indexed: ${(state.resources || []).length}`,
+    `Searchable bodies: ${Object.keys(state.contentStore || {}).length}`,
+    `Transcripts: ${(state.transcripts || []).length}`,
+    `Timestamp: ${new Date().toISOString()}`
+  ].join("\n");
+  const url = new URL("https://github.com/GarrettAudet/blackboard-search-extension/issues/new");
+  url.searchParams.set("title", title);
+  url.searchParams.set("body", body);
+  return url.href;
 }
 
 function countBy(values) {
@@ -2565,6 +2634,11 @@ async function handleAsk(event) {
   els.queryInput.value = "";
   const memory = getConversationMemory();
   appendMessage("user", query);
+  if (isFeedbackCommand(query)) {
+    await handleFeedbackCommand(query);
+    setIndexStatusSummary();
+    return;
+  }
 
   const canUseApiPipeline = state.settings.hasApiKey && !isCapabilityQuestion(query);
   let retrievalQuery = buildRetrievalQuery(query, memory);

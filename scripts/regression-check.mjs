@@ -32,7 +32,11 @@ const context = {
   chrome: {
     runtime: {
       sendMessage() {},
+      getManifest() { return { version: "test-version" }; },
       onMessage: { addListener() {} }
+    },
+    tabs: {
+      async create() {}
     },
     storage: {
       local: {
@@ -232,6 +236,20 @@ const courseListRawResults = [
   ...searchIndex(courseListQuery)
 ];
 const courseListSources = prepareAnswerSources(courseListRawResults, courseListQuery);
+const myClassesSources = prepareAnswerSources(searchIndex("What classes do I have?"), "What classes do I have?");
+const taskSourcesWithCourseShell = prepareAnswerSources(
+  [
+    ...searchIndex(query),
+    {
+      score: 360,
+      kind: "link",
+      title: "Class of 2026-2027 Pre-program",
+      source: "Class of 2026-2027 Pre-program To Do - To Do - Class of 2026-2027 Pre-program",
+      text: "Class of 2026-2027 Pre-program Class of 2026-2027 Pre-program To Do To Do Class of 2026-2027 Pre-program To Do To Do Class of 2026-2027 Pre-program"
+    }
+  ],
+  query
+);
 const parsedPlannerJson = parseJsonObjectFromText(
   "planner output: " +
     JSON.stringify({
@@ -336,13 +354,15 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   defaultRagPlan("What should I pack for China?")
 );
 delete state.contentStore["packing-pdf"];
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText };
+const feedbackIssueUrl = buildFeedbackIssueUrl("The packing answer missed medications.");
+const introText = introMessageText();
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -388,6 +408,12 @@ if (mandarinFollowUpSources.some((source) => /English Language Resources/i.test(
 }
 if (!courseListSources.length || courseListSources[0].resource_id !== "course-calendar") {
   throw new Error(`Expected released course-list query to prioritize the course calendar.\n\n${JSON.stringify(courseListSources, null, 2)}`);
+}
+if (!myClassesSources.length || myClassesSources[0].resource_id !== "course-calendar") {
+  throw new Error(`Expected "What classes do I have?" to prioritize the course calendar.\n\n${JSON.stringify(myClassesSources, null, 2)}`);
+}
+if (taskSourcesWithCourseShell.some((source) => /^Class of 2026-2027 Pre-program$/i.test(source.title || ""))) {
+  throw new Error(`Generic course shell links should not appear as answer sources.\n\n${JSON.stringify(taskSourcesWithCourseShell, null, 2)}`);
 }
 if (courseListSources.some((source) => /Chinese Language Learning Resources|Capstone Preliminary Interest|Partner Organizations Proposed Topics/i.test(source.title || source.text || ""))) {
   throw new Error(`Course-list sources should exclude unrelated Chinese-language and capstone hits when a calendar match exists.\n\n${JSON.stringify(courseListSources, null, 2)}`);
@@ -450,4 +476,10 @@ if (!strippedLinkAnswer.includes("These resources help students study Chinese [1
   throw new Error(`Answer cleanup should preserve the actual answer text and citations.\n\n${strippedLinkAnswer}`);
 }
 
+if (!/github\.com\/GarrettAudet\/blackboard-search-extension\/issues\/new/.test(feedbackIssueUrl) || !/The\+packing\+answer\+missed\+medications/.test(feedbackIssueUrl)) {
+  throw new Error(`Expected feedback command to build a pre-filled GitHub issue URL.\n\n${feedbackIssueUrl}`);
+}
+if (/Current index:|resources indexed|Transcript groups include/i.test(introText) || !/\/feedback/.test(introText)) {
+  throw new Error(`Intro text should be friendly and avoid internal index dumps.\n\n${introText}`);
+}
 console.log("regression-check passed");

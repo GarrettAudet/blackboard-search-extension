@@ -100,17 +100,17 @@
 
             <button id="saveSettingsBtn" type="button">Save setup</button>
 
-            <div class="button-row setup-actions">
+            <div class="button-row setup-actions developer-maintenance" hidden>
               <button id="crawlBtn" type="button" title="Reindex Blackboard courses and organizations">Reindex Blackboard</button>
               <button id="scanBtn" class="secondary" type="button" title="Scan the current Blackboard page">Scan current page</button>
               <button id="restoreDismissedBtn" class="secondary" type="button" title="Clear dismissed media ignores from this browser">Restore dismissed media</button>
               <button id="clearBtn" class="secondary" type="button" title="Clear the local index">Clear index</button>
             </div>
-            <p id="maintenanceState" class="setup-note">Reindex from Blackboard after logging in, or restore dismissed media if a prior dismiss hid too many videos.</p>
-            <div class="button-row setup-actions">
+            <p id="maintenanceState" class="setup-note developer-maintenance" hidden>Reindex from Blackboard after logging in, or restore dismissed media if a prior dismiss hid too many videos.</p>
+            <div class="button-row setup-actions developer-maintenance" hidden>
               <button id="ragAuditBtn" class="secondary" type="button" title="Audit indexed text and document extraction quality">Audit RAG</button>
             </div>
-            <pre id="ragAuditOutput" class="audit-output">Run Audit RAG to inspect searchable body text, unread files, and extraction failures.</pre>
+            <pre id="ragAuditOutput" class="audit-output developer-maintenance" hidden>Run Audit RAG to inspect searchable body text, unread files, and extraction failures.</pre>
           </div>
         </section>
 
