@@ -19,7 +19,7 @@ The extension-only demo shows the core flow: ask a question, get an answer groun
 - Retrieves relevant snippets first, then sends only the question and matched snippets to the selected API provider.
 - Shows expandable sources so users can inspect where an answer came from.
 - Supports `/index` to refresh the local Blackboard index from chat.
-- Supports `/feedback <message>` to open a pre-filled private-repo GitHub issue for bugs, missing resources, or bad answers.
+- Supports `/feedback <message>` to open a configured feedback form for bugs, missing resources, or bad answers.
 
 ## What It Does Not Do
 
@@ -55,8 +55,24 @@ Builds or refreshes the local Blackboard index. Use this after first install, af
 /feedback <your note>
 ```
 
-Opens a pre-filled GitHub issue for bug reports, missing resources, or bad answers. The configured target is `GarrettAudet/blackboard-search-extension-feedback`, which should remain private if you want feedback collected outside the public extension repo. Users need access to that private repo to submit the issue; do not embed a GitHub token in the extension.
+Opens the configured feedback form with the user's note and basic extension context attached. If no form URL is configured, the extension tells the user to send the note directly to the maintainer.
 
+## Feedback Form Setup
+
+Create a lightweight form in Google Forms, Tally, Airtable Forms, or a similar service. Then set these constants near the top of `sidepanel/sidepanel.js` before packaging the extension:
+
+```js
+const FEEDBACK_FORM_URL = "https://your-form-url";
+const FEEDBACK_FORM_FIELD_MAP = {
+  feedback: "feedback",
+  version: "version",
+  resources: "resources",
+  searchableBodies: "searchable_bodies",
+  timestamp: "timestamp"
+};
+```
+
+Tally-style hidden fields can use readable names like `feedback`. Google Forms prefilled links use `entry.<id>` field names, so update `FEEDBACK_FORM_FIELD_MAP` with the relevant entry IDs. Do not embed GitHub tokens, API tokens, or private write credentials in the extension.
 
 ## Recommended Models
 
@@ -108,6 +124,7 @@ Before publishing to the Chrome Web Store:
 - Verify the manifest name, description, permissions, and version.
 - Reload the unpacked extension and test a clean install.
 - Run `node scripts\prepublish-check.mjs`.
+- Configure `FEEDBACK_FORM_URL` if you want `/feedback` to open a live form.
 - Confirm API setup, `/index`, a normal question, source expansion, source opening, and `/feedback` behavior.
 - Package the `main` branch as the extension zip.
 

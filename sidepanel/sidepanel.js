@@ -1,5 +1,12 @@
 const SETTINGS_KEY = "assistant_settings";
-const FEEDBACK_REPO_SLUG = "GarrettAudet/blackboard-search-extension-feedback";
+const FEEDBACK_FORM_URL = "";
+const FEEDBACK_FORM_FIELD_MAP = {
+  feedback: "feedback",
+  version: "version",
+  resources: "resources",
+  searchableBodies: "searchable_bodies",
+  timestamp: "timestamp"
+};
 const MAX_CONTENT_CHARS = 20000;
 const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
 const MAX_MEMORY_TURNS = 6;
@@ -2596,42 +2603,54 @@ async function handleFeedbackCommand(query) {
     appendMessage("assistant", "Use /feedback followed by your note, for example: /feedback The packing answer missed medications.");
     return;
   }
-  const issueUrl = buildFeedbackIssueUrl(feedback);
+
+  let formUrl = "";
+  try {
+    formUrl = buildFeedbackFormUrl(feedback);
+  } catch (error) {
+    appendMessage("assistant", "The feedback form is misconfigured. Please tell the maintainer to check FEEDBACK_FORM_URL in the extension code.");
+    return;
+  }
+
+  if (!formUrl) {
+    appendMessage("assistant", `Feedback form is not configured yet. For now, send this note directly to the extension maintainer:\n\n${feedback}`);
+    return;
+  }
+
   try {
     if (chrome?.tabs?.create) {
-      await chrome.tabs.create({ url: issueUrl, active: true });
+      await chrome.tabs.create({ url: formUrl, active: true });
     } else {
-      window.open(issueUrl, "_blank", "noopener");
+      window.open(formUrl, "_blank", "noopener");
     }
-    appendMessage("assistant", "Thanks - I opened a pre-filled GitHub issue so you can submit the feedback from your browser.");
+    appendMessage("assistant", "Thanks - I opened the feedback form with your note attached.");
   } catch (error) {
-    appendMessage("assistant", `Thanks - I could not open the issue automatically, but you can submit it here:\n${issueUrl}`);
+    appendMessage("assistant", `Thanks - I could not open the feedback form automatically, but you can submit it here:\n${formUrl}`);
   }
 }
 
-function buildFeedbackIssueUrl(feedback) {
+function feedbackPayload(feedback) {
   const manifestVersion = chrome?.runtime?.getManifest ? chrome.runtime.getManifest().version : "unknown";
-  const firstLine = feedback.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "Blackboard Search feedback";
-  const title = clampText(`Feedback: ${firstLine}`, 90);
-  const body = [
-    "Feedback",
-    "--------",
-    feedback,
-    "",
-    "Context",
-    "-------",
-    `Extension version: ${manifestVersion}`,
-    `Resources indexed: ${(state.resources || []).length}`,
-    `Searchable bodies: ${Object.keys(state.contentStore || {}).length}`,
-    `Transcripts: ${(state.transcripts || []).length}`,
-    `Timestamp: ${new Date().toISOString()}`
-  ].join("\n");
-  const url = new URL(`https://github.com/${FEEDBACK_REPO_SLUG}/issues/new`);
-  url.searchParams.set("title", title);
-  url.searchParams.set("body", body);
-  return url.href;
+  return {
+    feedback: String(feedback || "").trim(),
+    version: manifestVersion,
+    resources: String((state.resources || []).length),
+    searchableBodies: String(Object.keys(state.contentStore || {}).length),
+    timestamp: new Date().toISOString()
+  };
 }
 
+function buildFeedbackFormUrl(feedback, formUrl = FEEDBACK_FORM_URL, fieldMap = FEEDBACK_FORM_FIELD_MAP) {
+  const target = String(formUrl || "").trim();
+  if (!target) return "";
+  const url = new URL(target);
+  const payload = feedbackPayload(feedback);
+  for (const [key, value] of Object.entries(payload)) {
+    const mappedName = fieldMap && Object.prototype.hasOwnProperty.call(fieldMap, key) ? fieldMap[key] : key;
+    if (mappedName) url.searchParams.set(mappedName, value);
+  }
+  return url.href;
+}
 function countBy(values) {
   const counts = {};
   for (const value of values.filter(Boolean)) counts[value] = (counts[value] || 0) + 1;

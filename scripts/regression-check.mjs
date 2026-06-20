@@ -354,16 +354,27 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   defaultRagPlan("What should I pack for China?")
 );
 delete state.contentStore["packing-pdf"];
-const feedbackIssueUrl = buildFeedbackIssueUrl("The packing answer missed medications.");
+const feedbackFormUrl = buildFeedbackFormUrl(
+  "The packing answer missed medications.",
+  "https://example.com/feedback?source=extension",
+  {
+    feedback: "note",
+    version: "version",
+    resources: "resource_count",
+    searchableBodies: "searchable_bodies",
+    timestamp: "sent_at"
+  }
+);
+const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackIssueUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -477,8 +488,11 @@ if (!strippedLinkAnswer.includes("These resources help students study Chinese [1
   throw new Error(`Answer cleanup should preserve the actual answer text and citations.\n\n${strippedLinkAnswer}`);
 }
 
-if (!/github\.com\/GarrettAudet\/blackboard-search-extension-feedback\/issues\/new/.test(feedbackIssueUrl) || !/The\+packing\+answer\+missed\+medications/.test(feedbackIssueUrl)) {
-  throw new Error(`Expected feedback command to build a pre-filled private-repo GitHub issue URL.\n\n${feedbackIssueUrl}`);
+if (!/example\.com\/feedback/.test(feedbackFormUrl) || !/note=The\+packing\+answer\+missed\+medications/.test(feedbackFormUrl) || !/version=test-version/.test(feedbackFormUrl) || !/resource_count=/.test(feedbackFormUrl) || !/searchable_bodies=/.test(feedbackFormUrl) || !/sent_at=/.test(feedbackFormUrl)) {
+  throw new Error(`Expected feedback command to build a pre-filled feedback form URL with context.\n\n${feedbackFormUrl}`);
+}
+if (unconfiguredFeedbackFormUrl !== "") {
+  throw new Error(`Expected missing feedback form configuration to return an empty URL.\n\n${unconfiguredFeedbackFormUrl}`);
 }
 if (!indexCommandChecks.every(Boolean)) {
   throw new Error(`Expected /index and /reindex to be recognized without treating normal index questions as commands.\n\n${JSON.stringify(indexCommandChecks)}`);

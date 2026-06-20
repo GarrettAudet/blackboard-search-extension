@@ -1,4 +1,4 @@
-﻿# Testing Guide
+# Testing Guide
 
 Use this checklist before publishing `main` and before merging any feature branch back into `main`.
 
@@ -21,7 +21,7 @@ This verifies:
 - PDF/document readiness fails closed when file body text is unreadable.
 - Citation numbering stays compact with no gaps.
 - Raw Blackboard URL sections are stripped from main answers.
-- `/feedback` builds a pre-filled private-repo issue URL.
+- `/feedback` builds a pre-filled feedback form URL when configured.
 - `/index` and `/reindex` are treated as commands.
 
 ## Clean Install Smoke Test
@@ -61,6 +61,8 @@ For each answer, verify:
 
 ## Feedback Test
 
+Before packaging, set `FEEDBACK_FORM_URL` in `sidepanel/sidepanel.js` if you want live feedback collection. For Google Forms, also set the `FEEDBACK_FORM_FIELD_MAP` values to the form's `entry.<id>` field names.
+
 Send:
 
 ```text
@@ -69,9 +71,10 @@ Send:
 
 Expected behavior:
 
-- The extension opens a pre-filled GitHub issue URL.
-- The issue body includes extension version, indexed resource count, searchable body count, and timestamp.
-- Because the target repo is private, only users with access can submit the issue. Do not embed a GitHub token in the extension.
+- If configured, the extension opens the feedback form with the note and metadata attached.
+- Metadata includes extension version, indexed resource count, searchable body count, and timestamp.
+- If no form URL is configured, the extension tells the user to send the note directly to the maintainer.
+- No private write tokens or GitHub tokens are embedded in the extension.
 
 ## Video Branch Merge Gate
 
