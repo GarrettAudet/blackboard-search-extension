@@ -18,6 +18,7 @@ const state = {
   detectedMedia: [],
   ignoredMediaKeys: new Set(),
   contentStore: {},
+  hydrationDiagnostics: {},
   meta: {},
   conversation: [],
   settings: {
@@ -50,6 +51,8 @@ const els = {
   clearBtn: document.getElementById("clearBtn"),
   restoreDismissedBtn: document.getElementById("restoreDismissedBtn"),
   maintenanceState: document.getElementById("maintenanceState"),
+  ragAuditBtn: document.getElementById("ragAuditBtn"),
+  ragAuditOutput: document.getElementById("ragAuditOutput"),
   transcriptFile: document.getElementById("transcriptFile"),
   providerSelect: document.getElementById("providerSelect"),
   modelInput: document.getElementById("modelInput"),
@@ -2221,7 +2224,11 @@ function documentCandidateKey(resource) {
 function documentHydrationFailureMessage(candidates) {
   const names = Array.from(new Set((candidates || []).map((resource) => cleanSourceTitle(resource)).filter(Boolean))).slice(0, 3);
   const fileText = names.length === 1 ? `"${names[0]}"` : names.map((name) => `"${name}"`).join(", ");
-  return `I found the likely file${names.length === 1 ? "" : "s"} ${fileText}, but I could not read the file contents in the indexed resources yet. I can't answer this reliably from only a folder listing. Open the source while logged into Blackboard, then refresh or re-index so the extension can extract the file text.`;
+  const reasons = Array.from(new Set((candidates || [])
+    .map((resource) => state.hydrationDiagnostics?.[resource.id]?.error)
+    .filter(Boolean))).slice(0, 2);
+  const reasonText = reasons.length ? ` Last extraction issue: ${reasons.join("; ")}.` : "";
+  return `I found the likely file${names.length === 1 ? "" : "s"} ${fileText}, but I could not read the file contents in the indexed resources yet. I can't answer this reliably from only a folder listing.${reasonText} Open the source while logged into Blackboard, then refresh or re-index so the extension can extract the file text.`;
 }
 
 function documentCandidateSources(candidates) {
@@ -2253,10 +2260,20 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
       });
       if (!response.ok) throw new Error(response.error || "Content store write failed");
       state.contentStore[resource.id] = storedContent;
+      state.hydrationDiagnostics[resource.id] = {
+        ok: true,
+        chars: storedContent.length,
+        at: new Date().toISOString()
+      };
       hydrationFailures.delete(resource.id);
       hydrated += 1;
     } catch (error) {
       failed += 1;
+      state.hydrationDiagnostics[resource.id] = {
+        ok: false,
+        error: readableErrorMessage(error),
+        at: new Date().toISOString()
+      };
       hydrationFailures.add(resource.id);
       console.warn("Could not hydrate searchable content", resource.title, error);
     }
@@ -3359,6 +3376,77 @@ function emptyNode(text) {
   return node;
 }
 
+function runRagAudit() {
+  const query = els.queryInput?.value?.trim() || "";
+  const audit = buildRagAudit(query);
+  if (els.ragAuditOutput) els.ragAuditOutput.textContent = audit;
+  setStatus("RAG audit complete.");
+  setView("setup");
+}
+
+function buildRagAudit(query = "") {
+  const resources = state.resources || [];
+  const contentStore = state.contentStore || {};
+  const fileResources = resources.filter(isDocumentOrFileLikeResource);
+  const bodyEntries = Object.entries(contentStore).filter(([, text]) => isUsableSearchContent(text));
+  const unreadFiles = fileResources.filter((resource) => !isUsableSearchContent(contentStore[resource.id]));
+  const weakBodies = bodyEntries
+    .map(([id, text]) => ({
+      id,
+      stats: contentQualityStats(text),
+      resource: resources.find((item) => item.id === id)
+    }))
+    .filter((entry) => entry.stats.words < 60 || entry.stats.uniqueRatio < 0.1)
+    .slice(0, 8);
+
+  const lines = [];
+  lines.push("Index health");
+  lines.push(`- Resources: ${resources.length}`);
+  lines.push(`- Searchable bodies: ${bodyEntries.length}`);
+  lines.push(`- File-like resources: ${fileResources.length}`);
+  lines.push(`- File-like resources without readable body text: ${unreadFiles.length}`);
+
+  if (query) {
+    const results = searchIndex(query).slice(0, 8);
+    const sources = prepareAnswerSources(results, query);
+    lines.push("");
+    lines.push(`Top sources for: ${query}`);
+    if (!sources.length) lines.push("- none");
+    for (const [index, source] of sources.entries()) {
+      const text = source.resource_id ? contentStore[source.resource_id] || source.text || "" : source.text || "";
+      const stats = contentQualityStats(text);
+      lines.push(
+        `${index + 1}. ${labelForKind(source.kind)} | ${cleanSourceTitle(source)} | score ${Math.round(source.score || 0)} | ${stats.chars} chars | ${stats.words} words | body ${source.has_body ? "yes" : "no"}`
+      );
+    }
+  }
+
+  lines.push("");
+  lines.push("Unread file-like resources (first 12)");
+  if (!unreadFiles.length) lines.push("- none");
+  for (const resource of unreadFiles.slice(0, 12)) {
+    const diag = state.hydrationDiagnostics?.[resource.id];
+    const reason = diag?.error ? ` | last error: ${diag.error}` : "";
+    lines.push(`- ${labelForKind(resource.type)} | ${cleanSourceTitle(resource)} | ${resource.section || resource.page_title || "no section"}${reason}`);
+  }
+
+  lines.push("");
+  lines.push("Weak searchable bodies (first 8)");
+  if (!weakBodies.length) lines.push("- none flagged");
+  for (const entry of weakBodies) {
+    lines.push(`- ${entry.stats.chars} chars, ${entry.stats.words} words, unique ${entry.stats.uniqueRatio.toFixed(2)} | ${cleanSourceTitle(entry.resource || { title: entry.id })}`);
+  }
+
+  return lines.join("\n");
+}
+
+function contentQualityStats(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  const words = clean.toLowerCase().match(/[a-z0-9']+/g) || [];
+  const uniqueRatio = words.length ? new Set(words).size / words.length : 0;
+  return { chars: clean.length, words: words.length, uniqueRatio };
+}
+
 function setView(view) {
   const map = {
     chat: [els.chatView, els.chatViewBtn],
@@ -3451,6 +3539,7 @@ els.crawlBtn.addEventListener("click", () =>
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
 els.restoreDismissedBtn.addEventListener("click", () => restoreDismissedMedia().catch(reportError));
+els.ragAuditBtn.addEventListener("click", () => runRagAudit());
 els.importDetectedCaptionsBtn.addEventListener("click", () => importDetectedCaptions().catch(reportError));
 els.transcribeDetectedAllBtn.addEventListener("click", () => transcribeAllDetectedMedia().catch(reportError));
 els.transcribeAllBtn.addEventListener("click", () => handleTranscriptAction().catch(reportError));
