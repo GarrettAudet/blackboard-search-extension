@@ -2942,7 +2942,7 @@ function buildRetrievalQuery(query, memory) {
 
 function isFollowUpQuery(query) {
   const normalized = normalizeText(query);
-  return /\b(that|this|these|those|it|they|them|there|above|previous|earlier|same|also|compare|compared|differ|different|difference|versus|vs|what about|how about|follow up)\b/.test(normalized);
+  return /\b(that|this|these|those|it|they|them|there|above|previous|earlier|same|also|compare|compared|differ|different|difference|versus|vs|what about|how about|follow up|link me|links?|specific resources?|specific links?|direct access|where can i find|send me|show me|which ones?)\b/.test(normalized);
 }
 
 function formatConversationMemory(memory) {
@@ -3080,11 +3080,20 @@ function buildSearchDocs(query = "") {
 function shouldSkipResourceSearchDoc(resource, storedContent, wantsVideo = false) {
   const type = String(resource?.type || "").toLowerCase();
   const context = clampText(resource?.context || "", 200);
+  if (isLowValueNavigationResource(resource, storedContent)) return true;
   const isVideoMetadata = /^(audio|video|video_embed)$/.test(type);
   const hasTranscript = resourceTranscriptSegmentCount(resource) > 0 || (resource?.transcript_ids || []).length > 0;
-  if (isVideoMetadata && !wantsVideo && !storedContent && !hasTranscript) return true;
+  if (isVideoMetadata && !wantsVideo && !storedContent) return true;
   if (/^(audio|video)$/.test(type) && !storedContent && !context) return true;
   if (type === "video_embed" && !storedContent && !context && !hasTranscript) return true;
+  return false;
+}
+
+function isLowValueNavigationResource(resource, storedContent = "") {
+  const title = normalizeText(resource?.title || "");
+  const source = normalizeText([resource?.section, resource?.page_title, resource?.context].filter(Boolean).join(" "));
+  if (!storedContent && /^(quick links?|open quick links?|tabs|notifications dashboard)$/.test(title)) return true;
+  if (!storedContent && title === "quick links" && /open quick links|notifications dashboard|my institution/.test(source)) return true;
   return false;
 }
 
@@ -3209,16 +3218,25 @@ const STOP_WORDS = new Set([
   "can",
   "for",
   "from",
+  "give",
   "how",
   "i",
   "in",
   "is",
+  "link",
+  "links",
+  "list",
   "it",
   "me",
   "my",
   "of",
   "on",
   "or",
+  "please",
+  "resource",
+  "resources",
+  "some",
+  "specific",
   "the",
   "there",
   "this",
