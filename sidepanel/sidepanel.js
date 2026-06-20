@@ -2023,13 +2023,10 @@ async function hydrateMissingSearchableContentInner() {
   const candidates = state.resources.filter((resource) => shouldHydrateResourceContent(resource)).slice(0, 20);
   if (!candidates.length) return;
 
-  const { hydrated, failed } = await hydrateResourceContentBatch(
-    candidates,
-    `Preparing searchable text for ${candidates.length} file(s)...`
-  );
+  const { hydrated, failed } = await hydrateResourceContentBatch(candidates);
 
   if (hydrated) {
-    setStatus(`${hydrated} file(s) made searchable.`);
+    setIndexStatusSummary();
   } else if (failed) {
     console.info(`${failed} background file hydration attempt(s) skipped.`);
   }
