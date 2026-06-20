@@ -193,6 +193,9 @@ state.contentStore = {
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
+state.resources = state.resources;
+setIndexStatusSummary();
+const statusSummaryText = els.statusText.textContent;
 
 const query = "What are the current to do's?";
 const results = searchIndex(query);
@@ -333,13 +336,16 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   defaultRagPlan("What should I pack for China?")
 );
 delete state.contentStore["packing-pdf"];
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText } = context.__regression;
+if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
+  throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
+}
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [

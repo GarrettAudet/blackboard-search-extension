@@ -93,7 +93,8 @@ function setStatus(message) {
 }
 
 function setIndexStatusSummary() {
-  setIndexStatusSummary();
+  const contentCount = Object.keys(state.contentStore || {}).length;
+  setStatus(`${state.resources.length} resources indexed; ${contentCount} searchable bodies`);
 }
 
 function sanitizeLoadedContentStore(contentStore) {
@@ -242,8 +243,7 @@ function render() {
   els.resourceCount.textContent = String(state.resources.length);
   els.videoCount.textContent = String(videos.length);
   els.transcriptCount.textContent = String(state.transcripts.length);
-  const contentCount = Object.keys(state.contentStore || {}).length;
-  setStatus(`${state.resources.length} resources indexed; ${contentCount} searchable bodies`);
+  setIndexStatusSummary();
   renderSettings();
   renderTranscripts();
   renderDetectedMedia();
