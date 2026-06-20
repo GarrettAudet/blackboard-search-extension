@@ -314,13 +314,30 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer };
+const packingSourcesWithoutBody = prepareAnswerSources(searchIndex("What should I pack for China?"), "What should I pack for China?");
+const packingDocumentReadinessIssue = documentReadinessIssueForQuery(
+  "What should I pack for China?",
+  "What should I pack for China?",
+  packingSourcesWithoutBody,
+  { hydrated: 0, failed: 1, candidates: packingHydrationCandidates },
+  defaultRagPlan("What should I pack for China?")
+);
+state.contentStore["packing-pdf"] = "Bring passport medication prescription copy clothing layers adapter toiletries bank cards cash comfortable shoes weather appropriate clothes important documents vaccination records insurance information visa forms arrival address emergency contacts.";
+const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
+  "What should I pack for China?",
+  "What should I pack for China?",
+  packingSourcesWithoutBody,
+  { hydrated: 1, failed: 0, candidates: packingHydrationCandidates },
+  defaultRagPlan("What should I pack for China?")
+);
+delete state.contentStore["packing-pdf"];
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -378,6 +395,16 @@ if (!parsedReviewJson || parsedReviewJson.answer !== "The course calendar contai
 }
 if (!packingHydrationCandidates.some((resource) => resource.id === "packing-pdf")) {
   throw new Error(`Expected packing query to target the packing PDF for body-text extraction.\n\n${JSON.stringify(packingHydrationCandidates, null, 2)}`);
+}
+if (!packingDocumentReadinessIssue || !/could not read the file contents/i.test(packingDocumentReadinessIssue.text)) {
+  throw new Error(`Expected packing query to fail closed when the PDF body is unreadable.
+
+${JSON.stringify(packingDocumentReadinessIssue, null, 2)}`);
+}
+if (packingDocumentReadinessAfterBody) {
+  throw new Error(`Expected packing query to proceed once the PDF body is available.
+
+${JSON.stringify(packingDocumentReadinessAfterBody, null, 2)}`);
 }
 for (const expectedVisaResource of ["x1-visa-pdf", "visa-faq-pdf"]) {
   if (!visaHydrationCandidates.some((resource) => resource.id === expectedVisaResource)) {
