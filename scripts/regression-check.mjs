@@ -140,6 +140,16 @@ state.resources = [
     page_title: "Language Study - Class of 2026-2027 Pre-program",
     section: "Class of 2026-2027 Pre-program Language Study",
     context: "English Language Resources (2026).pdf English language practice materials and writing resources."
+  },
+  {
+    id: "course-calendar",
+    type: "page",
+    title: "Course Calendar - Class of 2026-2027 Pre-program",
+    url: "https://lms.sc.tsinghua.edu.cn/course-calendar",
+    page_title: "Course Calendar - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Academics",
+    context:
+      "Course Calendar and Course Schedule. The list of courses has been released in the calendar. Students can review the academic calendar, course offerings, modules, and class schedule for the 2026-2027 pre-program."
   }
 ];
 state.contentStore = {
@@ -147,7 +157,8 @@ state.contentStore = {
   "survey-link": state.resources[1].context,
   "home-page": state.resources[2].context,
   "language-study": state.resources[3].context,
-  "english-language-pdf": state.resources[5].context
+  "english-language-pdf": state.resources[5].context,
+  "course-calendar": state.resources[6].context
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
@@ -166,6 +177,27 @@ state.conversation = [
 ];
 const mandarinFollowUpQuery = buildRetrievalQuery("Can you link me some specific resources", getConversationMemory());
 const mandarinFollowUpSources = prepareAnswerSources(searchIndex(mandarinFollowUpQuery), mandarinFollowUpQuery);
+const courseListQuery = "Have they released the list of courses?";
+const courseListRawResults = [
+  {
+    score: 999,
+    resource_id: "language-study",
+    kind: "page",
+    title: "Announcements - Chinese Language Learning Resources",
+    source: "Chinese Language Learning Resources Announcements",
+    text: "Key Vocabulary and Grammar for Each Level Chinese Class includes course material for placement preparation."
+  },
+  {
+    score: 990,
+    resource_id: "capstone-topic",
+    kind: "link",
+    title: "2026-27 Partner Organizations Proposed Topics",
+    source: "Class of 2026-2027 Pre-program To Do",
+    text: "Review the partner organization proposed topics and fill out the capstone survey."
+  },
+  ...searchIndex(courseListQuery)
+];
+const courseListSources = prepareAnswerSources(courseListRawResults, courseListQuery);
 const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
 const preparedMandarinSources = prepareAnswerSources(
   [
@@ -202,13 +234,13 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -248,6 +280,12 @@ if (!mandarinFollowUpSources.some((source) => source.resource_id === "language-s
 }
 if (mandarinFollowUpSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
   throw new Error(`Mandarin follow-up sources should exclude English-language resource hits.\n\n${JSON.stringify(mandarinFollowUpSources, null, 2)}`);
+}
+if (!courseListSources.length || courseListSources[0].resource_id !== "course-calendar") {
+  throw new Error(`Expected released course-list query to prioritize the course calendar.\n\n${JSON.stringify(courseListSources, null, 2)}`);
+}
+if (courseListSources.some((source) => /Chinese Language Learning Resources|Capstone Preliminary Interest|Partner Organizations Proposed Topics/i.test(source.title || source.text || ""))) {
+  throw new Error(`Course-list sources should exclude unrelated Chinese-language and capstone hits when a calendar match exists.\n\n${JSON.stringify(courseListSources, null, 2)}`);
 }
 if (!packingHydrationCandidates.some((resource) => resource.id === "packing-pdf")) {
   throw new Error(`Expected packing query to target the packing PDF for body-text extraction.\n\n${JSON.stringify(packingHydrationCandidates, null, 2)}`);
