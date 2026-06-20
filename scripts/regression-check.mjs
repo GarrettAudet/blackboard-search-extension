@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import vm from "node:vm";
 
+const modulePaths = [
+  new URL("../lib/answer-formatting.js", import.meta.url),
+  new URL("../lib/llm-client.js", import.meta.url)
+];
+const moduleSource = modulePaths.map((path) => fs.readFileSync(path, "utf8")).join("\n\n");
 const sidepanelPath = new URL("../sidepanel/sidepanel.js", import.meta.url);
-const source = fs.readFileSync(sidepanelPath, "utf8");
-const runtimeStart = source.indexOf("chrome.runtime.onMessage.addListener");
-const testableSource = runtimeStart > 0 ? source.slice(0, runtimeStart) : source;
+const sidepanelSource = fs.readFileSync(sidepanelPath, "utf8");
+const runtimeStart = sidepanelSource.indexOf("chrome.runtime.onMessage.addListener");
+const testableSidepanelSource = runtimeStart > 0 ? sidepanelSource.slice(0, runtimeStart) : sidepanelSource;
+const testableSource = `${moduleSource}\n\n${testableSidepanelSource}`;
 
 const context = {
   console,
