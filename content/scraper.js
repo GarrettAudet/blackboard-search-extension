@@ -5,9 +5,7 @@
     "echo360",
     "yuja",
     "mediasite",
-    "bbcollab",
-    "youtube",
-    "vimeo"
+    "bbcollab"
   ];
 
   function cleanText(value, limit = 500) {
@@ -150,6 +148,32 @@
     };
   }
 
+  function panoptoViewerUrlsFromHtml() {
+    const html = decodeHtmlUrlText(document.documentElement && document.documentElement.innerHTML);
+    const urls = [];
+    const patterns = [
+      /https?:\/\/[^"'<>\s)]+\/Panopto\/Pages\/Viewer\.aspx\?[^"'<>\s)]+/gi,
+      /\/Panopto\/Pages\/Viewer\.aspx\?[^"'<>\s)]+/gi
+    ];
+    for (const pattern of patterns) {
+      let match = pattern.exec(html);
+      while (match) {
+        const url = normalizeUrl(match[0]);
+        if (url) urls.push(url);
+        match = pattern.exec(html);
+      }
+    }
+    return [...new Set(urls)];
+  }
+
+  function decodeHtmlUrlText(value) {
+    return String(value || "")
+      .replace(/\\\//g, "/")
+      .replace(/&amp;/gi, "&")
+      .replace(/&#38;/gi, "&")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'");
+  }
   function collectVideoSearchTranscripts() {
     const segments = visibleVideoSearchSegments();
     if (!segments.length) return [];
@@ -222,7 +246,8 @@
 
     function add(resource) {
       if (!resource) return;
-      const key = `${resource.type}|${resource.url}|${resource.title}`;
+      const isMedia = /^(audio|video|video_embed)$/.test(String(resource.type || ""));
+      const key = isMedia ? `${resource.type}|${resource.url}` : `${resource.type}|${resource.url}|${resource.title}`;
       if (seen.has(key)) return;
       seen.add(key);
       resources.push(resource);
@@ -257,6 +282,9 @@
       }
     });
 
+    panoptoViewerUrlsFromHtml().forEach((url) => {
+      add(resourceFromUrl(url, videoTitle(), "video_embed", document.body));
+    });
     const pageText = pageTextExcerpt();
     if (pageText) {
       add({

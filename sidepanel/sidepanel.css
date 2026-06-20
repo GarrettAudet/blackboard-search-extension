@@ -123,13 +123,37 @@ button.secondary {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+  aspect-ratio: 1;
+  overflow: hidden;
   border-radius: 50%;
   color: #fff;
-  background: linear-gradient(145deg, #6d35d6, #9c6cff);
-  font-weight: 850;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+  background:
+    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.26), transparent 34%),
+    linear-gradient(145deg, #6d35d6, #9c6cff);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.11) inset;
+}
+
+.brand-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.brand-icon-book {
+  fill: rgba(255, 255, 255, 0.18);
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
+.brand-icon-line,
+.brand-icon-search {
+  fill: none;
+  stroke: #fff;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.65;
 }
 
 .app-title {
@@ -281,8 +305,8 @@ main {
   left: 14px;
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 9px;
-  padding: 10px;
+  gap: 8px;
+  padding: 9px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: rgba(15, 12, 25, 0.98);
@@ -292,9 +316,9 @@ main {
 .send-button {
   display: grid;
   place-items: center;
-  width: 42px;
-  min-width: 42px;
-  height: 42px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
   padding: 0;
   border-radius: 50%;
   background: linear-gradient(145deg, #7c3aed, #9b72ff);
@@ -302,8 +326,8 @@ main {
 }
 
 .send-button svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: #fff;
   stroke-linecap: round;
