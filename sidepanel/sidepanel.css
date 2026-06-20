@@ -916,3 +916,12 @@ input[readonly] {
     white-space: normal;
   }
 }
+.setup-actions {
+  padding-top: 4px;
+}
+
+.setup-actions button {
+  min-width: 118px;
+  padding: 7px 10px;
+  font-size: 11px;
+}

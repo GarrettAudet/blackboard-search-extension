@@ -365,6 +365,8 @@ async function handleMessage(message) {
       return importDetectedCaptions();
     case "DISMISS_MEDIA_CANDIDATE":
       return dismissMediaCandidate(message.payload || {});
+    case "RESTORE_DISMISSED_MEDIA":
+      return restoreDismissedMedia();
     case "SEARCH_VIDEO_RESULTS":
       return searchVideoResults(message.payload || {});
     case "MANUAL_ATTACH_TRANSCRIPT":
@@ -375,61 +377,46 @@ async function handleMessage(message) {
 }
 
 async function dismissMediaCandidate(payload) {
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
-  const resources = data[RESOURCE_KEY] || [];
-  const transcripts = data[TRANSCRIPT_KEY] || [];
-  const contentStore = data[CONTENT_KEY] || {};
+  const data = await chrome.storage.local.get([DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
   const detections = Array.isArray(data[DETECTED_MEDIA_KEY]) ? data[DETECTED_MEDIA_KEY] : [];
   const ignored = Array.isArray(data[IGNORED_MEDIA_KEY]) ? data[IGNORED_MEDIA_KEY] : [];
 
-  const resource = resources.find((item) => item.id === payload.resource_id || item.id === payload.resourceId);
   const detection = detections.find((item) => item.id === payload.id || item.id === payload.detected_media_id || item.id === payload.detectedMediaId);
-  const selectedRecords = [payload, resource, detection].filter(Boolean);
+  const selectedRecords = [payload, detection].filter(Boolean);
   const keyValues = uniqueStrings(selectedRecords.flatMap(mediaCandidateKeys));
-  const selectedUrls = uniqueStrings([payload.url, payload.video_url, payload.videoUrl, resource?.url, detection?.url].filter(Boolean).map(normalizeUrl));
+  const selectedUrls = uniqueStrings([payload.url, payload.video_url, payload.videoUrl, detection?.url].filter(Boolean).map(normalizeUrl));
 
   const ignoredByKey = new Map(ignored.map((item) => [item.key, item]));
   for (const key of keyValues) {
     ignoredByKey.set(key, {
       key,
-      url: payload.url || resource?.url || detection?.url || "",
-      title: cleanText(payload.title || resource?.title || detection?.title || detection?.page_title || "Dismissed media", 240),
+      url: payload.url || detection?.url || "",
+      title: cleanText(payload.title || detection?.title || detection?.page_title || "Dismissed media", 240),
       ignored_at: new Date().toISOString()
     });
   }
 
   const matchesKeys = (candidate) => keyValues.length && mediaCandidateKeys(candidate).some((key) => keyValues.includes(key));
   const exactUrlMatch = (candidate) => selectedUrls.includes(normalizeUrl(candidate?.url || ""));
-  const nextDetections = detections.filter((item) => item.id !== detection?.id && !(detection && matchesKeys(item)));
-
-  const removedResourceIds = new Set();
-  const exactResourceIds = new Set([resource?.id].filter(Boolean));
-  const nextResources = resources.filter((item) => {
-    const shouldRemove = exactResourceIds.has(item.id) || (!resource && detection && exactUrlMatch(item));
-    if (shouldRemove) removedResourceIds.add(item.id);
-    return !shouldRemove;
-  });
-
-  const nextResourceIds = new Set(nextResources.map((item) => item.id));
-  const nextTranscripts = transcripts.map((transcript) => ({
-    ...transcript,
-    matched_resource_ids: (transcript.matched_resource_ids || []).filter((id) => nextResourceIds.has(id))
-  }));
-  const nextContentStore = Object.fromEntries(
-    Object.entries(contentStore || {}).filter(([id]) => !removedResourceIds.has(id))
-  );
+  const nextDetections = detections.filter((item) => item.id !== detection?.id && !(detection && (matchesKeys(item) || exactUrlMatch(item))));
 
   await chrome.storage.local.set({
     [DETECTED_MEDIA_KEY]: nextDetections,
     [IGNORED_MEDIA_KEY]: Array.from(ignoredByKey.values()).slice(-500)
   });
-  await saveIndex(nextResources, nextTranscripts, nextContentStore);
   return {
     ok: true,
     ignored: keyValues.length,
-    removed_resources: removedResourceIds.size,
+    removed_resources: 0,
     removed_detections: detections.length - nextDetections.length
   };
+}
+
+async function restoreDismissedMedia() {
+  const data = await chrome.storage.local.get(IGNORED_MEDIA_KEY);
+  const ignored = Array.isArray(data[IGNORED_MEDIA_KEY]) ? data[IGNORED_MEDIA_KEY] : [];
+  await chrome.storage.local.set({ [IGNORED_MEDIA_KEY]: [] });
+  return { ok: true, restored_ignored: ignored.length };
 }
 async function getIndex() {
   const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
@@ -437,11 +424,9 @@ async function getIndex() {
   let transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
   const detectedMedia = data[DETECTED_MEDIA_KEY] || [];
-  const ignoredKeys = ignoredMediaKeys(data[IGNORED_MEDIA_KEY]);
+  const ignoredRecords = Array.isArray(data[IGNORED_MEDIA_KEY]) ? data[IGNORED_MEDIA_KEY] : [];
+  const ignoredKeys = ignoredMediaKeys(ignoredRecords);
   const prunedDetectedMedia = pruneDetectedMediaToTsinghua(detectedMedia).filter((item) => !mediaCandidateIsIgnored(item, ignoredKeys));
-  if (prunedDetectedMedia.length !== detectedMedia.length) {
-    await chrome.storage.local.set({ [DETECTED_MEDIA_KEY]: prunedDetectedMedia });
-  }
   const deduped = dedupeTranscriptIndex(resources, transcripts);
   resources = deduped.resources;
   transcripts = deduped.transcripts;
@@ -450,7 +435,16 @@ async function getIndex() {
     await saveIndex(resources, transcripts, contentStore);
   }
   const meta = data[META_KEY] || { resource_count: resources.length, transcript_count: transcripts.length };
-  return { ok: true, resources, transcripts, detected_media: prunedDetectedMedia, content_store: contentStore, meta };
+  return {
+    ok: true,
+    resources,
+    transcripts,
+    detected_media: prunedDetectedMedia,
+    ignored_media_keys: Array.from(ignoredKeys),
+    ignored_media_count: ignoredRecords.length,
+    content_store: contentStore,
+    meta
+  };
 }
 
 async function clearIndex() {

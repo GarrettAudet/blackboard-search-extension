@@ -99,6 +99,14 @@
             </p>
 
             <button id="saveSettingsBtn" type="button">Save setup</button>
+
+            <div class="button-row setup-actions">
+              <button id="crawlBtn" type="button" title="Reindex Blackboard courses and organizations">Reindex Blackboard</button>
+              <button id="scanBtn" class="secondary" type="button" title="Scan the current Blackboard page">Scan current page</button>
+              <button id="restoreDismissedBtn" class="secondary" type="button" title="Clear dismissed media ignores from this browser">Restore dismissed media</button>
+              <button id="clearBtn" class="secondary" type="button" title="Clear the local index">Clear index</button>
+            </div>
+            <p id="maintenanceState" class="setup-note">Reindex from Blackboard after logging in, or restore dismissed media if a prior dismiss hid too many videos.</p>
           </div>
         </section>
 
@@ -113,12 +121,7 @@
             </div>
             <button id="importBtn" type="button" title="Import transcript JSON">Import</button>
           </div>
-          <div class="button-row library-actions" hidden>
-            <button id="crawlBtn" type="button" title="Index Blackboard courses and organizations">Index</button>
-            <button id="scanBtn" class="secondary" type="button" title="Scan the current Blackboard page">Scan</button>
-            <button id="clearBtn" class="secondary" type="button" title="Clear the local index">Clear</button>
-            <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
-          </div>
+          <input id="transcriptFile" type="file" accept=".json,application/json" hidden />
           <p id="crawlState" class="panel-note">Import prepared transcript JSON. Use the header refresh button to reload the local index and reset chat memory.</p>
 
           <section id="missingVideoSection" class="library-section">

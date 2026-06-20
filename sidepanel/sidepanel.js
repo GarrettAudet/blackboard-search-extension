@@ -15,6 +15,7 @@ const state = {
   resources: [],
   transcripts: [],
   detectedMedia: [],
+  ignoredMediaKeys: new Set(),
   contentStore: {},
   meta: {},
   conversation: [],
@@ -46,6 +47,8 @@ const els = {
   crawlBtn: document.getElementById("crawlBtn"),
   importBtn: document.getElementById("importBtn"),
   clearBtn: document.getElementById("clearBtn"),
+  restoreDismissedBtn: document.getElementById("restoreDismissedBtn"),
+  maintenanceState: document.getElementById("maintenanceState"),
   transcriptFile: document.getElementById("transcriptFile"),
   providerSelect: document.getElementById("providerSelect"),
   modelInput: document.getElementById("modelInput"),
@@ -91,8 +94,9 @@ async function refreshAll() {
   state.resources = indexResponse.resources || [];
   state.transcripts = indexResponse.transcripts || [];
   state.detectedMedia = indexResponse.detected_media || indexResponse.detectedMedia || [];
+  state.ignoredMediaKeys = new Set(indexResponse.ignored_media_keys || indexResponse.ignoredMediaKeys || []);
   state.contentStore = indexResponse.content_store || indexResponse.contentStore || {};
-  state.meta = indexResponse.meta || {};
+  state.meta = { ...(indexResponse.meta || {}), ignored_media_count: indexResponse.ignored_media_count || indexResponse.ignoredMediaCount || 0 };
   state.settings = settings;
   render();
   hydrateMissingSearchableContent().catch((error) => console.warn("Content hydration failed", error));
@@ -179,6 +183,15 @@ async function clearIndex() {
   seedIntroMessage(true);
   setStatus("Local index cleared.");
 }
+async function restoreDismissedMedia() {
+  const response = await sendMessage("RESTORE_DISMISSED_MEDIA");
+  if (!response.ok) throw new Error(response.error || "Could not restore dismissed media.");
+  await refreshAll();
+  const restored = response.restored_ignored || 0;
+  setStatus(restored
+    ? `Restored ${restored} dismissed media ignore${restored === 1 ? "" : "s"}. Reindex Blackboard or reopen videos to repopulate anything already removed.`
+    : "No dismissed media ignores were stored.");
+}
 
 function render() {
   const videos = state.resources.filter(isTranscriptCandidateResource);
@@ -200,6 +213,13 @@ function renderSettings() {
   els.setupState.textContent = state.settings.hasApiKey ? "API key saved" : "local search only";
   els.apiKeyInput.placeholder = state.settings.hasApiKey ? "Saved; enter a new key to replace" : "Stored locally in Chrome";
   els.autoTranscribeInput.checked = Boolean(state.settings.autoTranscribe);
+  if (els.restoreDismissedBtn) {
+    const ignoredCount = Number(state.meta.ignored_media_count || 0);
+    els.restoreDismissedBtn.disabled = ignoredCount === 0;
+    els.maintenanceState.textContent = ignoredCount
+      ? `${ignoredCount} dismissed media ignore${ignoredCount === 1 ? "" : "s"} in this browser. Restore them, then reindex Blackboard or reopen videos to repopulate removed resources.`
+      : "Reindex from Blackboard after logging in, or restore dismissed media if a prior dismiss hid too many videos.";
+  }
 }
 
 function renderTranscripts() {
@@ -597,7 +617,7 @@ function renderDismissButton(payload) {
   button.type = "button";
   button.className = "secondary dismiss-button";
   button.textContent = "Dismiss";
-  button.title = "Remove this media candidate locally and ignore matching future detections.";
+  button.title = "Hide this media candidate locally without deleting indexed resources.";
   button.addEventListener("click", () => dismissMediaCandidate(payload, button).catch(reportError));
   return button;
 }
@@ -607,7 +627,8 @@ async function dismissMediaCandidate(payload, button) {
   const response = await sendMessage("DISMISS_MEDIA_CANDIDATE", payload);
   if (!response.ok) throw new Error(response.error || "Could not dismiss media candidate.");
   await refreshAll();
-  setStatus(`Dismissed media candidate; removed ${response.removed_resources || 0} resource(s), ${response.removed_detections || 0} detection(s).`);
+  const detections = response.removed_detections || 0;
+  setStatus(`Dismissed media candidate; hidden ${detections} matching detection${detections === 1 ? "" : "s"} locally.`);
 }
 
 function canUseVideoTranscription() {
@@ -3255,7 +3276,7 @@ function isVideoResource(resource) {
 }
 
 function isTranscriptCandidateResource(resource) {
-  return isActualVideoResource(resource) && isAllowedTranscriptSource(resource);
+  return isActualVideoResource(resource) && isAllowedTranscriptSource(resource) && !resourceIsDismissedMedia(resource);
 }
 
 function isActualVideoResource(resource) {
@@ -3266,6 +3287,19 @@ function isActualVideoResource(resource) {
   return /(panopto|kaltura|echo360|yuja|mediasite|bbcollab)/i.test(url);
 }
 
+function resourceIsDismissedMedia(resource) {
+  if (!state.ignoredMediaKeys || !state.ignoredMediaKeys.size) return false;
+  return mediaCandidateKeysForRecord(resource).some((key) => state.ignoredMediaKeys.has(key));
+}
+
+function mediaCandidateKeysForRecord(record) {
+  const keys = [];
+  const canonical = canonicalVideoKey(record);
+  if (/^(panopto|media):/i.test(canonical)) keys.push(canonical.toLowerCase());
+  const media = mediaCandidateKey(record?.canonical_key || record?.url || record?.video_url || record?.videoUrl || "");
+  if (media) keys.push(media);
+  return Array.from(new Set(keys.filter(Boolean)));
+}
 function isAllowedTranscriptSource(resource) {
   const text = transcriptSourceText(resource);
   if (!text) return false;
@@ -3393,6 +3427,7 @@ els.crawlBtn.addEventListener("click", () =>
 );
 els.importBtn.addEventListener("click", () => els.transcriptFile.click());
 els.clearBtn.addEventListener("click", () => clearIndex().catch(reportError));
+els.restoreDismissedBtn.addEventListener("click", () => restoreDismissedMedia().catch(reportError));
 els.importDetectedCaptionsBtn.addEventListener("click", () => importDetectedCaptions().catch(reportError));
 els.transcribeDetectedAllBtn.addEventListener("click", () => transcribeAllDetectedMedia().catch(reportError));
 els.transcribeAllBtn.addEventListener("click", () => handleTranscriptAction().catch(reportError));
