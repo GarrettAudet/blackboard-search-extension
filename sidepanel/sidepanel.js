@@ -2317,8 +2317,9 @@ async function handleAsk(event) {
   const pending = appendMessage("assistant", "Reading the top local matches and asking the selected API...");
   try {
     const answer = await buildApiAnswer(query, answerSources, memory, retrievalQuery);
-    updateMessage(pending, answer, answerSources);
-    rememberTurn(query, answer);
+    const finalAnswer = alignAnswerCitations(answer, answerSources);
+    updateMessage(pending, finalAnswer.text, finalAnswer.sources);
+    rememberTurn(query, finalAnswer.text);
   } catch (error) {
     const fallback = `${localAnswer}\n\nAPI call failed: ${error && error.message ? error.message : String(error)}`;
     updateMessage(pending, fallback, answerSources);
@@ -2362,11 +2363,14 @@ function diversifySearchResults(scored, query) {
 
 function prepareAnswerSources(results, query = "") {
   const wantsVideo = wantsVideoHeavySearch(query);
+  const wantsChineseLanguage = isChineseLanguageQuery(query);
+  const wantsEnglishLanguage = isEnglishLanguageQuery(query) && !wantsChineseLanguage;
   const selected = [];
   const seen = new Set();
   for (const result of results || []) {
     if (!result || result.score <= 0) continue;
     if (isLowValueSearchResult(result)) continue;
+    if (wantsChineseLanguage && !wantsEnglishLanguage && isEnglishLanguageResource(result)) continue;
     if (!wantsVideo && isVideoResultKind(result.kind)) continue;
     const key = sourceDedupeKey(result);
     if (seen.has(key)) continue;
@@ -2375,6 +2379,24 @@ function prepareAnswerSources(results, query = "") {
     if (selected.length >= 8) break;
   }
   return selected;
+}
+
+function isChineseLanguageQuery(query) {
+  const normalized = normalizeText(query);
+  return /\b(mandarin|chinese|chinese language|chinese resources?|learn chinese|study chinese|chinese vocab|chinese vocabulary|chinese grammar|survival chinese)\b/.test(
+    normalized
+  );
+}
+
+function isEnglishLanguageQuery(query) {
+  return /\benglish\b/i.test(String(query || ""));
+}
+
+function isEnglishLanguageResource(result) {
+  const haystack = normalizeText(
+    [cleanSourceTitle(result), compactSourceTrail(result), result.text, result.url].filter(Boolean).join(" ")
+  );
+  return /\benglish language resources?\b/.test(haystack) || (/\benglish\b/.test(haystack) && /\blanguage\b/.test(haystack));
 }
 
 function isLowValueSearchResult(result) {
@@ -2863,7 +2885,8 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
         "Do not include a separate Sources section; the interface shows sources separately. " +
         "Keep the answer complete but compact. Prefer the most relevant details over exhaustive lists. " +
         "Do not say downloaded. Refer to materials as indexed Blackboard resources or imported transcripts. " +
-        "Use concise prose and cite only source IDs listed below. Separate adjacent citations with comma-space, like [1], [2], never [1][2]."
+        "Use concise prose and cite only source IDs listed below. Every factual answer should cite at least one provided source. " +
+        "Separate adjacent citations with comma-space, like [1], [2], never [1][2]."
     },
     {
       role: "user",
@@ -2897,6 +2920,39 @@ function cleanAnswerText(value, sourceCount = 0) {
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function alignAnswerCitations(value, sources = []) {
+  const sourceList = Array.isArray(sources) ? sources : [];
+  const placeholderPrefix = "__BB_SOURCE_CITATION_";
+  const used = [];
+  const seen = new Set();
+  let text = String(value || "").replace(/\[(\d+)\]/g, (match, numberText) => {
+    const sourceNumber = Number.parseInt(numberText, 10);
+    if (!Number.isFinite(sourceNumber) || sourceNumber < 1 || sourceNumber > sourceList.length) return "";
+    if (!seen.has(sourceNumber)) {
+      seen.add(sourceNumber);
+      used.push(sourceNumber);
+    }
+    return `${placeholderPrefix}${sourceNumber}__`;
+  });
+
+  if (!used.length) {
+    return {
+      text: cleanAnswerText(text, sourceList.length),
+      sources: sourceList.slice(0, Math.min(4, sourceList.length))
+    };
+  }
+
+  const remap = new Map(used.map((sourceNumber, index) => [sourceNumber, index + 1]));
+  text = text.replace(new RegExp(`${placeholderPrefix}(\\d+)__`, "g"), (_match, numberText) => {
+    const sourceNumber = Number.parseInt(numberText, 10);
+    return `[${remap.get(sourceNumber)}]`;
+  });
+  return {
+    text: cleanAnswerText(text, used.length),
+    sources: used.map((sourceNumber) => sourceList[sourceNumber - 1]).filter(Boolean)
+  };
 }
 async function callChatCompletion({ provider, apiKey, model, messages }) {
   const config = providerConfig(provider, apiKey);

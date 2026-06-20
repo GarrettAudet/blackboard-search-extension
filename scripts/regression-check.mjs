@@ -132,13 +132,42 @@ const answer = buildDirectAnswer(query, results);
 const mandarinQuery = "Have they gives us any mandarin resources to learn from?";
 const mandarinIsCapability = isCapabilityQuestion(mandarinQuery);
 const mandarinResults = searchIndex(mandarinQuery);
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults };
+const preparedMandarinSources = prepareAnswerSources(
+  [
+    {
+      score: 200,
+      kind: "pdf",
+      title: "English Language Resources (2026).pdf",
+      source: "Class of 2026-2027 Pre-program Language Study",
+      text: "English Language Resources (2026).pdf English Language Resources English language practice materials"
+    },
+    {
+      score: 190,
+      kind: "announcement",
+      title: "Chinese Language Learning Resources",
+      source: "Chinese Language Learning Resources Announcements",
+      text: "Chinese Language Learning Resources include key vocabulary, grammar, Mandarin placement preparation, and survival Chinese lessons."
+    }
+  ],
+  mandarinQuery
+);
+const alignedCitations = alignAnswerCitations(
+  "Use the first source [1] and the course page [5].",
+  [
+    { title: "Chinese source 1", score: 100, kind: "page", text: "one" },
+    { title: "Unused source 2", score: 90, kind: "page", text: "two" },
+    { title: "Unused source 3", score: 80, kind: "page", text: "three" },
+    { title: "Unused source 4", score: 70, kind: "page", text: "four" },
+    { title: "Chinese source 5", score: 60, kind: "page", text: "five" }
+  ]
+);
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -169,6 +198,18 @@ if (mandarinIsCapability) {
 }
 if (!mandarinResults.some((result) => result.resource_id === "language-study")) {
   throw new Error(`Expected Mandarin query to retrieve language-study resource.\n\n${JSON.stringify(mandarinResults, null, 2)}`);
+}
+if (preparedMandarinSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
+  throw new Error(`Mandarin answer sources should exclude English-language resource hits.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);
+}
+if (!preparedMandarinSources.some((source) => /Chinese Language Learning Resources/i.test(source.title || ""))) {
+  throw new Error(`Mandarin answer sources should keep Chinese-language resources.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);
+}
+if (alignedCitations.text.includes("[5]") || !alignedCitations.text.includes("[1]") || !alignedCitations.text.includes("[2]")) {
+  throw new Error(`Citation numbers should be compacted with no gaps.\n\n${alignedCitations.text}`);
+}
+if (alignedCitations.sources.length !== 2 || alignedCitations.sources[1].title !== "Chinese source 5") {
+  throw new Error(`Displayed sources should be exactly the cited compacted sources.\n\n${JSON.stringify(alignedCitations.sources, null, 2)}`);
 }
 
 console.log("regression-check passed");
