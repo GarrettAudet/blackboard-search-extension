@@ -1,5 +1,6 @@
 const SETTINGS_KEY = "assistant_settings";
 const MAX_CONTENT_CHARS = 20000;
+const TARGETED_CONTENT_HYDRATION_LIMIT = 4;
 const MAX_MEMORY_TURNS = 6;
 const MEDIA_RESOLVE_TIMEOUT_MS = 30000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
@@ -1995,27 +1996,81 @@ async function hydrateMissingSearchableContent() {
 }
 
 async function hydrateMissingSearchableContentInner() {
-  const candidates = state.resources.filter(shouldHydrateResourceContent).slice(0, 20);
+  const candidates = state.resources.filter((resource) => shouldHydrateResourceContent(resource)).slice(0, 20);
   if (!candidates.length) return;
 
-  setStatus(`Preparing searchable text for ${candidates.length} file(s)...`);
+  const { hydrated, failed } = await hydrateResourceContentBatch(
+    candidates,
+    `Preparing searchable text for ${candidates.length} file(s)...`
+  );
+
+  if (hydrated || failed) {
+    setStatus(`${hydrated} file(s) made searchable${failed ? `; ${failed} skipped` : ""}.`);
+  }
+}
+
+async function hydrateLikelyResourceContentForQuery(query, currentResults = []) {
+  const candidates = findHydrationCandidatesForQuery(query, currentResults).slice(0, TARGETED_CONTENT_HYDRATION_LIMIT);
+  if (!candidates.length) return 0;
+
+  const label = candidates.length === 1 ? `"${cleanSourceTitle(candidates[0])}"` : `${candidates.length} likely file(s)`;
+  const { hydrated, failed } = await hydrateResourceContentBatch(candidates, `Reading ${label} before answering...`);
+  if (hydrated || failed) {
+    setStatus(`${hydrated} matching file(s) made searchable${failed ? `; ${failed} skipped` : ""}.`);
+  }
+  return hydrated;
+}
+
+function findHydrationCandidatesForQuery(query, currentResults = []) {
+  const resourcesById = new Map(state.resources.map((resource) => [resource.id, resource]));
+  const scored = new Map();
+  const addCandidate = (resource, boost = 0) => {
+    if (!shouldHydrateResourceContent(resource, true)) return;
+    const doc = hydrationSearchDocForResource(resource);
+    const score = scoreDoc(query, doc) + boost;
+    if (score <= 0) return;
+    const existing = scored.get(resource.id);
+    if (!existing || score > existing.score) scored.set(resource.id, { resource, score });
+  };
+
+  for (const result of currentResults || []) {
+    if (result.resource_id) addCandidate(resourcesById.get(result.resource_id), 50);
+  }
+  for (const resource of state.resources) addCandidate(resource, 0);
+
+  return Array.from(scored.values())
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.resource);
+}
+
+function hydrationSearchDocForResource(resource) {
+  return {
+    kind: resource.type || "resource",
+    title: resource.title || "Untitled resource",
+    source: [resource.section, resource.page_title].filter(Boolean).join(" - "),
+    text: [resource.context, resource.section, resource.page_title, resource.url].filter(Boolean).join(" "),
+    url: resource.url || resource.page_url || ""
+  };
+}
+
+async function hydrateResourceContentBatch(candidates, statusMessage = "") {
+  if (statusMessage) setStatus(statusMessage);
   let hydrated = 0;
   let failed = 0;
 
   for (const resource of candidates) {
     try {
+      if (state.contentStore && state.contentStore[resource.id]) continue;
       const content = await extractSearchableResourceText(resource);
-      if (!isUsableSearchContent(content)) {
-        failed += 1;
-        hydrationFailures.add(resource.id);
-        continue;
-      }
+      if (!isUsableSearchContent(content)) throw new Error("Extracted text was too sparse or repetitive.");
+      const storedContent = clampText(content, MAX_CONTENT_CHARS);
       const response = await sendMessage("STORE_CONTENT", {
         resource_id: resource.id,
-        content: clampText(content, MAX_CONTENT_CHARS)
+        content: storedContent
       });
       if (!response.ok) throw new Error(response.error || "Content store write failed");
-      state.contentStore[resource.id] = clampText(content, MAX_CONTENT_CHARS);
+      state.contentStore[resource.id] = storedContent;
+      hydrationFailures.delete(resource.id);
       hydrated += 1;
     } catch (error) {
       failed += 1;
@@ -2024,14 +2079,12 @@ async function hydrateMissingSearchableContentInner() {
     }
   }
 
-  if (hydrated || failed) {
-    setStatus(`${hydrated} file(s) made searchable${failed ? `; ${failed} skipped` : ""}.`);
-  }
+  return { hydrated, failed };
 }
 
-function shouldHydrateResourceContent(resource) {
+function shouldHydrateResourceContent(resource, retryFailure = false) {
   if (!resource || !resource.id || !resource.url) return false;
-  if (hydrationFailures.has(resource.id)) return false;
+  if (!retryFailure && hydrationFailures.has(resource.id)) return false;
   if (state.contentStore && state.contentStore[resource.id]) return false;
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
@@ -2290,6 +2343,11 @@ async function handleAsk(event) {
   const retrievalQuery = buildRetrievalQuery(query, memory);
   appendMessage("user", query);
   let results = searchIndex(retrievalQuery);
+
+  const hydratedMatches = await hydrateLikelyResourceContentForQuery(retrievalQuery, results);
+  if (hydratedMatches) {
+    results = searchIndex(retrievalQuery);
+  }
 
   const videoSearch = await enrichVideoResultsForQuery(query, retrievalQuery, results);
   if (videoSearch.segment_count || videoSearch.transcripts_imported) {
@@ -3341,6 +3399,9 @@ function expandedTokens(query) {
     money: ["cash", "rmb", "bank", "banking"],
     banking: ["bank", "rmb", "payment", "cash"],
     payment: ["alipay", "wechatpay", "cash", "card", "bank"],
+    pack: ["packing", "bring", "luggage", "clothing", "medicine", "arrival"],
+    packing: ["pack", "bring", "luggage", "clothing", "medicine", "arrival"],
+    bring: ["pack", "packing", "luggage", "clothing", "medicine"],
     taxi: ["didi", "arrival"],
     video: ["webinar", "recording", "transcript"],
     transcript: ["video", "webinar", "recording"],

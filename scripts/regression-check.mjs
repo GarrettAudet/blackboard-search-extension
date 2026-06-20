@@ -115,6 +115,15 @@ state.resources = [
     section: "Class of 2026-2027 Pre-program",
     context:
       "Language Study Chinese language resources include Mandarin placement materials, course preparation notes, and recommended study resources for incoming students."
+  },
+  {
+    id: "packing-pdf",
+    type: "pdf",
+    title: "Packing List for Students (2026).pdf",
+    url: "https://lms.sc.tsinghua.edu.cn/bbcswebdav/pid-123-dt-content-rid-456_1/xid-456_1",
+    page_title: "Resources - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Resources",
+    context: "Packing List for Students (2026).pdf"
   }
 ];
 state.contentStore = {
@@ -132,6 +141,7 @@ const answer = buildDirectAnswer(query, results);
 const mandarinQuery = "Have they gives us any mandarin resources to learn from?";
 const mandarinIsCapability = isCapabilityQuestion(mandarinQuery);
 const mandarinResults = searchIndex(mandarinQuery);
+const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
 const preparedMandarinSources = prepareAnswerSources(
   [
     {
@@ -167,13 +177,13 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -204,6 +214,9 @@ if (mandarinIsCapability) {
 }
 if (!mandarinResults.some((result) => result.resource_id === "language-study")) {
   throw new Error(`Expected Mandarin query to retrieve language-study resource.\n\n${JSON.stringify(mandarinResults, null, 2)}`);
+}
+if (!packingHydrationCandidates.some((resource) => resource.id === "packing-pdf")) {
+  throw new Error(`Expected packing query to target the packing PDF for body-text extraction.\n\n${JSON.stringify(packingHydrationCandidates, null, 2)}`);
 }
 if (preparedMandarinSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
   throw new Error(`Mandarin answer sources should exclude English-language resource hits.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);
