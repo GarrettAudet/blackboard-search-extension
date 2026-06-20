@@ -1248,12 +1248,34 @@ async function saveIndex(resources, transcripts, contentStore = null) {
 }
 
 function pruneContentStore(contentStore, resources) {
-  const resourceIds = new Set(resources.map((resource) => resource.id));
+  const resourcesById = new Map(resources.map((resource) => [resource.id, resource]));
   return Object.fromEntries(
     Object.entries(contentStore || {})
-      .filter(([id, text]) => resourceIds.has(id) && String(text || "").trim())
+      .filter(([id, text]) => {
+        const resource = resourcesById.get(id);
+        if (!resource || !String(text || "").trim()) return false;
+        if (isFileLikeResource(resource) && !isReadableStoredFileBodyText(resource, text)) return false;
+        return true;
+      })
       .map(([id, text]) => [id, cleanBodyText(text, 20000)])
   );
+}
+
+function isReadableStoredFileBodyText(resource, storedContent) {
+  const text = String(storedContent || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const words = text.toLowerCase().match(/[a-z0-9']+/g) || [];
+  if (words.length < 45) return false;
+  if (/\bPage\s+\d+:/i.test(text) && words.length >= 45) return true;
+  const title = normalizeText(resource.title || "");
+  const sourceBits = normalizeText([resource.section, resource.page_title].filter(Boolean).join(" "));
+  const normalized = normalizeText(text);
+  const mentionsTitle = title && normalized.includes(title);
+  const mentionsSource = sourceBits && normalized.includes(sourceBits);
+  const hasListingSignals = /\b(resources?|content|attached files?|blackboard|class of|pre-program|click|open|pdf)\b/i.test(text);
+  const hasDetailSignals = /\b(passport|jw202|admission notice|visa application|physical exam|medication|prescription|packing|pack|clothing|toiletries|adapter|cash|bank card|residence permit|registration|insurance|vaccination|luggage|documents to bring)\b/i.test(text);
+  if (words.length < 110 && (mentionsTitle || mentionsSource || hasListingSignals) && !hasDetailSignals) return false;
+  return words.length >= 110 || text.length >= 900;
 }
 
 function defaultAllowedPrefix(seedUrl) {
@@ -1556,9 +1578,16 @@ function normalizeResource(raw) {
 }
 
 function searchableContentFrom(resource) {
+  if (isFileLikeResource(resource)) return "";
   const content = cleanBodyText(resource.context || "", resource.type === "page" ? 20000 : 5000);
   if (!content) return "";
   return [resource.title, resource.section, resource.page_title, content].filter(Boolean).join("\n\n");
+}
+
+function isFileLikeResource(resource) {
+  const type = String(resource?.type || "").toLowerCase();
+  const hint = [resource?.title, resource?.url, resource?.document_url].filter(Boolean).join(" ");
+  return ["pdf", "document", "slides", "spreadsheet"].includes(type) || /\.(pdf|docx|pptx|xlsx)(?:[?#]|$|\s)/i.test(hint);
 }
 
 function resourceMetadataFrom(resource) {

@@ -322,7 +322,9 @@ const packingDocumentReadinessIssue = documentReadinessIssueForQuery(
   { hydrated: 0, failed: 1, candidates: packingHydrationCandidates },
   defaultRagPlan("What should I pack for China?")
 );
-state.contentStore["packing-pdf"] = "Bring passport medication prescription copy clothing layers adapter toiletries bank cards cash comfortable shoes weather appropriate clothes important documents vaccination records insurance information visa forms arrival address emergency contacts.";
+const fakePackingSnippet = "Packing List for Students (2026).pdf Class of 2026-2027 Pre-program Resources Resources Content Blackboard User Guideline Incoming Students Packing List for Students (2026).pdf OBTAINING YOUR X1 STUDENT VISA 2026.pdf Visa FAQ 2026.pdf WeChat Registration FAQ 2026 BB.pdf Click for more options Open source";
+const packingFakeSnippetIsReadable = resourceHasReadableBody(state.resources.find((resource) => resource.id === "packing-pdf"), fakePackingSnippet);
+state.contentStore["packing-pdf"] = "Page 1: Packing List for Students 2026. Bring passport and copies of key documents, visa paperwork, admission notice, JW202 if applicable, prescription medication in original packaging, doctor letters for prescriptions, basic over-the-counter medicine, adapters, chargers, clothing layers, professional clothes, comfortable walking shoes, toiletries, glasses or contacts, insurance information, bank cards, some cash, emergency contacts, arrival address, vaccination records, and luggage items needed for daily life in China. Page 2: Recommended items include cold medicine, allergy medicine, pain relievers, sunscreen, personal hygiene products, small gifts, and copies of important forms.";
 const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   "What should I pack for China?",
   "What should I pack for China?",
@@ -331,13 +333,13 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   defaultRagPlan("What should I pack for China?")
 );
 delete state.contentStore["packing-pdf"];
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -400,6 +402,9 @@ if (!packingDocumentReadinessIssue || !/could not read the file contents/i.test(
   throw new Error(`Expected packing query to fail closed when the PDF body is unreadable.
 
 ${JSON.stringify(packingDocumentReadinessIssue, null, 2)}`);
+}
+if (packingFakeSnippetIsReadable) {
+  throw new Error("Expected crawler/link snippets for PDFs not to count as readable document body text.");
 }
 if (packingDocumentReadinessAfterBody) {
   throw new Error(`Expected packing query to proceed once the PDF body is available.

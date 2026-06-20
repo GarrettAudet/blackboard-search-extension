@@ -92,6 +92,23 @@ function setStatus(message) {
   els.statusText.title = text;
 }
 
+function sanitizeLoadedContentStore(contentStore) {
+  const next = { ...(contentStore || {}) };
+  const resourcesById = new Map((state.resources || []).map((resource) => [resource.id, resource]));
+  for (const [resourceId, content] of Object.entries(next)) {
+    const resource = resourcesById.get(resourceId);
+    if (resource && isDocumentOrFileLikeResource(resource) && !resourceHasReadableBody(resource, content)) {
+      delete next[resourceId];
+      state.hydrationDiagnostics[resourceId] = {
+        ok: false,
+        error: "Cached text was only a Blackboard listing/snippet, not parsed document body text.",
+        at: new Date().toISOString()
+      };
+    }
+  }
+  return next;
+}
+
 async function refreshAll() {
   const [indexResponse, settings] = await Promise.all([sendMessage("GET_INDEX"), loadSettings()]);
   if (!indexResponse.ok) throw new Error(indexResponse.error || "Unable to load index");
@@ -99,7 +116,7 @@ async function refreshAll() {
   state.transcripts = indexResponse.transcripts || [];
   state.detectedMedia = indexResponse.detected_media || indexResponse.detectedMedia || [];
   state.ignoredMediaKeys = new Set(indexResponse.ignored_media_keys || indexResponse.ignoredMediaKeys || []);
-  state.contentStore = indexResponse.content_store || indexResponse.contentStore || {};
+  state.contentStore = sanitizeLoadedContentStore(indexResponse.content_store || indexResponse.contentStore || {});
   state.meta = { ...(indexResponse.meta || {}), ignored_media_count: indexResponse.ignored_media_count || indexResponse.ignoredMediaCount || 0 };
   state.settings = settings;
   render();
@@ -2180,7 +2197,7 @@ function documentTitleMatchesQuestion(query, resource) {
 }
 
 function hasReadableResourceBody(resource) {
-  return Boolean(resource?.id && isUsableSearchContent(state.contentStore?.[resource.id]));
+  return Boolean(resource?.id && resourceHasReadableBody(resource, state.contentStore?.[resource.id]));
 }
 
 function sourceHasUsableBodyForDocumentQuestion(source, candidates) {
@@ -2250,9 +2267,9 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
 
   for (const resource of candidates) {
     try {
-      if (state.contentStore && state.contentStore[resource.id]) continue;
+      if (state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) continue;
       const content = await extractSearchableResourceText(resource);
-      if (!isUsableSearchContent(content)) throw new Error("Extracted text was too sparse or repetitive.");
+      if (!resourceHasReadableBody(resource, content)) throw new Error("Extracted text did not look like readable document body text.");
       const storedContent = clampText(content, MAX_CONTENT_CHARS);
       const response = await sendMessage("STORE_CONTENT", {
         resource_id: resource.id,
@@ -2285,7 +2302,7 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
 function shouldHydrateResourceContent(resource, retryFailure = false) {
   if (!resource || !resource.id || !resource.url) return false;
   if (!retryFailure && hydrationFailures.has(resource.id)) return false;
-  if (state.contentStore && state.contentStore[resource.id]) return false;
+  if (state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) return false;
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
   const fileHint = resourceFileHint(resource).toLowerCase();
@@ -3389,7 +3406,7 @@ function buildRagAudit(query = "") {
   const contentStore = state.contentStore || {};
   const fileResources = resources.filter(isDocumentOrFileLikeResource);
   const bodyEntries = Object.entries(contentStore).filter(([, text]) => isUsableSearchContent(text));
-  const unreadFiles = fileResources.filter((resource) => !isUsableSearchContent(contentStore[resource.id]));
+  const unreadFiles = fileResources.filter((resource) => !resourceHasReadableBody(resource, contentStore[resource.id]));
   const weakBodies = bodyEntries
     .map(([id, text]) => ({
       id,
@@ -3413,7 +3430,7 @@ function buildRagAudit(query = "") {
     lines.push(`Top sources for: ${query}`);
     if (!sources.length) lines.push("- none");
     for (const [index, source] of sources.entries()) {
-      const text = source.resource_id ? contentStore[source.resource_id] || source.text || "" : source.text || "";
+      const text = source.resource_id && source.has_body ? contentStore[source.resource_id] || source.text || "" : source.text || "";
       const stats = contentQualityStats(text);
       lines.push(
         `${index + 1}. ${labelForKind(source.kind)} | ${cleanSourceTitle(source)} | score ${Math.round(source.score || 0)} | ${stats.chars} chars | ${stats.words} words | body ${source.has_body ? "yes" : "no"}`
