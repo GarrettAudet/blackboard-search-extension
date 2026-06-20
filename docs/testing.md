@@ -73,7 +73,7 @@ Expected behavior:
 
 - If configured, `/feedback` opens the feedback form.
 - If configured, `/feedback Test feedback from launch QA` opens the form with the first question prefilled.
-- Metadata includes extension version, indexed resource count, searchable body count, and timestamp.
+- The current two-question Google Form does not collect hidden metadata. If metadata fields are added later, confirm version, indexed resource count, searchable body count, and timestamp are attached.
 - If no form URL is configured, the extension explains that feedback collection is not live yet and shows the intended form questions.
 - No private write tokens or GitHub tokens are embedded in the extension.
 

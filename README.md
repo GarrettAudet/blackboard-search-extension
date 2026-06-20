@@ -77,21 +77,21 @@ Suggestions for the bot
 Any other issues you're experiencing that software could help with?
 ```
 
-Then set these constants near the top of `sidepanel/sidepanel.js` before packaging the extension:
+The launch build is currently configured with this Google Form:
 
 ```js
-const FEEDBACK_FORM_URL = "https://your-form-url";
+const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSe19iItv0ORXyvGv7YLR9xFGNS7QBUpngAv2ujsUSQI7baMFA/viewform?usp=publish-editor";
 const FEEDBACK_FORM_FIELD_MAP = {
-  suggestions: "suggestions_for_bot",
-  otherIssues: "other_issues_or_software_needs",
-  version: "extension_version",
-  resources: "indexed_resources",
-  searchableBodies: "searchable_bodies",
-  timestamp: "submitted_at"
+  suggestions: "entry.792827991",
+  otherIssues: "entry.2038249777",
+  version: "",
+  resources: "",
+  searchableBodies: "",
+  timestamp: ""
 };
 ```
 
-Tally-style hidden fields can use readable names like `suggestions_for_bot`. Google Forms prefilled links use `entry.<id>` field names, so update `FEEDBACK_FORM_FIELD_MAP` with the relevant entry IDs for both visible questions and any optional metadata fields. Do not embed GitHub tokens, API tokens, or private write credentials in the extension.
+The blank metadata mappings are intentional because the current Google Form only has the two visible questions. If you later add hidden/context fields or move to Tally-style hidden fields, map `version`, `resources`, `searchableBodies`, and `timestamp` to those field names. Do not embed GitHub tokens, API tokens, or private write credentials in the extension.
 
 ## Recommended Models
 

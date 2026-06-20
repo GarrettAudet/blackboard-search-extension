@@ -1,12 +1,12 @@
 const SETTINGS_KEY = "assistant_settings";
-const FEEDBACK_FORM_URL = "";
+const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSe19iItv0ORXyvGv7YLR9xFGNS7QBUpngAv2ujsUSQI7baMFA/viewform?usp=publish-editor";
 const FEEDBACK_FORM_FIELD_MAP = {
-  suggestions: "suggestions_for_bot",
-  otherIssues: "other_issues_or_software_needs",
-  version: "extension_version",
-  resources: "indexed_resources",
-  searchableBodies: "searchable_bodies",
-  timestamp: "submitted_at"
+  suggestions: "entry.792827991",
+  otherIssues: "entry.2038249777",
+  version: "",
+  resources: "",
+  searchableBodies: "",
+  timestamp: ""
 };
 const MAX_CONTENT_CHARS = 20000;
 const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
