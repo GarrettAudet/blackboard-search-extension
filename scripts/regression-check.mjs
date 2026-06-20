@@ -150,6 +150,36 @@ state.resources = [
     section: "Class of 2026-2027 Pre-program Academics",
     context:
       "Course Calendar and Course Schedule. The list of courses has been released in the calendar. Students can review the academic calendar, course offerings, modules, and class schedule for the 2026-2027 pre-program."
+  },
+  {
+    id: "resources-page",
+    type: "page",
+    title: "Resources - Class of 2026-2027 Pre-program",
+    url: "https://lms.sc.tsinghua.edu.cn/resources",
+    page_title: "Resources - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Resources",
+    context:
+      "Resources Content Blackboard User Guideline- Incoming Students.pdf Packing List for Students (2026).pdf OBTAINING YOUR X1 STUDENT VISA 2026.pdf Visa FAQ 2026.pdf WeChat Registration FAQ 2026 BB.pdf"
+  },
+  {
+    id: "x1-visa-pdf",
+    type: "pdf",
+    title: "OBTAINING YOUR X1 STUDENT VISA 2026.pdf",
+    url: "https://lms.sc.tsinghua.edu.cn/bbcswebdav/pid-visa-dt-content-rid-x1_1",
+    page_url: "https://lms.sc.tsinghua.edu.cn/resources",
+    page_title: "Resources - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Resources",
+    context: "OBTAINING YOUR X1 STUDENT VISA 2026.pdf"
+  },
+  {
+    id: "visa-faq-pdf",
+    type: "link",
+    title: "Visa FAQ 2026.pdf",
+    url: "https://lms.sc.tsinghua.edu.cn/bbcswebdav/pid-visa-faq-dt-content-rid-faq_1",
+    page_url: "https://lms.sc.tsinghua.edu.cn/resources",
+    page_title: "Resources - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Resources",
+    context: "Visa FAQ 2026.pdf"
   }
 ];
 state.contentStore = {
@@ -158,7 +188,8 @@ state.contentStore = {
   "home-page": state.resources[2].context,
   "language-study": state.resources[3].context,
   "english-language-pdf": state.resources[5].context,
-  "course-calendar": state.resources[6].context
+  "course-calendar": state.resources[6].context,
+  "resources-page": state.resources[7].context
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
@@ -217,6 +248,17 @@ const parsedReviewJson = parseJsonObjectFromText(
   '{"approved":false,"answer":"The course calendar contains the released course list [1].","reason":"Removed unsupported text."}'
 );
 const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
+const visaHydrationCandidates = findHydrationCandidatesForQuery("What do I need for the Chinese visa?", [
+  {
+    score: 340,
+    resource_id: "resources-page",
+    kind: "page",
+    title: "Resources - Class of 2026-2027 Pre-program",
+    text: state.resources[7].context,
+    source: "Class of 2026-2027 Pre-program Resources"
+  }
+]);
+const linkTypedPdfHydrates = shouldHydrateResourceContent(state.resources.find((resource) => resource.id === "visa-faq-pdf"), true);
 const preparedMandarinSources = prepareAnswerSources(
   [
     {
@@ -272,13 +314,13 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -336,6 +378,14 @@ if (!parsedReviewJson || parsedReviewJson.answer !== "The course calendar contai
 }
 if (!packingHydrationCandidates.some((resource) => resource.id === "packing-pdf")) {
   throw new Error(`Expected packing query to target the packing PDF for body-text extraction.\n\n${JSON.stringify(packingHydrationCandidates, null, 2)}`);
+}
+for (const expectedVisaResource of ["x1-visa-pdf", "visa-faq-pdf"]) {
+  if (!visaHydrationCandidates.some((resource) => resource.id === expectedVisaResource)) {
+    throw new Error(`Expected visa query to hydrate linked visa PDFs before answering.\n\n${JSON.stringify(visaHydrationCandidates, null, 2)}`);
+  }
+}
+if (!linkTypedPdfHydrates) {
+  throw new Error("Expected link resources with .pdf titles to be hydratable files.");
 }
 if (preparedMandarinSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
   throw new Error(`Mandarin answer sources should exclude English-language resource hits.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);

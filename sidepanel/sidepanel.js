@@ -1,6 +1,6 @@
 const SETTINGS_KEY = "assistant_settings";
 const MAX_CONTENT_CHARS = 20000;
-const TARGETED_CONTENT_HYDRATION_LIMIT = 4;
+const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
 const MAX_MEMORY_TURNS = 6;
 const MEDIA_RESOLVE_TIMEOUT_MS = 30000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
@@ -2034,13 +2034,88 @@ function findHydrationCandidatesForQuery(query, currentResults = []) {
   };
 
   for (const result of currentResults || []) {
-    if (result.resource_id) addCandidate(resourcesById.get(result.resource_id), 50);
+    const sourceResource = result.resource_id ? resourcesById.get(result.resource_id) : null;
+    if (sourceResource) addCandidate(sourceResource, 50);
+    addLinkedHydrationCandidatesForResult(query, result, sourceResource, addCandidate);
   }
-  for (const resource of state.resources) addCandidate(resource, 0);
+  for (const resource of state.resources) addCandidate(resource, documentHydrationBoost(query, resource));
 
   return Array.from(scored.values())
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.resource);
+}
+
+function addLinkedHydrationCandidatesForResult(query, result, sourceResource, addCandidate) {
+  const haystack = normalizeText(
+    [
+      result?.title,
+      result?.base_title,
+      result?.text,
+      result?.source,
+      result?.url,
+      sourceResource?.title,
+      sourceResource?.context,
+      sourceResource?.url,
+      sourceResource?.page_url,
+      sourceResource?.page_title,
+      sourceResource?.section
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+  if (!haystack) return;
+
+  for (const resource of state.resources || []) {
+    if (!shouldHydrateResourceContent(resource, true)) continue;
+    if (!isResourceLinkedFromResult(resource, result, sourceResource, haystack)) continue;
+    addCandidate(resource, 90 + documentHydrationBoost(query, resource));
+  }
+}
+
+function isResourceLinkedFromResult(resource, result, sourceResource, resultHaystack = "") {
+  if (!resource) return false;
+  const title = normalizeText(resource.title || "");
+  if (title && resultHaystack.includes(title)) return true;
+  const resourcePageUrl = normalizeComparableUrl(resource.page_url || "");
+  const resultUrls = [result?.url, result?.page_url, sourceResource?.url, sourceResource?.page_url]
+    .map(normalizeComparableUrl)
+    .filter(Boolean);
+  if (resourcePageUrl && resultUrls.includes(resourcePageUrl)) return true;
+  const resourcePage = normalizeText([resource.page_title, resource.section].filter(Boolean).join(" "));
+  const resultPage = normalizeText([result?.title, result?.base_title, result?.source, sourceResource?.title, sourceResource?.page_title, sourceResource?.section].filter(Boolean).join(" "));
+  return Boolean(resourcePage && resultPage && (resultPage.includes(resourcePage) || resourcePage.includes(resultPage)));
+}
+
+function normalizeComparableUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    parsed.hash = "";
+    ["session", "cache", "nonce", "token", "auth", "one_hash", "x-bb-session", "download", "mode"].forEach((key) => parsed.searchParams.delete(key));
+    return parsed.href.replace(/\/+$/g, "").toLowerCase();
+  } catch (_error) {
+    return String(value || "").split(/[?#]/)[0].replace(/\/+$/g, "").toLowerCase();
+  }
+}
+
+function documentHydrationBoost(query, resource) {
+  if (!isDocumentOrFileLikeResource(resource)) return 0;
+  const normalizedQuery = normalizeText(query);
+  const haystack = normalizeText([resource.title, resource.context, resource.section, resource.page_title, resource.url].filter(Boolean).join(" "));
+  let boost = 0;
+  if (/\b(visa|x1|jw202|permit|residence)\b/.test(normalizedQuery) && /\b(visa|x1|jw202|permit|residence)\b/.test(haystack)) boost += 80;
+  if (/\b(pack|packing|bring|luggage)\b/.test(normalizedQuery) && /\b(pack|packing|bring|luggage)\b/.test(haystack)) boost += 80;
+  if (/\b(bank|banking|alipay|wechat|payment|money|rmb)\b/.test(normalizedQuery) && /\b(bank|banking|alipay|wechat|payment|money|rmb)\b/.test(haystack)) boost += 55;
+  return boost;
+}
+
+function isDocumentOrFileLikeResource(resource) {
+  const type = String(resource?.type || "").toLowerCase();
+  const hint = resourceFileHint(resource);
+  return ["pdf", "document", "slides", "spreadsheet"].includes(type) || /\.(pdf|docx|pptx|xlsx)(?:[?#]|$|\s)/i.test(hint);
+}
+
+function resourceFileHint(resource) {
+  return [resource?.type, resource?.title, resource?.url, resource?.document_url].filter(Boolean).join(" ");
 }
 
 function hydrationSearchDocForResource(resource) {
@@ -2088,22 +2163,20 @@ function shouldHydrateResourceContent(resource, retryFailure = false) {
   if (state.contentStore && state.contentStore[resource.id]) return false;
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
+  const fileHint = resourceFileHint(resource).toLowerCase();
   if (isEmbeddedVideoViewerUrl(url) || /\/panopto\/pages\/viewer\.aspx/i.test(url)) return false;
   if (/^(video|audio|video_embed)$/.test(type)) return false;
-  return (
-    ["pdf", "document", "slides", "spreadsheet"].includes(type) ||
-    /\.(pdf|docx|pptx|xlsx)(?:[?#]|$)/i.test(url)
-  );
+  return ["pdf", "document", "slides", "spreadsheet"].includes(type) || /\.(pdf|docx|pptx|xlsx)(?:[?#]|$|\s)/i.test(fileHint);
 }
 
 async function extractSearchableResourceText(resource) {
-  const buffer = await fetchResourceArrayBuffer(resource.url);
+  const { buffer, contentType } = await fetchResourceArrayBuffer(resource.url);
   const type = String(resource.type || "").toLowerCase();
-  const url = String(resource.url || "").toLowerCase();
-  if (type === "pdf" || /\.pdf(\?|$)/i.test(url)) return extractPdfText(buffer);
-  if (type === "document" || /\.docx(\?|$)/i.test(url)) return extractDocxText(buffer);
-  if (type === "slides" || /\.pptx(\?|$)/i.test(url)) return extractPptxText(buffer);
-  if (type === "spreadsheet" || /\.xlsx(\?|$)/i.test(url)) return extractXlsxText(buffer);
+  const fileHint = `${resourceFileHint(resource)} ${contentType}`.toLowerCase();
+  if (type === "pdf" || /(?:application\/pdf|\.pdf(?:[?#]|$|\s))/.test(fileHint)) return extractPdfText(buffer);
+  if (type === "document" || /\.(?:docx)(?:[?#]|$|\s)/i.test(fileHint)) return extractDocxText(buffer);
+  if (type === "slides" || /\.(?:pptx)(?:[?#]|$|\s)/i.test(fileHint)) return extractPptxText(buffer);
+  if (type === "spreadsheet" || /\.(?:xlsx)(?:[?#]|$|\s)/i.test(fileHint)) return extractXlsxText(buffer);
   return "";
 }
 
@@ -2118,6 +2191,7 @@ async function fetchResourceArrayBuffer(url) {
     "Timed out fetching this resource."
   );
   if (!response.ok) throw new Error(`Could not fetch resource: HTTP ${response.status}`);
+  const contentType = response.headers.get("content-type") || "";
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (contentLength && contentLength > 25 * 1024 * 1024) {
     throw new Error("Resource is too large to extract in the browser.");
@@ -2126,7 +2200,7 @@ async function fetchResourceArrayBuffer(url) {
   if (buffer.byteLength > 25 * 1024 * 1024) {
     throw new Error("Resource is too large to extract in the browser.");
   }
-  return buffer;
+  return { buffer, contentType };
 }
 
 async function extractPdfText(buffer) {
