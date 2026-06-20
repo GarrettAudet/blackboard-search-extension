@@ -236,6 +236,26 @@ const preparedMandarinSources = prepareAnswerSources(
   ],
   mandarinQuery
 );
+const preparedMandarinSourcesWithShell = prepareAnswerSources(
+  [
+    {
+      score: 260,
+      kind: "link",
+      title: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_771_1",
+      source: "Chinese Language Learning Resources Announcements - Announcements - Chinese Language Learning Resources",
+      url: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_771_1",
+      text: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_771_1 Chinese Language Learning Resources Announcements Announcements Chinese Language Learning Resources"
+    },
+    {
+      score: 180,
+      kind: "announcement",
+      title: "Chinese Language Learning Resources",
+      source: "Chinese Language Learning Resources Announcements",
+      text: "Chinese Language Learning Resources include key vocabulary, grammar, Mandarin placement preparation, and survival Chinese lessons."
+    }
+  ],
+  mandarinQuery
+);
 const alignedCitations = alignAnswerCitations(
   "Use the first source [1] and the course page [5].",
   [
@@ -252,13 +272,13 @@ const strippedLinkAnswer = cleanAnswerText(
     "- https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/courseMain?course_id=_1150_1",
   2
 );
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer };
+globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, alignedCitations, strippedLinkAnswer } = context.__regression;
+const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer } = context.__regression;
 if (!results.length) throw new Error("Expected To Do page to rank for task query.");
 if (!answer || !answer.text) throw new Error("Expected a deterministic To Do answer.");
 for (const expected of [
@@ -322,6 +342,12 @@ if (preparedMandarinSources.some((source) => /English Language Resources/i.test(
 }
 if (!preparedMandarinSources.some((source) => /Chinese Language Learning Resources/i.test(source.title || ""))) {
   throw new Error(`Mandarin answer sources should keep Chinese-language resources.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);
+}
+if (preparedMandarinSourcesWithShell.some((source) => /^https?:\/\//i.test(source.title || ""))) {
+  throw new Error(`Mandarin answer sources should exclude raw Blackboard course shell links.\n\n${JSON.stringify(preparedMandarinSourcesWithShell, null, 2)}`);
+}
+if (!preparedMandarinSourcesWithShell.some((source) => source.kind === "announcement" && /Chinese Language Learning Resources/i.test(source.title || ""))) {
+  throw new Error(`Mandarin answer sources should keep the useful announcement when a course shell also matches.\n\n${JSON.stringify(preparedMandarinSourcesWithShell, null, 2)}`);
 }
 if (alignedCitations.text.includes("[5]") || !alignedCitations.text.includes("[1]") || !alignedCitations.text.includes("[2]")) {
   throw new Error(`Citation numbers should be compacted with no gaps.\n\n${alignedCitations.text}`);
