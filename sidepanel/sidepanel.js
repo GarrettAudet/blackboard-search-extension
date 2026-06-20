@@ -3377,7 +3377,7 @@ function emptyNode(text) {
 }
 
 function runRagAudit() {
-  const query = els.queryInput?.value?.trim() || "";
+  const query = els.queryInput?.value?.trim() || state.conversation.at(-1)?.user || "";
   const audit = buildRagAudit(query);
   if (els.ragAuditOutput) els.ragAuditOutput.textContent = audit;
   setStatus("RAG audit complete.");
