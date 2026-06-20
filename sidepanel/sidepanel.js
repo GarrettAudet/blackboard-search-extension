@@ -80,7 +80,9 @@ function sendMessage(type, payload = {}) {
 }
 
 function setStatus(message) {
-  els.statusText.textContent = message;
+  const text = String(message || "");
+  els.statusText.textContent = clampText(text, 135);
+  els.statusText.title = text;
 }
 
 async function refreshAll() {
@@ -564,7 +566,7 @@ function renderMissingVideoRow(video) {
   } else if (video.url) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = "Open to detect";
+    button.textContent = "Detect";
     button.title = "Open the embedded player, press play, then let the detector capture captions or direct media.";
     button.addEventListener("click", () => openVideoForDetection(video).catch(reportError));
     actions.append(button);
@@ -1821,10 +1823,16 @@ async function withTimeout(promise, timeoutMs, timeoutMessage) {
 
 function readableErrorMessage(error) {
   const message = String(error && error.message ? error.message : error || "Unknown error");
-  if (/failed to fetch/i.test(message)) {
-    return "embedded provider blocked the media fetch. Open the video and import/export a transcript or direct media file if available";
+  if (/failed to fetch|cors/i.test(message)) {
+    return "embedded provider blocked the media fetch; open the video and use captions or an imported transcript";
   }
-  return clampText(message, 160);
+  if (/too large|upload limit|browser audio chunks/i.test(message)) {
+    return "media file is too large for browser transcription; import a prepared transcript instead";
+  }
+  if (/low quality|repetitive/i.test(message)) {
+    return "transcript looked repetitive or low quality, so it was not saved";
+  }
+  return clampText(message, 110);
 }
 
 function normalizeTranscriptText(value) {
@@ -2280,14 +2288,47 @@ async function handleAsk(event) {
   }
 }
 function searchIndex(query) {
-  return buildSearchDocs()
+  const scored = buildSearchDocs()
     .map((doc) => ({ ...doc, score: scoreDoc(query, doc) }))
     .filter((doc) => doc.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10);
+    .sort((a, b) => b.score - a.score);
+  return diversifySearchResults(scored, query).slice(0, 10);
+}
+
+function diversifySearchResults(scored, query) {
+  const wantsVideo = wantsVideoHeavySearch(query);
+  const videoLimit = wantsVideo ? 6 : 3;
+  const selected = [];
+  const deferredVideos = [];
+  let videoCount = 0;
+
+  for (const doc of scored) {
+    if (isVideoResultKind(doc.kind) && videoCount >= videoLimit) {
+      deferredVideos.push(doc);
+      continue;
+    }
+    selected.push(doc);
+    if (isVideoResultKind(doc.kind)) videoCount += 1;
+    if (selected.length >= 10) break;
+  }
+
+  for (const doc of deferredVideos) {
+    if (selected.length >= 10) break;
+    selected.push(doc);
+  }
+  return selected;
+}
+
+function wantsVideoHeavySearch(query) {
+  return /\b(video|videos|transcript|transcripts|webinar|meeting|recording|lecture|talk|speaker|covered|discussed|said)\b/i.test(query);
+}
+
+function isVideoResultKind(kind) {
+  return /^(video|audio|video_embed|video_transcript)$/.test(String(kind || ""));
 }
 
 async function enrichVideoResultsForQuery(query, retrievalQuery, results) {
+  if (!shouldSearchInsideVideos(query, results)) return { segment_count: 0, transcripts_imported: 0 };
   const searchText = makeVideoPlayerSearchQuery(query, retrievalQuery);
   if (!searchText) return { segment_count: 0, transcripts_imported: 0 };
   const candidates = videoResultCandidates(results, searchText).slice(0, 3);
@@ -2299,7 +2340,7 @@ async function enrichVideoResultsForQuery(query, retrievalQuery, results) {
     const response = await sendMessage("SEARCH_VIDEO_RESULTS", { query: searchText, videos: candidates });
     if (!response || !response.ok) {
       console.warn("Video result search failed", response && response.error);
-      setStatus(response?.error ? `Video search skipped: ${response.error}` : "Video search skipped.");
+      setStatus(response?.error ? `Video search skipped: ${readableErrorMessage(response.error)}` : "Video search skipped.");
       return { segment_count: 0, transcripts_imported: 0 };
     }
     if (response.segment_count) {
@@ -2310,9 +2351,16 @@ async function enrichVideoResultsForQuery(query, retrievalQuery, results) {
     return response;
   } catch (error) {
     console.warn("Video result search failed", error);
-    setStatus(`Video search skipped: ${error && error.message ? error.message : String(error)}`);
+    setStatus(`Video search skipped: ${readableErrorMessage(error)}`);
     return { segment_count: 0, transcripts_imported: 0 };
   }
+}
+
+function shouldSearchInsideVideos(query, results) {
+  if (wantsVideoHeavySearch(query)) return true;
+  const strongNonVideo = results.some((result) => !isVideoResultKind(result.kind) && result.score >= 24);
+  if (strongNonVideo) return false;
+  return results.some((result) => /^(video|video_embed)$/.test(String(result.kind || "")) && result.score >= 35);
 }
 
 function makeVideoPlayerSearchQuery(query, retrievalQuery) {
@@ -2933,6 +2981,8 @@ function buildSearchDocs() {
   const resourceById = new Map(state.resources.map((resource) => [resource.id, resource]));
 
   for (const resource of state.resources) {
+    const storedContent = state.contentStore?.[resource.id] || "";
+    if (shouldSkipResourceSearchDoc(resource, storedContent)) continue;
     const baseDoc = {
       resource_id: resource.id,
       kind: resource.type || "resource",
@@ -2942,10 +2992,10 @@ function buildSearchDocs() {
       url: resource.url || resource.page_url || "",
       timestamp: ""
     };
-    const storedContent = state.contentStore?.[resource.id] || "";
-    const fullText = [resource.title, storedContent || resource.context, resource.section, resource.page_title, resource.url]
+    const fullText = [resource.title, storedContent || resource.context, resource.section, resource.page_title]
       .filter(Boolean)
       .join(" ");
+    if (!normalizeText(fullText)) continue;
     if (fullText.length > 1200) {
       const chunks = chunkTextForSearch(fullText, 1400);
       for (let index = 0; index < chunks.length; index += 1) {
@@ -2969,12 +3019,14 @@ function buildSearchDocs() {
       .map((id) => resourceById.get(id))
       .find(Boolean);
     for (const segment of transcript.segments || []) {
+      const text = normalizeTranscriptText(segment.text || "");
+      if (!isSearchableTranscriptSegment(text)) continue;
       docs.push({
         kind: "video_transcript",
         title: transcript.title || "Video transcript",
         base_title: transcript.title || "Video transcript",
         resource_id: matchedResource?.id || "",
-        text: segment.text || "",
+        text,
         source: matchedResource?.page_title || matchedResource?.title || transcript.source_hint || transcript.video_url || "Imported transcript",
         url: matchedResource?.url || transcript.video_url || "",
         timestamp: [segment.start, segment.end].filter(Boolean).join("-")
@@ -2982,6 +3034,23 @@ function buildSearchDocs() {
     }
   }
   return docs;
+}
+
+function shouldSkipResourceSearchDoc(resource, storedContent) {
+  const type = String(resource?.type || "").toLowerCase();
+  const context = clampText(resource?.context || "", 200);
+  if (/^(audio|video)$/.test(type) && !storedContent && !context) return true;
+  if (type === "video_embed" && !storedContent && !context && !(resource?.transcript_ids || []).length) return true;
+  return false;
+}
+
+function isSearchableTranscriptSegment(text) {
+  const clean = normalizeText(text);
+  if (clean.length < 12) return false;
+  const words = clean.split(" ").filter(Boolean);
+  if (words.length < 4) return false;
+  const unique = new Set(words);
+  return unique.size / Math.max(1, words.length) >= 0.35;
 }
 
 function renderSourceCard(result, query, citationNumber = 0) {
@@ -3024,6 +3093,7 @@ function scoreDoc(query, doc) {
   const text = normalizeText(doc.text);
   const source = normalizeText(doc.source);
   const haystack = `${title} ${source} ${text}`;
+  const isTranscript = doc.kind === "video_transcript";
   let score = 0;
   for (const token of queryTokens) {
     if (!token) continue;
@@ -3032,18 +3102,19 @@ function scoreDoc(query, doc) {
     const textHits = countOccurrences(text, token);
     score += Math.min(36, titleHits * 16);
     score += Math.min(18, sourceHits * 8);
-    score += Math.min(doc.kind === "video_transcript" ? 30 : 20, textHits * (doc.kind === "video_transcript" ? 10 : 5));
+    score += Math.min(isTranscript ? 18 : 24, textHits * (isTranscript ? 4 : 6));
   }
   for (const phrase of queryPhrases) {
     if (!phrase) continue;
     if (title.includes(phrase)) score += 48;
     if (source.includes(phrase)) score += 22;
-    if (text.includes(phrase)) score += 28;
+    if (text.includes(phrase)) score += isTranscript ? 18 : 28;
   }
   const phrase = normalizeText(query);
-  if (phrase && text.includes(phrase)) score += 25;
+  if (phrase && text.includes(phrase)) score += isTranscript ? 12 : 25;
   if (phrase && title.includes(phrase)) score += 35;
   if (doc.kind === "page") score += pageIntentBoost(query, title, source, haystack);
+  if (isTranscript && !wantsVideoHeavySearch(query)) score = Math.max(0, score - 10);
   return score;
 }
 
@@ -3264,7 +3335,7 @@ async function refreshIndexAndResetChat() {
 
 function reportError(error) {
   console.error(error);
-  setStatus(`Error: ${error && error.message ? error.message : String(error)}`);
+  setStatus(`Error: ${readableErrorMessage(error)}`);
   els.crawlBtn.disabled = false;
   els.crawlBtn.textContent = "Index";
 }

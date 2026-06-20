@@ -384,13 +384,9 @@ async function dismissMediaCandidate(payload) {
 
   const resource = resources.find((item) => item.id === payload.resource_id || item.id === payload.resourceId);
   const detection = detections.find((item) => item.id === payload.id || item.id === payload.detected_media_id || item.id === payload.detectedMediaId);
-  const keyValues = uniqueStrings([
-    payload.url,
-    payload.video_url,
-    payload.videoUrl,
-    resource?.url,
-    detection?.url
-  ].map(mediaCandidateKey));
+  const selectedRecords = [payload, resource, detection].filter(Boolean);
+  const keyValues = uniqueStrings(selectedRecords.flatMap(mediaCandidateKeys));
+  const selectedUrls = uniqueStrings([payload.url, payload.video_url, payload.videoUrl, resource?.url, detection?.url].filter(Boolean).map(normalizeUrl));
 
   const ignoredByKey = new Map(ignored.map((item) => [item.key, item]));
   for (const key of keyValues) {
@@ -402,11 +398,14 @@ async function dismissMediaCandidate(payload) {
     });
   }
 
-  const matchesKeys = (candidate) => mediaCandidateKeys(candidate).some((key) => keyValues.includes(key));
-  const nextDetections = detections.filter((item) => item.id !== detection?.id && !matchesKeys(item));
+  const matchesKeys = (candidate) => keyValues.length && mediaCandidateKeys(candidate).some((key) => keyValues.includes(key));
+  const exactUrlMatch = (candidate) => selectedUrls.includes(normalizeUrl(candidate?.url || ""));
+  const nextDetections = detections.filter((item) => item.id !== detection?.id && !(detection && matchesKeys(item)));
+
   const removedResourceIds = new Set();
+  const exactResourceIds = new Set([resource?.id].filter(Boolean));
   const nextResources = resources.filter((item) => {
-    const shouldRemove = item.id === resource?.id || (isVideoResource(item) && matchesKeys(item));
+    const shouldRemove = exactResourceIds.has(item.id) || (!resource && detection && exactUrlMatch(item));
     if (shouldRemove) removedResourceIds.add(item.id);
     return !shouldRemove;
   });
@@ -1821,12 +1820,15 @@ function panoptoSessionKey(record) {
 function mediaCandidateKeys(candidate) {
   const keys = [];
   const canonical = canonicalVideoKey(candidate);
-  if (canonical) keys.push(canonical);
+  if (/^(panopto|media):/i.test(canonical)) keys.push(canonical.toLowerCase());
   for (const value of [candidate?.canonical_key, candidate?.url, candidate?.video_url, candidate?.videoUrl]) {
-    const text = String(value || "");
-    if (!text) continue;
-    if (/^(panopto|media):/i.test(text)) keys.push(text.toLowerCase());
-    else keys.push(mediaCandidateKey(text));
+    const raw = String(value || "");
+    if (!raw) continue;
+    if (/^(panopto|media):/i.test(raw)) keys.push(raw.toLowerCase());
+    else {
+      const mediaKey = mediaCandidateKey(raw);
+      if (mediaKey) keys.push(mediaKey);
+    }
   }
   return uniqueStrings(keys);
 }
