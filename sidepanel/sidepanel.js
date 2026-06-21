@@ -3643,6 +3643,15 @@ chrome.runtime.onMessage.addListener((message) => {
       .then(() => setStatus(`${label}: ${stored} resources saved; page ${payload.pages}; queued ${payload.queued}; saw ${uniqueSeen}${rawText}.`))
       .catch(reportError);
     if (els.crawlState) els.crawlState.textContent = `${payload.pages} pages`;
+  } else if (payload.status === "checkpoint_error") {
+    const error = payload.error || "index save failed";
+    const unsaved = payload.unsaved_resources || 0;
+    setStatus(`Index save failed after page ${payload.pages}; ${unsaved} unsaved resource(s). ${readableErrorMessage(error)}`);
+    if (els.crawlState) els.crawlState.textContent = "save failed";
+    if (els.crawlBtn) {
+      els.crawlBtn.disabled = false;
+      els.crawlBtn.textContent = "Index";
+    }
   } else if (payload.status === "complete") {
     if (els.crawlState) els.crawlState.textContent = "complete";
     if (els.crawlBtn) {

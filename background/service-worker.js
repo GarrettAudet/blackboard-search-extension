@@ -943,19 +943,35 @@ async function crawlSite(payload) {
     if (!shouldSave) {
       return { resource_count: lastSavedResourceCount };
     }
-    const batch = resources.splice(0, resources.length);
-    const mergeResult = await mergeScrape({ resources: batch });
-    lastSavedResourceCount = mergeResult.resource_count || lastSavedResourceCount;
-    lastCheckpointPage = visited.size;
-    emitCrawlProgress({
-      status: force ? "saving" : "checkpoint",
-      ...crawlProgress({
-        pages: visited.size,
-        queued: queue.length,
-        resource_count: lastSavedResourceCount
-      })
-    });
-    return mergeResult;
+    const batch = resources.slice();
+    try {
+      const mergeResult = await mergeScrape({ resources: batch });
+      resources.splice(0, batch.length);
+      lastSavedResourceCount = mergeResult.resource_count || lastSavedResourceCount;
+      lastCheckpointPage = visited.size;
+      emitCrawlProgress({
+        status: force ? "saving" : "checkpoint",
+        ...crawlProgress({
+          pages: visited.size,
+          queued: queue.length,
+          resource_count: lastSavedResourceCount
+        })
+      });
+      return mergeResult;
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error);
+      emitCrawlProgress({
+        status: "checkpoint_error",
+        error: message,
+        ...crawlProgress({
+          pages: visited.size,
+          queued: queue.length,
+          unsaved_resources: resources.length,
+          resource_count: lastSavedResourceCount
+        })
+      });
+      throw error;
+    }
   }
 
   while (queue.length && visited.size < maxPages) {
@@ -973,7 +989,6 @@ async function crawlSite(payload) {
       const pageResources = Array.isArray(page.resources) ? page.resources : [];
       resources.push(...pageResources);
       recordCandidateResources(pageResources);
-      await checkpointResources(false);
 
       const candidateUrls = page.portal_entry_urls?.length && isDefaultPortalUrl(currentUrl) ? page.portal_entry_urls : page.child_urls;
       for (const candidate of candidateUrls) {
@@ -989,10 +1004,28 @@ async function crawlSite(payload) {
       });
     }
 
+    try {
+      await checkpointResources(false);
+    } catch (error) {
+      failures.push({
+        url: "index checkpoint",
+        error: String(error && error.message ? error.message : error)
+      });
+      break;
+    }
+
     if (delayMs) await sleep(delayMs);
   }
 
-  const mergeResult = await checkpointResources(true);
+  let mergeResult = { resource_count: lastSavedResourceCount };
+  try {
+    mergeResult = await checkpointResources(true);
+  } catch (error) {
+    failures.push({
+      url: "final index save",
+      error: String(error && error.message ? error.message : error)
+    });
+  }
   const response = {
     ok: true,
     pages_crawled: visited.size,
@@ -1000,7 +1033,7 @@ async function crawlSite(payload) {
     unique_candidates_seen: uniqueCandidateIds.size,
     raw_candidates_seen: rawCandidatesSeen,
     resources_seen: rawCandidatesSeen,
-    resource_count: mergeResult.resource_count,
+    resource_count: mergeResult.resource_count || lastSavedResourceCount,
     queued_remaining: queue.length,
     failures: failures.slice(0, 20)
   };
