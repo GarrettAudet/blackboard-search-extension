@@ -3141,7 +3141,7 @@ function extractTaskDetail(context, title, deadline) {
 }
 
 function cleanSourceTitle(result) {
-  const raw = String(result.base_title || result.title || result.source || "Indexed Blackboard resource")
+  const raw = cleanIndexedText(result.base_title || result.title || result.source || "Indexed Blackboard resource")
     .replace(/\s+\(part\s+\d+\)$/i, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -3152,14 +3152,13 @@ function cleanSourceTitle(result) {
   }
   return (deduped.length ? deduped.join(" - ") : raw).trim();
 }
-
 function fullTextForResult(result) {
   const stored = result.resource_id ? state.contentStore?.[result.resource_id] : "";
-  return [stored || result.text, result.base_title || result.title, result.source].filter(Boolean).join("\n");
+  return cleanIndexedText([stored || result.text, result.base_title || result.title, result.source].filter(Boolean).join("\n"));
 }
 
 function normalizeTaskText(value) {
-  return String(value || "")
+  return cleanIndexedText(value)
     .replace(/\r\n/g, "\n")
     .replace(/[ \t\f\v]+/g, " ")
     .replace(/\n+/g, " ")
@@ -3168,12 +3167,11 @@ function normalizeTaskText(value) {
 }
 
 function cleanupTaskPhrase(value) {
-  return String(value || "")
+  return cleanIndexedText(value)
     .replace(/\s+/g, " ")
     .replace(/^[\s:;,-]+|[\s:;,-]+$/g, "")
     .trim();
 }
-
 function splitSentences(value) {
   const clean = cleanupTaskPhrase(value);
   return clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((sentence) => cleanupTaskPhrase(sentence)).filter(Boolean) || [];
@@ -3275,11 +3273,11 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
   const context = results.slice(0, 8).map((result, index) => ({
     id: index + 1,
     kind: result.kind,
-    title: result.base_title || result.title,
-    source: result.source || result.url || "Indexed Blackboard resource",
+    title: cleanSourceTitle(result),
+    source: compactSourceTrail(result) || "Indexed Blackboard resource",
     timestamp: result.timestamp || "",
     url: result.url || "",
-    text: clampText(result.text, 1800)
+    text: clampText(cleanIndexedText(result.text), 1800)
   }));
 
   const memoryText = formatConversationMemory(memory);
@@ -3454,11 +3452,11 @@ async function reviewApiAnswer(query, draftText, sources, memory = [], retrieval
   const sourceList = (sources || []).slice(0, 8).map((result, index) => ({
     id: index + 1,
     kind: result.kind,
-    title: result.base_title || result.title,
-    source: result.source || result.url || "Indexed Blackboard resource",
+    title: cleanSourceTitle(result),
+    source: compactSourceTrail(result) || "Indexed Blackboard resource",
     timestamp: result.timestamp || "",
     url: result.url || "",
-    text: clampText(result.text, 1400)
+    text: clampText(cleanIndexedText(result.text), 1400)
   }));
   const messages = [
     {

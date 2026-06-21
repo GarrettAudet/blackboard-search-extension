@@ -296,7 +296,10 @@ const visaHydrationCandidates = findHydrationCandidatesForQuery("What do I need 
 state.contentStore["x1-visa-pdf"] = savedVisaContent;
 state.contentStore["visa-faq-pdf"] = savedVisaFaqContent;
 const linkTypedPdfHydrates = shouldHydrateResourceContent(state.resources.find((resource) => resource.id === "visa-faq-pdf"), true);
-const visaAnswerSourcesWithBody = prepareAnswerSources(searchIndex("What do I need for the X1 visa?"), "What do I need for the X1 visa?");
+const cleanedMarkdownAnswer = cleanAnswerText("The current Blackboard **To Do** task is **Capstone** &ndash; due [1].", 1);
+const x1NeedToDoIsTask = isTaskDeadlineQuery("What do I need to do for the x1 visa?");
+const visaNeedToDoSources = prepareAnswerSources(searchIndex("What do I need to do for the x1 visa?"), "What do I need to do for the x1 visa?");
+const visaTaskWordSources = prepareAnswerSources(searchIndex("What are the current to do visa tasks?"), "What are the current to do visa tasks?");const visaAnswerSourcesWithBody = prepareAnswerSources(searchIndex("What do I need for the X1 visa?"), "What do I need for the X1 visa?");
 const visaReviewerFallback = preserveEvidenceBackedAnswer(
   "What do I need for the X1 visa?",
   { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
@@ -404,13 +407,13 @@ const feedbackFormUrl = buildFeedbackFormUrl(
 const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.", "");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -472,7 +475,21 @@ if (!myClassesSources.length || myClassesSources[0].resource_id !== "course-cale
 if (taskSourcesWithCourseShell.some((source) => /^Class of 2026-2027 Pre-program$/i.test(source.title || ""))) {
   throw new Error(`Generic course shell links should not appear as answer sources.\n\n${JSON.stringify(taskSourcesWithCourseShell, null, 2)}`);
 }
-if (courseListSources.some((source) => /Chinese Language Learning Resources|Capstone Preliminary Interest|Partner Organizations Proposed Topics/i.test(source.title || source.text || ""))) {
+if (/\*\*|&ndash;|&mdash;/.test(cleanedMarkdownAnswer)) {
+  throw new Error(`Answer cleanup should strip markdown and decode HTML entities.\n\n${cleanedMarkdownAnswer}`);
+}
+if (x1NeedToDoIsTask) {
+  throw new Error('A domain-specific X1 visa question should not be routed as a generic To Do query just because it says "need to do".');
+}
+if (!visaNeedToDoSources.some((source) => source.resource_id === "x1-visa-pdf")) {
+  throw new Error(`Expected X1 need-to-do query to keep the actual X1 visa PDF.\n\n${JSON.stringify(visaNeedToDoSources, null, 2)}`);
+}
+if (!visaTaskWordSources.length || !visaTaskWordSources.some((source) => source.resource_id === "x1-visa-pdf")) {
+  throw new Error(`Expected visa task wording to route to visa sources, not generic Blackboard To Do shell text.\n\n${JSON.stringify(visaTaskWordSources, null, 2)}`);
+}
+if (visaTaskWordSources.some((source) => /Open Quick Links|Page Landmarks|Keyboard Shortcuts|&ndash;/i.test(`${source.title} ${source.source} ${source.text}`))) {
+  throw new Error(`Answer sources should exclude Blackboard navigation chrome and decoded entity junk.\n\n${JSON.stringify(visaTaskWordSources, null, 2)}`);
+}if (courseListSources.some((source) => /Chinese Language Learning Resources|Capstone Preliminary Interest|Partner Organizations Proposed Topics/i.test(source.title || source.text || ""))) {
   throw new Error(`Course-list sources should exclude unrelated Chinese-language and capstone hits when a calendar match exists.\n\n${JSON.stringify(courseListSources, null, 2)}`);
 }
 if (normalizedPlanner.intent !== "course_list" || normalizedPlanner.scope !== "in_scope" || normalizedPlanner.confidence !== 0.87) {
