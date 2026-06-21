@@ -27,44 +27,36 @@ def rounded(draw, box, radius, fill, outline=None, width=1):
 def draw_brand_icon(draw, center, size):
     x, y = center
     r = size / 2
-    shadow = (139, 92, 246, 80)
-    draw.ellipse((x - r - 7, y - r + 9, x + r + 7, y + r + 16), fill=shadow)
-    draw.ellipse((x - r, y - r, x + r, y + r), fill=(132, 83, 246), outline=(183, 148, 255), width=max(2, int(size * 0.025)))
-    draw.ellipse((x - r + size * 0.13, y - r + size * 0.08, x + r - size * 0.28, y + r - size * 0.46), fill=(255, 255, 255, 34))
-
     scale = size / 128
-    px = x - 31 * scale
-    py = y - 35 * scale
-    back = [
-        (px + 20 * scale, py + 10 * scale),
-        (px + 58 * scale, py + 10 * scale),
-        (px + 70 * scale, py + 22 * scale),
-        (px + 70 * scale, py + 78 * scale),
-        (px + 22 * scale, py + 78 * scale),
-        (px + 12 * scale, py + 68 * scale),
-        (px + 12 * scale, py + 18 * scale),
-    ]
-    page = [
-        (px + 10 * scale, py + 0 * scale),
-        (px + 56 * scale, py + 0 * scale),
-        (px + 72 * scale, py + 16 * scale),
-        (px + 72 * scale, py + 76 * scale),
-        (px + 18 * scale, py + 76 * scale),
-        (px + 4 * scale, py + 62 * scale),
-        (px + 4 * scale, py + 7 * scale),
-    ]
-    draw.polygon(back, fill=(255, 255, 255, 62), outline=(255, 255, 255, 170))
-    draw.polygon(page, fill=(255, 255, 255, 50), outline=(255, 255, 255, 240))
-    draw.line((px + 20 * scale, py + 22 * scale, px + 52 * scale, py + 22 * scale), fill=(255, 255, 255, 235), width=max(2, int(5 * scale)))
-    draw.line((px + 20 * scale, py + 36 * scale, px + 46 * scale, py + 36 * scale), fill=(255, 255, 255, 235), width=max(2, int(5 * scale)))
-    lens_r = 17 * scale
-    lx, ly = px + 60 * scale, py + 64 * scale
-    draw.ellipse((lx - lens_r, ly - lens_r, lx + lens_r, ly + lens_r), outline=(255, 255, 255, 245), width=max(3, int(7 * scale)))
-    draw.line((lx + 12 * scale, ly + 12 * scale, lx + 29 * scale, ly + 29 * scale), fill=(255, 255, 255, 245), width=max(3, int(7 * scale)))
+    box = (x - r, y - r, x + r, y + r)
+    radius = int(size * 0.24)
+
+    # Compact app-tile mark. The monogram stays legible in the Chrome Store thumbnail and toolbar.
+    rounded(draw, (x - r + 2 * scale, y - r + 8 * scale, x + r + 2 * scale, y + r + 10 * scale), radius, (0, 0, 0, 90))
+    rounded(draw, box, radius, (13, 9, 28), (183, 148, 255), max(1, int(2.4 * scale)))
+    rounded(draw, (x - r + 5 * scale, y - r + 5 * scale, x + r - 5 * scale, y + r - 5 * scale), int(radius * 0.82), (29, 17, 58), None, 0)
+    draw.ellipse((x - 56 * scale, y - 62 * scale, x + 34 * scale, y + 18 * scale), fill=(139, 92, 246, 110))
+    draw.ellipse((x - 36 * scale, y - 42 * scale, x + 58 * scale, y + 58 * scale), fill=(91, 45, 168, 95))
+
+    b_font = font(int(size * 0.56), True)
+    label = 'B'
+    bbox = draw.textbbox((0, 0), label, font=b_font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    draw.text((x - tw / 2 - 9 * scale, y - th / 2 - 7 * scale), label, font=b_font, fill=(255, 255, 255, 248))
+
+    # Search lens badge, slightly lifted from the corner so it stays crisp at 32px and 48px.
+    badge_r = 23 * scale
+    bx, by = x + 31 * scale, y + 31 * scale
+    draw.ellipse((bx - badge_r, by - badge_r, bx + badge_r, by + badge_r), fill=(8, 7, 15), outline=(183, 148, 255), width=max(1, int(2.5 * scale)))
+    lens_r = 8.7 * scale
+    draw.ellipse((bx - lens_r - 2 * scale, by - lens_r - 2 * scale, bx + lens_r - 2 * scale, by + lens_r - 2 * scale), outline=(255, 255, 255, 245), width=max(1, int(4 * scale)))
+    draw.line((bx + 5 * scale, by + 5 * scale, bx + 15 * scale, by + 15 * scale), fill=(255, 255, 255, 245), width=max(1, int(4 * scale)))
+    draw.ellipse((x - 44 * scale, y + 31 * scale, x - 31 * scale, y + 44 * scale), fill=(32, 212, 155, 230))
 
 
 def make_icon(size, path):
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    img = Image.new("RGB", (size, size), (8, 7, 15))
     draw = ImageDraw.Draw(img, "RGBA")
     draw_brand_icon(draw, (size / 2, size / 2), size * 0.86)
     img.save(path)
