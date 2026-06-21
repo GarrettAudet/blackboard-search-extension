@@ -385,6 +385,9 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   { hydrated: 1, failed: 0, candidates: packingHydrationCandidates },
   defaultRagPlan("What should I pack for China?")
 );
+const visaAuditText = buildRagAudit("What do I need for the X1 visa?");
+const packingAuditText = buildRagAudit("What should I pack for China?");
+const auditCommandChecks = [isAuditCommand("/audit"), isAuditCommand("/audit x1 visa"), !isAuditCommand("audit x1 visa")];
 delete state.contentStore["packing-pdf"];
 const feedbackFormUrl = buildFeedbackFormUrl(
   "The packing answer missed medications.",
@@ -401,13 +404,13 @@ const feedbackFormUrl = buildFeedbackFormUrl(
 const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.", "");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -544,6 +547,15 @@ if (unconfiguredFeedbackFormUrl !== "") {
 }
 if (!indexCommandChecks.every(Boolean)) {
   throw new Error(`Expected /index and /reindex to be recognized without treating normal index questions as commands.\n\n${JSON.stringify(indexCommandChecks)}`);
+}
+if (!auditCommandChecks.every(Boolean)) {
+  throw new Error(`Expected /audit command recognition to be scoped to slash commands.\n\n${JSON.stringify(auditCommandChecks)}`);
+}
+if (!/Query audit: What do I need for the X1 visa/i.test(visaAuditText) || !/OBTAINING YOUR X1 STUDENT VISA 2026/i.test(visaAuditText) || !/Pipeline risk flags/i.test(visaAuditText)) {
+  throw new Error(`Expected visa audit to expose query pipeline, risk flags, and the correct visa PDF.\n\n${visaAuditText}`);
+}
+if (!/Query audit: What should I pack for China/i.test(packingAuditText) || !/Packing List for Students \(2026\)/i.test(packingAuditText) || !/Final answer sources after filtering\/dedupe/i.test(packingAuditText)) {
+  throw new Error(`Expected packing audit to expose the packing PDF and final answer sources.\n\n${packingAuditText}`);
 }
 if (/Current index:|resources indexed|Transcript groups include/i.test(introText) || !/\/feedback/.test(introText) || !/\/index/.test(introText)) {
   throw new Error(`Intro text should be friendly, mention /index and /feedback, and avoid internal index dumps.\n\n${introText}`);

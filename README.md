@@ -57,6 +57,12 @@ Builds or refreshes the local Blackboard index. Use this after first install, af
 
 Opens the configured feedback form. If the user includes a note after `/feedback`, the extension pre-fills the first form question with that note. If no form URL is configured, the extension explains that feedback collection is not live yet.
 
+```text
+/audit [question]
+```
+
+Runs a local retrieval diagnostic for the question. Use this when an answer looks wrong: it reports index health, duplicate clusters, weak extracted bodies, top raw matches, final answer sources, hydration candidates, and whether strong evidence exists but the answer layer failed.
+
 ## Feedback Form Setup
 
 Create a lightweight form in Google Forms, Tally, Airtable Forms, or a similar service.

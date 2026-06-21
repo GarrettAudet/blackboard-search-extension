@@ -2601,6 +2601,20 @@ function isFeedbackCommand(query) {
   return /^\/feedback(?:\s+|$)/i.test(String(query || "").trim());
 }
 
+function isAuditCommand(query) {
+  return /^\/audit(?:\s+|$)/i.test(String(query || "").trim());
+}
+
+function handleAuditCommand(query) {
+  const auditQuery = String(query || "").replace(/^\/audit\s*/i, "").trim()
+    || state.conversation.at(-1)?.user
+    || "";
+  const audit = buildRagAudit(auditQuery);
+  if (els.ragAuditOutput) els.ragAuditOutput.textContent = audit;
+  appendMessage("assistant", `RAG audit${auditQuery ? ` for: ${auditQuery}` : ""}\n\n${audit}`);
+  setStatus("RAG audit complete.");
+}
+
 async function handleFeedbackCommand(query) {
   const suggestions = String(query || "").replace(/^\/feedback\s*/i, "").trim();
 
@@ -2674,6 +2688,12 @@ async function handleAsk(event) {
   }
   if (isFeedbackCommand(query)) {
     await handleFeedbackCommand(query);
+    setIndexStatusSummary();
+    return;
+  }
+
+  if (isAuditCommand(query)) {
+    handleAuditCommand(query);
     setIndexStatusSummary();
     return;
   }
@@ -3610,36 +3630,76 @@ function buildRagAudit(query = "") {
   const resources = state.resources || [];
   const contentStore = state.contentStore || {};
   const fileResources = resources.filter(isDocumentOrFileLikeResource);
+  const searchDocs = buildSearchDocs(query || "");
   const bodyEntries = Object.entries(contentStore).filter(([, text]) => isUsableSearchContent(text));
+  const readableBodies = Object.entries(contentStore).filter(([id, text]) => {
+    const resource = resources.find((item) => item.id === id);
+    return resource ? resourceHasReadableBody(resource, text) : isUsableSearchContent(text);
+  });
   const unreadFiles = fileResources.filter((resource) => !resourceHasReadableBody(resource, contentStore[resource.id]));
-  const weakBodies = bodyEntries
-    .map(([id, text]) => ({
-      id,
-      stats: contentQualityStats(text),
-      resource: resources.find((item) => item.id === id)
-    }))
-    .filter((entry) => entry.stats.words < 60 || entry.stats.uniqueRatio < 0.1)
-    .slice(0, 8);
+  const typeCounts = countBy(resources.map((resource) => String(resource.type || "resource").toLowerCase()));
+  const duplicateClusters = duplicateResourceClusters(resources);
+  const weakBodies = weakSearchableBodies(resources, contentStore);
+  const bloatedShells = resources.filter((resource) => isGenericCourseShellResult(hydrationSearchDocForResource(resource))).slice(0, 8);
 
   const lines = [];
   lines.push("Index health");
   lines.push(`- Resources: ${resources.length}`);
+  lines.push(`- Search docs/chunks generated: ${searchDocs.length}`);
   lines.push(`- Searchable bodies: ${bodyEntries.length}`);
+  lines.push(`- Readable bodies: ${readableBodies.length}`);
   lines.push(`- File-like resources: ${fileResources.length}`);
   lines.push(`- File-like resources without readable body text: ${unreadFiles.length}`);
+  lines.push(`- Resource types: ${formatCounts(typeCounts) || "none"}`);
+  lines.push(`- Duplicate title/url clusters: ${duplicateClusters.length}`);
+
+  lines.push("");
+  lines.push("Likely index issues");
+  const issues = indexHealthIssues(resources, searchDocs, fileResources, unreadFiles, weakBodies, duplicateClusters, bloatedShells);
+  if (!issues.length) lines.push("- none obvious from static checks");
+  for (const issue of issues) lines.push(`- ${issue}`);
 
   if (query) {
-    const results = searchIndex(query).slice(0, 8);
-    const sources = prepareAnswerSources(results, query);
+    const allScoredDocs = buildSearchDocs(query)
+      .map((doc) => ({ ...doc, score: scoreDoc(query, doc) }))
+      .filter((doc) => doc.score > 0)
+      .sort((a, b) => b.score - a.score);
+    const diversified = searchIndex(query);
+    const sources = prepareAnswerSources(diversified, query);
+    const hydrationCandidates = findHydrationCandidatesForQuery(query, diversified).slice(0, TARGETED_CONTENT_HYDRATION_LIMIT);
+    const readiness = documentReadinessIssueForQuery(query, query, sources, { hydrated: 0, failed: 0, candidates: hydrationCandidates }, defaultRagPlan(query, query));
+    const evidence = sources.map((source) => ({ source, evidenceScore: sourceEvidenceScore(query, source, query) }));
+
     lines.push("");
-    lines.push(`Top sources for: ${query}`);
-    if (!sources.length) lines.push("- none");
-    for (const [index, source] of sources.entries()) {
-      const text = source.resource_id && source.has_body ? contentStore[source.resource_id] || source.text || "" : source.text || "";
-      const stats = contentQualityStats(text);
-      lines.push(
-        `${index + 1}. ${labelForKind(source.kind)} | ${cleanSourceTitle(source)} | score ${Math.round(source.score || 0)} | ${stats.chars} chars | ${stats.words} words | body ${source.has_body ? "yes" : "no"}`
-      );
+    lines.push(`Query audit: ${query}`);
+    lines.push(`- Raw scored matches: ${allScoredDocs.length}`);
+    lines.push(`- Diversified matches used before answer source filtering: ${diversified.length}`);
+    lines.push(`- Final answer sources: ${sources.length}`);
+    lines.push(`- Hydration candidates not already readable: ${hydrationCandidates.length}`);
+    lines.push(`- Document readiness gate: ${readiness ? "blocked" : "passed"}`);
+
+    lines.push("");
+    lines.push("Pipeline risk flags for this query");
+    const queryIssues = queryPipelineIssues(query, allScoredDocs, diversified, sources, hydrationCandidates, readiness, evidence);
+    if (!queryIssues.length) lines.push("- none obvious from deterministic checks");
+    for (const issue of queryIssues) lines.push(`- ${issue}`);
+
+    lines.push("");
+    lines.push("Top raw search matches");
+    appendAuditRows(lines, allScoredDocs.slice(0, 10), contentStore, query);
+
+    lines.push("");
+    lines.push("Final answer sources after filtering/dedupe");
+    appendAuditRows(lines, sources, contentStore, query, evidence);
+
+    lines.push("");
+    lines.push("Hydration candidates");
+    if (!hydrationCandidates.length) lines.push("- none");
+    for (const [index, resource] of hydrationCandidates.entries()) {
+      const stats = contentQualityStats(contentStore[resource.id] || resource.context || "");
+      const diag = state.hydrationDiagnostics?.[resource.id];
+      const reason = diag?.error ? ` | last error: ${diag.error}` : "";
+      lines.push(`${index + 1}. ${resource.type || "resource"} | ${cleanSourceTitle(resource)} | body ${resourceHasReadableBody(resource, contentStore[resource.id]) ? "yes" : "no"} | ${stats.words} words${reason}`);
     }
   }
 
@@ -3653,13 +3713,124 @@ function buildRagAudit(query = "") {
   }
 
   lines.push("");
-  lines.push("Weak searchable bodies (first 8)");
+  lines.push("Weak searchable bodies (first 12)");
   if (!weakBodies.length) lines.push("- none flagged");
-  for (const entry of weakBodies) {
+  for (const entry of weakBodies.slice(0, 12)) {
     lines.push(`- ${entry.stats.chars} chars, ${entry.stats.words} words, unique ${entry.stats.uniqueRatio.toFixed(2)} | ${cleanSourceTitle(entry.resource || { title: entry.id })}`);
   }
 
+  lines.push("");
+  lines.push("Duplicate clusters (first 8)");
+  if (!duplicateClusters.length) lines.push("- none flagged");
+  for (const cluster of duplicateClusters.slice(0, 8)) {
+    lines.push(`- ${cluster.count} x ${cluster.label}`);
+  }
+
   return lines.join("\n");
+}
+
+function appendAuditRows(lines, rows, contentStore, query, evidence = []) {
+  if (!rows.length) {
+    lines.push("- none");
+    return;
+  }
+  const evidenceByKey = new Map(evidence.map((entry) => [sourceDedupeKey(entry.source), entry.evidenceScore]));
+  for (const [index, row] of rows.entries()) {
+    const stored = row.resource_id ? contentStore[row.resource_id] : "";
+    const text = row.has_body && stored ? stored : row.text || "";
+    const stats = contentQualityStats(text);
+    const quality = sourceQualityScore(row, query);
+    const evidenceScore = evidenceByKey.get(sourceDedupeKey(row));
+    const evidenceText = Number.isFinite(evidenceScore) ? ` | evidence ${Math.round(evidenceScore)}` : "";
+    const flags = auditRowFlags(row, text).join(", ");
+    lines.push(
+      `${index + 1}. ${labelForKind(row.kind)} | ${cleanSourceTitle(row)} | score ${Math.round(row.score || 0)} | quality ${Math.round(quality)}${evidenceText} | ${stats.chars} chars | ${stats.words} words | body ${row.has_body ? "yes" : "no"}${flags ? ` | flags: ${flags}` : ""}`
+    );
+  }
+}
+
+function auditRowFlags(row, text) {
+  const flags = [];
+  if (isLowValueSearchResult(row)) flags.push("low-value");
+  if (isVideoResultKind(row?.kind)) flags.push("video");
+  if (isUrlLikeTitle(row?.title || row?.base_title)) flags.push("url-title");
+  if (isThinLinkShell(row)) flags.push("thin-link");
+  if (isGenericCourseShellResult(row)) flags.push("course-shell");
+  const stats = contentQualityStats(text);
+  if (stats.words && stats.words < 70) flags.push("short-body");
+  if (stats.words > 40 && stats.uniqueRatio < 0.18) flags.push("repetitive-body");
+  return flags;
+}
+
+function queryPipelineIssues(query, rawDocs, diversified, sources, hydrationCandidates, readiness, evidence = []) {
+  const issues = [];
+  if (!rawDocs.length) issues.push("No raw search matches. This is a crawl/indexing or query expansion problem.");
+  if (rawDocs.length && !sources.length) issues.push("Raw search matches exist, but answer source filtering removed everything.");
+  if (readiness) issues.push("Document readiness blocked the answer because a likely file has no readable body text.");
+  if (sources.some((source) => !source.has_body && isDocumentOrFileLikeResource({ type: source.kind, title: source.title, url: source.url }))) {
+    issues.push("A file-like answer source is being used without readable extracted body text.");
+  }
+  if (!wantsVideoHeavySearch(query) && sources.some((source) => isVideoResultKind(source.kind))) {
+    issues.push("Video/transcript material is leaking into a non-video query.");
+  }
+  if (sources.some((source) => isLowValueSearchResult(source))) {
+    issues.push("Low-value Blackboard shell/link results survived source filtering.");
+  }
+  const strongEvidence = evidence.some((entry) => entry.evidenceScore >= 14);
+  if (strongEvidence) issues.push("Strong evidence exists. If the displayed answer says not found, the answer/review stage is the failure, not retrieval.");
+  if (hydrationCandidates.length && sources.every((source) => !source.has_body)) {
+    issues.push("Hydration candidates exist but final sources still lack body text. File fetching/extraction likely failed or did not finish.");
+  }
+  const topTitles = rawDocs.slice(0, 8).map((doc) => normalizeText(cleanSourceTitle(doc)));
+  if (new Set(topTitles).size < Math.max(2, Math.floor(topTitles.length / 2))) {
+    issues.push("Top search matches are duplicate-heavy, which can crowd out better evidence.");
+  }
+  return issues;
+}
+
+function indexHealthIssues(resources, searchDocs, fileResources, unreadFiles, weakBodies, duplicateClusters, bloatedShells) {
+  const issues = [];
+  if (resources.length && searchDocs.length / resources.length > 8) issues.push(`Search chunk count is high (${searchDocs.length} docs for ${resources.length} resources), which can create bloat.`);
+  if (fileResources.length && unreadFiles.length / fileResources.length > 0.25) issues.push(`${unreadFiles.length}/${fileResources.length} file-like resources have no readable body text.`);
+  if (weakBodies.length > 10) issues.push("Many stored bodies are short or repetitive, suggesting crawler shell text or poor extraction.");
+  if (duplicateClusters.length > 20) issues.push("Many duplicate title/url clusters exist; dedupe may not be strict enough.");
+  if (bloatedShells.length > 5) issues.push("Generic Blackboard course shell pages are present and may be competing with real content.");
+  return issues;
+}
+
+function weakSearchableBodies(resources, contentStore) {
+  return Object.entries(contentStore || {})
+    .map(([id, text]) => ({
+      id,
+      stats: contentQualityStats(text),
+      resource: resources.find((item) => item.id === id)
+    }))
+    .filter((entry) => entry.stats.words < 60 || (entry.stats.words > 40 && entry.stats.uniqueRatio < 0.12))
+    .sort((a, b) => a.stats.words - b.stats.words)
+    .slice(0, 24);
+}
+
+function duplicateResourceClusters(resources) {
+  const groups = new Map();
+  for (const resource of resources || []) {
+    const url = normalizeSourceUrl(resource.url || resource.page_url || resource.document_url || "");
+    const title = normalizeText(cleanSourceTitle(resource));
+    const key = url || title;
+    if (!key) continue;
+    const entry = groups.get(key) || { count: 0, label: cleanSourceTitle(resource) || url };
+    entry.count += 1;
+    groups.set(key, entry);
+  }
+  return Array.from(groups.values())
+    .filter((entry) => entry.count > 1)
+    .sort((a, b) => b.count - a.count);
+}
+
+function formatCounts(counts) {
+  return Object.entries(counts || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, count]) => `${key || "unknown"}: ${count}`)
+    .join(", ");
 }
 
 function contentQualityStats(text) {
