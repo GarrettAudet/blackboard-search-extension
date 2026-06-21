@@ -193,7 +193,9 @@ state.contentStore = {
   "language-study": state.resources[3].context,
   "english-language-pdf": state.resources[5].context,
   "course-calendar": state.resources[6].context,
-  "resources-page": state.resources[7].context
+  "resources-page": state.resources[7].context,
+  "x1-visa-pdf": "Page 1: OBTAINING YOUR X1 STUDENT VISA 2026. Step 1: CHECK YOUR PASSPORT - Valid for at least 6 months after your planned departure from China and at least 4 blank pages. Step 2: FIND YOUR LOCAL CHINESE EMBASSY/CONSULATE. Step 5: RECEIVE UNIVERSITY DOCUMENTS BY EMAIL OR MAIL: JW202 Form and Tsinghua University Admission Notice. Complete the visa application form and prepare a recent photo.",
+  "visa-faq-pdf": "Page 1: Visa FAQ 2026. Important notice: regulations and policy on visa and immigration often change without warning. X1 visa students should prepare passport documents, JW202, admission notice, visa application materials, and check local embassy requirements."
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
@@ -277,6 +279,10 @@ const parsedReviewJson = parseJsonObjectFromText(
   '{"approved":false,"answer":"The course calendar contains the released course list [1].","reason":"Removed unsupported text."}'
 );
 const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
+const savedVisaContent = state.contentStore["x1-visa-pdf"];
+const savedVisaFaqContent = state.contentStore["visa-faq-pdf"];
+delete state.contentStore["x1-visa-pdf"];
+delete state.contentStore["visa-faq-pdf"];
 const visaHydrationCandidates = findHydrationCandidatesForQuery("What do I need for the Chinese visa?", [
   {
     score: 340,
@@ -287,7 +293,17 @@ const visaHydrationCandidates = findHydrationCandidatesForQuery("What do I need 
     source: "Class of 2026-2027 Pre-program Resources"
   }
 ]);
+state.contentStore["x1-visa-pdf"] = savedVisaContent;
+state.contentStore["visa-faq-pdf"] = savedVisaFaqContent;
 const linkTypedPdfHydrates = shouldHydrateResourceContent(state.resources.find((resource) => resource.id === "visa-faq-pdf"), true);
+const visaAnswerSourcesWithBody = prepareAnswerSources(searchIndex("What do I need for the X1 visa?"), "What do I need for the X1 visa?");
+const visaReviewerFallback = preserveEvidenceBackedAnswer(
+  "What do I need for the X1 visa?",
+  { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
+  { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
+  visaAnswerSourcesWithBody,
+  "What do I need for the X1 visa?"
+);
 const preparedMandarinSources = prepareAnswerSources(
   [
     {
@@ -354,6 +370,14 @@ const packingDocumentReadinessIssue = documentReadinessIssueForQuery(
 const fakePackingSnippet = "Packing List for Students (2026).pdf Class of 2026-2027 Pre-program Resources Resources Content Blackboard User Guideline Incoming Students Packing List for Students (2026).pdf OBTAINING YOUR X1 STUDENT VISA 2026.pdf Visa FAQ 2026.pdf WeChat Registration FAQ 2026 BB.pdf Click for more options Open source";
 const packingFakeSnippetIsReadable = resourceHasReadableBody(state.resources.find((resource) => resource.id === "packing-pdf"), fakePackingSnippet);
 state.contentStore["packing-pdf"] = "Page 1: Packing List for Students 2026. Bring passport and copies of key documents, visa paperwork, admission notice, JW202 if applicable, prescription medication in original packaging, doctor letters for prescriptions, basic over-the-counter medicine, adapters, chargers, clothing layers, professional clothes, comfortable walking shoes, toiletries, glasses or contacts, insurance information, bank cards, some cash, emergency contacts, arrival address, vaccination records, and luggage items needed for daily life in China. Page 2: Recommended items include cold medicine, allergy medicine, pain relievers, sunscreen, personal hygiene products, small gifts, and copies of important forms.";
+const packingSourcesWithBody = prepareAnswerSources(searchIndex("What should I pack for China?"), "What should I pack for China?");
+const packingReviewerFallback = preserveEvidenceBackedAnswer(
+  "What should I pack for China?",
+  { text: "I could not find that in the indexed Blackboard resources.", sources: packingSourcesWithBody },
+  { text: "I could not find that in the indexed Blackboard resources.", sources: packingSourcesWithBody },
+  packingSourcesWithBody,
+  "What should I pack for China?"
+);
 const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
   "What should I pack for China?",
   "What should I pack for China?",
@@ -377,13 +401,13 @@ const feedbackFormUrl = buildFeedbackFormUrl(
 const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.", "");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -473,6 +497,9 @@ if (packingDocumentReadinessAfterBody) {
 
 ${JSON.stringify(packingDocumentReadinessAfterBody, null, 2)}`);
 }
+if (context.isCouldNotFindAnswer(packingReviewerFallback.text) || !/passport|prescription|adapters|packing/i.test(packingReviewerFallback.text)) {
+  throw new Error(`Reviewer fallback should preserve packing evidence instead of returning not-found.\n\n${packingReviewerFallback.text}`);
+}
 for (const expectedVisaResource of ["x1-visa-pdf", "visa-faq-pdf"]) {
   if (!visaHydrationCandidates.some((resource) => resource.id === expectedVisaResource)) {
     throw new Error(`Expected visa query to hydrate linked visa PDFs before answering.\n\n${JSON.stringify(visaHydrationCandidates, null, 2)}`);
@@ -480,6 +507,9 @@ for (const expectedVisaResource of ["x1-visa-pdf", "visa-faq-pdf"]) {
 }
 if (!linkTypedPdfHydrates) {
   throw new Error("Expected link resources with .pdf titles to be hydratable files.");
+}
+if (context.isCouldNotFindAnswer(visaReviewerFallback.text) || !/passport|jw202|admission notice|visa application/i.test(visaReviewerFallback.text)) {
+  throw new Error(`Reviewer fallback should preserve visa evidence instead of returning not-found.\n\n${visaReviewerFallback.text}`);
 }
 if (preparedMandarinSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
   throw new Error(`Mandarin answer sources should exclude English-language resource hits.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);

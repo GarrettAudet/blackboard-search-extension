@@ -2099,7 +2099,9 @@ function addLinkedHydrationCandidatesForResult(query, result, sourceResource, ad
   for (const resource of state.resources || []) {
     if (!shouldHydrateResourceContent(resource, true)) continue;
     if (!isResourceLinkedFromResult(resource, result, sourceResource, haystack)) continue;
-    addCandidate(resource, 90 + documentHydrationBoost(query, resource));
+    const topicBoost = documentHydrationBoost(query, resource);
+    if (topicBoost <= 0 && !documentTitleMatchesQuestion(query, resource)) continue;
+    addCandidate(resource, 90 + topicBoost);
   }
 }
 
@@ -2224,12 +2226,13 @@ function sourceMatchesDocumentCandidateContext(source, candidates) {
   if (!haystack) return false;
   return (candidates || []).some((resource) => {
     if (source?.resource_id && resource?.id && source.resource_id === resource.id) return true;
-    const title = normalizeText(cleanSourceTitle(resource));
-    const trail = normalizeText([resource?.section, resource?.page_title].filter(Boolean).join(" "));
-    return Boolean((title && haystack.includes(title)) || (trail && haystack.includes(trail)));
+    const candidateTitle = normalizeText(cleanSourceTitle(resource));
+    const sourceTitle = normalizeText(cleanSourceTitle(source || {}));
+    if (!candidateTitle) return false;
+    if (haystack.includes(candidateTitle)) return true;
+    return Boolean(sourceTitle && (sourceTitle.includes(candidateTitle) || candidateTitle.includes(sourceTitle)));
   });
 }
-
 function isLikelyDocumentListingOnly(source, candidates) {
   let text = normalizeText([source?.title, source?.text, source?.source].filter(Boolean).join(" "));
   if (!text) return false;
@@ -2728,10 +2731,12 @@ async function handleAsk(event) {
   const pending = appendMessage("assistant", "Planning the query, reading local matches, and reviewing the answer...");
   try {
     const answer = await buildApiAnswer(query, answerSources, memory, retrievalQuery, queryPlan);
-    let finalAnswer = alignAnswerCitations(answer, answerSources);
+    const draftAnswer = alignAnswerCitations(answer, answerSources);
+    let finalAnswer = draftAnswer;
     const reviewSources = finalAnswer.sources.length ? finalAnswer.sources : answerSources;
     const reviewedAnswer = await reviewApiAnswer(query, finalAnswer.text, reviewSources, memory, retrievalQuery, queryPlan);
     finalAnswer = alignAnswerCitations(reviewedAnswer, reviewSources);
+    finalAnswer = preserveEvidenceBackedAnswer(query, finalAnswer, draftAnswer, reviewSources, retrievalQuery);
     if (directAnswer && isCouldNotFindAnswer(finalAnswer.text)) {
       const directSources = prepareAnswerSources(directAnswer.sources || answerSources, retrievalQuery);
       finalAnswer = alignAnswerCitations(directAnswer.text, directSources);
@@ -3171,6 +3176,81 @@ function isCouldNotFindAnswer(text) {
   );
 }
 
+function preserveEvidenceBackedAnswer(query, reviewedAnswer, draftAnswer, sources = [], retrievalQuery = query) {
+  const reviewed = reviewedAnswer || { text: "", sources: [] };
+  if (!isCouldNotFindAnswer(reviewed.text)) return reviewed;
+
+  const availableSources = (reviewed.sources && reviewed.sources.length ? reviewed.sources : sources || []).slice(0, 8);
+  if (!hasStrongSourceEvidence(query, availableSources, retrievalQuery)) return reviewed;
+
+  if (draftAnswer && draftAnswer.text && !isCouldNotFindAnswer(draftAnswer.text)) {
+    const draftSources = draftAnswer.sources && draftAnswer.sources.length ? draftAnswer.sources : availableSources;
+    return alignAnswerCitations(draftAnswer.text, draftSources);
+  }
+
+  return alignAnswerCitations(buildEvidenceExtractAnswer(query, availableSources, retrievalQuery), availableSources);
+}
+
+function hasStrongSourceEvidence(query, sources = [], retrievalQuery = query) {
+  if (!sources.length || isCapabilityQuestion(query)) return false;
+  return sources.slice(0, 5).some((source) => sourceEvidenceScore(query, source, retrievalQuery) >= 14);
+}
+
+function sourceEvidenceScore(query, source, retrievalQuery = query) {
+  if (!source) return 0;
+  const title = normalizeText(cleanSourceTitle(source));
+  const trail = normalizeText(compactSourceTrail(source));
+  const text = normalizeText(fullTextForResult(source));
+  const haystack = `${title} ${trail} ${text}`;
+  if (!haystack.trim()) return 0;
+
+  const weakTerms = new Set(["blackboard", "resource", "resources", "indexed", "question", "answer", "find", "found", "need", "needs", "should"]);
+  const tokens = Array.from(new Set(expandedTokens(`${query} ${retrievalQuery || ""}`)))
+    .filter((token) => token.length > 2 && !weakTerms.has(token));
+
+  let score = 0;
+  for (const token of tokens) {
+    if (title.includes(token)) score += 4;
+    if (trail.includes(token)) score += 2;
+    if (text.includes(token)) score += 3;
+  }
+  for (const phrase of evidencePhrasesForQuery(query)) {
+    if (haystack.includes(phrase)) score += 8;
+  }
+  if (source.has_body || text.length > 220) score += 5;
+  if (/^(pdf|document|page|announcement)$/i.test(String(source.kind || ""))) score += 3;
+  if ((source.score || 0) >= 120) score += 4;
+  if (isVideoResultKind(source.kind) && !wantsVideoHeavySearch(query)) score -= 8;
+  return score;
+}
+
+function evidencePhrasesForQuery(query) {
+  const normalized = normalizeText(query);
+  const phrases = [];
+  if (/\b(?:x1|visa|permit|passport)\b/.test(normalized)) {
+    phrases.push("x1 student visa", "obtaining your x1", "check your passport", "jw202", "admission notice", "visa application");
+  }
+  if (/\b(?:pack|packing|bring|luggage)\b/.test(normalized)) {
+    phrases.push("packing list", "bring passport", "prescription medication", "original packaging", "luggage", "clothing");
+  }
+  if (isTaskDeadlineQuery(query)) phrases.push("to do", "deadline", "mandatory", "submit", "action item");
+  if (isChineseLanguageQuery(query)) phrases.push("chinese language learning resources", "key vocabulary", "grammar", "survival chinese");
+  if (isCourseListQuery(query)) phrases.push("course calendar", "course schedule", "list of courses", "academic calendar");
+  return phrases.map((phrase) => normalizeText(phrase)).filter(Boolean);
+}
+
+function buildEvidenceExtractAnswer(query, sources = [], retrievalQuery = query) {
+  const selected = sources
+    .slice(0, 5)
+    .filter((source) => sourceEvidenceScore(query, source, retrievalQuery) >= 10)
+    .slice(0, 3);
+  const fallbackSources = selected.length ? selected : sources.slice(0, 2);
+  const lines = fallbackSources.map((source, index) => {
+    const snippet = snippetFor(fullTextForResult(source), retrievalQuery || query, 320) || cleanSourceTitle(source);
+    return `- ${snippet} [${index + 1}]`;
+  });
+  return `I found relevant information in the indexed Blackboard resources:\n\n${lines.join("\n")}`;
+}
 async function buildApiAnswer(query, results, memory = [], retrievalQuery = query, queryPlan = null) {
   const context = results.slice(0, 8).map((result, index) => ({
     id: index + 1,

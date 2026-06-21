@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Blackboard Search Extension",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Local Blackboard resource search and API-powered Q&A.",
   "permissions": [
     "activeTab",
