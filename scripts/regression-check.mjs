@@ -204,6 +204,14 @@ const statusSummaryText = els.statusText.textContent;
 const query = "What are the current to do's?";
 const results = searchIndex(query);
 const answer = buildDirectAnswer(query, results);
+const alternateTaskQuery = "Do I have any to do's?";
+const alternateTaskRetrievalQuery = enhanceRetrievalQueryForIntent(
+  alternateTaskQuery,
+  alternateTaskQuery,
+  { intent: "task_deadline", retrieval_query: alternateTaskQuery, source_preferences: [] }
+);
+const alternateTaskSources = prepareAnswerSources(searchIndex(alternateTaskRetrievalQuery), alternateTaskRetrievalQuery);
+const alternateTaskAnswer = buildDirectAnswer(alternateTaskQuery, alternateTaskSources);
 const mandarinQuery = "Have they gives us any mandarin resources to learn from?";
 const mandarinIsCapability = isCapabilityQuestion(mandarinQuery);
 const mandarinResults = searchIndex(mandarinQuery);
@@ -369,13 +377,13 @@ const feedbackFormUrl = buildFeedbackFormUrl(
 const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.", "");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingFakeSnippetIsReadable, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -402,6 +410,15 @@ if (/\n\s*Sources\s*:/i.test(answer.text)) {
 }
 if (!answer.text.includes("I found 2 current To Do items")) {
   throw new Error(`Expected exactly two To Do items.\n\n${answer.text}`);
+}
+if (!/deadline|action items|mandatory/i.test(alternateTaskRetrievalQuery)) {
+  throw new Error(`Expected alternate task query to be expanded for deadline/task retrieval.\n\n${alternateTaskRetrievalQuery}`);
+}
+if (!alternateTaskSources.some((source) => source.resource_id === "todo-page")) {
+  throw new Error(`Expected alternate task query to retrieve the To Do page.\n\n${JSON.stringify(alternateTaskSources, null, 2)}`);
+}
+if (!alternateTaskAnswer || !alternateTaskAnswer.text.includes("I found 2 current To Do items")) {
+  throw new Error(`Expected alternate task phrasing to produce the concrete To Do answer.\n\n${alternateTaskAnswer?.text || "no answer"}`);
 }
 
 if (mandarinIsCapability) {

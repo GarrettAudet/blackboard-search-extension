@@ -2690,6 +2690,8 @@ async function handleAsk(event) {
     }
   }
 
+  retrievalQuery = enhanceRetrievalQueryForIntent(query, retrievalQuery, queryPlan);
+
   let results = searchIndex(retrievalQuery);
 
   const hydrationResult = await hydrateLikelyResourceContentForQuery(retrievalQuery, results);
@@ -2730,6 +2732,10 @@ async function handleAsk(event) {
     const reviewSources = finalAnswer.sources.length ? finalAnswer.sources : answerSources;
     const reviewedAnswer = await reviewApiAnswer(query, finalAnswer.text, reviewSources, memory, retrievalQuery, queryPlan);
     finalAnswer = alignAnswerCitations(reviewedAnswer, reviewSources);
+    if (directAnswer && isCouldNotFindAnswer(finalAnswer.text)) {
+      const directSources = prepareAnswerSources(directAnswer.sources || answerSources, retrievalQuery);
+      finalAnswer = alignAnswerCitations(directAnswer.text, directSources);
+    }
     updateMessage(pending, finalAnswer.text, finalAnswer.sources);
     rememberTurn(query, finalAnswer.text);
   } catch (error) {
@@ -2872,9 +2878,7 @@ function buildDirectAnswer(query, results) {
 }
 
 function isTaskQuery(query) {
-  return /\b(to\s*[- ]?\s*do|todo|tasks?|action\s+items?|deadlines?|due|current\s+to\s*[- ]?\s*dos?)\b/i.test(
-    query
-  );
+  return isTaskDeadlineQuery(query);
 }
 
 function buildTaskAnswer(query, results) {
@@ -3159,6 +3163,12 @@ function extractDateLikeText(value) {
 
 function shouldUseLlm(query, results) {
   return Boolean(state.settings.hasApiKey && results.length && !isCapabilityQuestion(query));
+}
+
+function isCouldNotFindAnswer(text) {
+  return /\b(i could not find|could not find|couldn't find|do not have|does not contain|not found|no relevant|no matching|no .*indexed)\b/i.test(
+    String(text || "")
+  );
 }
 
 async function buildApiAnswer(query, results, memory = [], retrievalQuery = query, queryPlan = null) {
