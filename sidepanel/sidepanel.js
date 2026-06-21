@@ -3628,8 +3628,20 @@ chrome.runtime.onMessage.addListener((message) => {
   if (payload.status === "fetching") {
     const uniqueSeen = payload.unique_candidates_seen ?? payload.candidates_seen ?? 0;
     const rawSeen = payload.raw_candidates_seen ?? payload.resources_seen ?? 0;
+    const stored = payload.resource_count || 0;
     const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
-    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; unique resources ${uniqueSeen}${rawText}.`);
+    const storedText = stored ? `; indexed ${stored} so far` : "";
+    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; unique resources ${uniqueSeen}${rawText}${storedText}.`);
+    if (els.crawlState) els.crawlState.textContent = `${payload.pages} pages`;
+  } else if (payload.status === "checkpoint" || payload.status === "saving") {
+    const uniqueSeen = payload.unique_candidates_seen ?? payload.candidates_seen ?? 0;
+    const rawSeen = payload.raw_candidates_seen ?? payload.resources_seen ?? 0;
+    const stored = payload.resource_count || 0;
+    const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
+    const label = payload.status === "saving" ? "Saving final index" : "Indexed checkpoint";
+    refreshAll()
+      .then(() => setStatus(`${label}: ${stored} resources saved; page ${payload.pages}; queued ${payload.queued}; saw ${uniqueSeen}${rawText}.`))
+      .catch(reportError);
     if (els.crawlState) els.crawlState.textContent = `${payload.pages} pages`;
   } else if (payload.status === "complete") {
     if (els.crawlState) els.crawlState.textContent = "complete";

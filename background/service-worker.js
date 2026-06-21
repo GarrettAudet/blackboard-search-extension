@@ -908,6 +908,8 @@ async function crawlSite(payload) {
   const failures = [];
   const uniqueCandidateIds = new Set();
   let rawCandidatesSeen = 0;
+  let lastSavedResourceCount = 0;
+  let lastCheckpointPage = 0;
 
   function recordCandidateResources(pageResources) {
     const items = Array.isArray(pageResources) ? pageResources : [];
@@ -926,11 +928,35 @@ async function crawlSite(payload) {
       candidates_seen: uniqueCandidateIds.size,
       unique_candidates_seen: uniqueCandidateIds.size,
       raw_candidates_seen: rawCandidatesSeen,
+      resource_count: lastSavedResourceCount,
       ...extra
     };
   }
 
   emitCrawlProgress({ status: "started", ...crawlProgress({ pages: 0, queued: queue.length, current_url: seedUrl }) });
+
+  async function checkpointResources(force = false) {
+    if (!resources.length) {
+      return { resource_count: lastSavedResourceCount };
+    }
+    const shouldSave = force || resources.length >= 80 || visited.size - lastCheckpointPage >= 25;
+    if (!shouldSave) {
+      return { resource_count: lastSavedResourceCount };
+    }
+    const batch = resources.splice(0, resources.length);
+    const mergeResult = await mergeScrape({ resources: batch });
+    lastSavedResourceCount = mergeResult.resource_count || lastSavedResourceCount;
+    lastCheckpointPage = visited.size;
+    emitCrawlProgress({
+      status: force ? "saving" : "checkpoint",
+      ...crawlProgress({
+        pages: visited.size,
+        queued: queue.length,
+        resource_count: lastSavedResourceCount
+      })
+    });
+    return mergeResult;
+  }
 
   while (queue.length && visited.size < maxPages) {
     const currentUrl = queue.shift();
@@ -947,6 +973,7 @@ async function crawlSite(payload) {
       const pageResources = Array.isArray(page.resources) ? page.resources : [];
       resources.push(...pageResources);
       recordCandidateResources(pageResources);
+      await checkpointResources(false);
 
       const candidateUrls = page.portal_entry_urls?.length && isDefaultPortalUrl(currentUrl) ? page.portal_entry_urls : page.child_urls;
       for (const candidate of candidateUrls) {
@@ -965,7 +992,7 @@ async function crawlSite(payload) {
     if (delayMs) await sleep(delayMs);
   }
 
-  const mergeResult = await mergeScrape({ resources });
+  const mergeResult = await checkpointResources(true);
   const response = {
     ok: true,
     pages_crawled: visited.size,
