@@ -186,7 +186,7 @@ async function scanActiveTab() {
 async function crawlSite() {
   if (els.crawlBtn) {
     els.crawlBtn.disabled = true;
-    els.crawlBtn.textContent = "Crawling";
+    els.crawlBtn.textContent = "Indexing";
   }
   if (els.crawlState) els.crawlState.textContent = "starting";
   setStatus("Starting Blackboard index...");
@@ -195,7 +195,7 @@ async function crawlSite() {
     delay_ms: 120,
     include_organizations: true
   });
-  if (!response.ok) throw new Error(response.error || "Crawl failed");
+  if (!response.ok) throw new Error(response.error || "Index failed");
   if (response.started) {
     setStatus("Indexing started. Keep Blackboard open and stay logged in while it runs.");
     if (els.crawlState) els.crawlState.textContent = "running";
@@ -213,7 +213,7 @@ function crawlSummary(payload) {
   const uniqueSeen = payload.unique_candidates_seen ?? payload.candidates_seen ?? 0;
   const rawSeen = payload.raw_candidates_seen ?? payload.resources_seen ?? 0;
   const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
-  return `Crawl complete. Pages ${pages}; saw ${uniqueSeen} unique resource candidate${uniqueSeen === 1 ? "" : "s"}${rawText}; stored ${stored}.${failureText}`;
+  return `Index complete. Pages ${pages}; saw ${uniqueSeen} unique resource candidate${uniqueSeen === 1 ? "" : "s"}${rawText}; stored ${stored}.${failureText}`;
 }
 
 async function handleCrawlComplete(payload) {
@@ -247,8 +247,8 @@ async function restoreDismissedMedia() {
   await refreshAll();
   const restored = response.restored_ignored || 0;
   setStatus(restored
-    ? `Restored ${restored} hidden crawler ignore${restored === 1 ? "" : "s"}. Refresh the local index if anything still looks stale.`
-    : "No hidden crawler ignores were stored.");
+    ? `Restored ${restored} hidden index ignore${restored === 1 ? "" : "s"}. Refresh the local index if anything still looks stale.`
+    : "No hidden index ignores were stored.");
 }
 
 function render() {
@@ -2878,7 +2878,7 @@ function videoResultSearchCacheKey(resource, searchText) {
 
 function buildLocalAnswer(query, results, retrievalQuery = query) {
   if (!state.resources.length) {
-    return "I do not have any local Blackboard resources indexed yet. Open Blackboard, go to Setup, and run Crawl first.";
+    return "I do not have any local Blackboard resources indexed yet. Open Blackboard, go to Setup, and run Index first.";
   }
   if (isCapabilityQuestion(query)) return summarizeAvailableTopics();
   if (!results.length) {
@@ -3762,7 +3762,7 @@ function auditRowFlags(row, text) {
 
 function queryPipelineIssues(query, rawDocs, diversified, sources, hydrationCandidates, readiness, evidence = []) {
   const issues = [];
-  if (!rawDocs.length) issues.push("No raw search matches. This is a crawl/indexing or query expansion problem.");
+  if (!rawDocs.length) issues.push("No raw search matches. This is an indexing or query expansion problem.");
   if (rawDocs.length && !sources.length) issues.push("Raw search matches exist, but answer source filtering removed everything.");
   if (readiness) issues.push("Document readiness blocked the answer because a likely file has no readable body text.");
   if (sources.some((source) => !source.has_body && isDocumentOrFileLikeResource({ type: source.kind, title: source.title, url: source.url }))) {
@@ -3790,7 +3790,7 @@ function indexHealthIssues(resources, searchDocs, fileResources, unreadFiles, we
   const issues = [];
   if (resources.length && searchDocs.length / resources.length > 8) issues.push(`Search chunk count is high (${searchDocs.length} docs for ${resources.length} resources), which can create bloat.`);
   if (fileResources.length && unreadFiles.length / fileResources.length > 0.25) issues.push(`${unreadFiles.length}/${fileResources.length} file-like resources have no readable body text.`);
-  if (weakBodies.length > 10) issues.push("Many stored bodies are short or repetitive, suggesting crawler shell text or poor extraction.");
+  if (weakBodies.length > 10) issues.push("Many stored bodies are short or repetitive, suggesting indexer shell text or poor extraction.");
   if (duplicateClusters.length > 20) issues.push("Many duplicate title/url clusters exist; dedupe may not be strict enough.");
   if (bloatedShells.length > 5) issues.push("Generic Blackboard course shell pages are present and may be competing with real content.");
   return issues;
@@ -3890,7 +3890,7 @@ chrome.runtime.onMessage.addListener((message) => {
     const stored = payload.resource_count || 0;
     const rawText = rawSeen && rawSeen !== uniqueSeen ? ` (${rawSeen} raw inspected)` : "";
     const storedText = stored ? `; indexed ${stored} so far` : "";
-    setStatus(`Crawling page ${payload.pages}; queued ${payload.queued}; unique resources ${uniqueSeen}${rawText}${storedText}.`);
+    setStatus(`Indexing page ${payload.pages}; queued ${payload.queued}; unique resources ${uniqueSeen}${rawText}${storedText}.`);
     if (els.crawlState) els.crawlState.textContent = `${payload.pages} pages`;
   } else if (payload.status === "checkpoint" || payload.status === "saving") {
     const uniqueSeen = payload.unique_candidates_seen ?? payload.candidates_seen ?? 0;
@@ -3919,15 +3919,15 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     handleCrawlComplete(payload).catch(reportError);
   } else if (payload.status === "error") {
-    const error = payload.error || "unknown crawl error";
-    setStatus(`Crawl failed: ${error}`);
+    const error = payload.error || "unknown index error";
+    setStatus(`Index failed: ${error}`);
     if (els.crawlState) els.crawlState.textContent = "failed";
     if (els.crawlBtn) {
       els.crawlBtn.disabled = false;
       els.crawlBtn.textContent = "Index";
     }
   } else if (payload.status === "started") {
-    setStatus("Crawl started.");
+    setStatus("Indexing started.");
     if (els.crawlState) els.crawlState.textContent = "running";
   }
   return false;

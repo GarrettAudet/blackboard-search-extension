@@ -877,7 +877,7 @@ async function storeContent(payload) {
 }
 
 function startCrawlSite(payload) {
-  if (activeCrawlPromise) return { ok: false, error: "crawl_already_running" };
+  if (activeCrawlPromise) return { ok: false, error: "index_already_running" };
   activeCrawlPromise = crawlSite(payload)
     .catch((error) => {
       emitCrawlProgress({
