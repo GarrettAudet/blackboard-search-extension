@@ -184,6 +184,16 @@ state.resources = [
     page_title: "Resources - Class of 2026-2027 Pre-program",
     section: "Class of 2026-2027 Pre-program Resources",
     context: "Visa FAQ 2026.pdf"
+  },
+  {
+    id: "visa-faq-pdf-direct",
+    type: "pdf",
+    title: "Visa FAQ 2026.pdf",
+    url: "https://lms.sc.tsinghua.edu.cn/bbcswebdav/pid-visa-faq-dt-content-rid-faq_1/courses/SC2026-27/Visa%20FAQ%202026.pdf",
+    page_url: "https://lms.sc.tsinghua.edu.cn/resources",
+    page_title: "Resources - Class of 2026-2027 Pre-program",
+    section: "Class of 2026-2027 Pre-program Resources",
+    context: "Visa FAQ 2026.pdf"
   }
 ];
 state.contentStore = {
@@ -195,7 +205,8 @@ state.contentStore = {
   "course-calendar": state.resources[6].context,
   "resources-page": state.resources[7].context,
   "x1-visa-pdf": "Page 1: OBTAINING YOUR X1 STUDENT VISA 2026. Step 1: CHECK YOUR PASSPORT - Valid for at least 6 months after your planned departure from China and at least 4 blank pages. Step 2: FIND YOUR LOCAL CHINESE EMBASSY/CONSULATE. Step 5: RECEIVE UNIVERSITY DOCUMENTS BY EMAIL OR MAIL: JW202 Form and Tsinghua University Admission Notice. Complete the visa application form and prepare a recent photo.",
-  "visa-faq-pdf": "Page 1: Visa FAQ 2026. Important notice: regulations and policy on visa and immigration often change without warning. X1 visa students should prepare passport documents, JW202, admission notice, visa application materials, and check local embassy requirements."
+  "visa-faq-pdf": "Page 1: Visa FAQ 2026. Before you book your travel, please carefully read the travel policy. Please begin your visa application as early as possible after you receive the JW202 and Tsinghua Admission Notice, as China visas may now take up longer than the past years to process, and in many countries you may be required to appear in person for fingerprinting. X1 visa students should prepare passport documents, JW202, admission notice, visa application materials, and check local embassy requirements.",
+  "visa-faq-pdf-direct": "Page 1: Visa FAQ 2026. Before you book your travel, please carefully read the travel policy. Please begin your visa application as early as possible after you receive the JW202 and Tsinghua Admission Notice, as China visas may now take up longer than the past years to process, and in many countries you may be required to appear in person for fingerprinting. X1 visa students should prepare passport documents, JW202, admission notice, visa application materials, and check local embassy requirements."
 };
 state.transcripts = [];
 state.settings = { hasApiKey: true };
@@ -281,8 +292,10 @@ const parsedReviewJson = parseJsonObjectFromText(
 const packingHydrationCandidates = findHydrationCandidatesForQuery("What stuff should I pack for China?", []);
 const savedVisaContent = state.contentStore["x1-visa-pdf"];
 const savedVisaFaqContent = state.contentStore["visa-faq-pdf"];
+const savedVisaFaqDirectContent = state.contentStore["visa-faq-pdf-direct"];
 delete state.contentStore["x1-visa-pdf"];
 delete state.contentStore["visa-faq-pdf"];
+delete state.contentStore["visa-faq-pdf-direct"];
 const visaHydrationCandidates = findHydrationCandidatesForQuery("What do I need for the Chinese visa?", [
   {
     score: 340,
@@ -293,13 +306,46 @@ const visaHydrationCandidates = findHydrationCandidatesForQuery("What do I need 
     source: "Class of 2026-2027 Pre-program Resources"
   }
 ]);
+const linkTypedPdfHydrates = shouldHydrateResourceContent(state.resources.find((resource) => resource.id === "visa-faq-pdf"), true);
 state.contentStore["x1-visa-pdf"] = savedVisaContent;
 state.contentStore["visa-faq-pdf"] = savedVisaFaqContent;
-const linkTypedPdfHydrates = shouldHydrateResourceContent(state.resources.find((resource) => resource.id === "visa-faq-pdf"), true);
+state.contentStore["visa-faq-pdf-direct"] = savedVisaFaqDirectContent;
 const cleanedMarkdownAnswer = cleanAnswerText("The current Blackboard **To Do** task is **Capstone** &ndash; due [1].", 1);
 const x1NeedToDoIsTask = isTaskDeadlineQuery("What do I need to do for the x1 visa?");
 const visaNeedToDoSources = prepareAnswerSources(searchIndex("What do I need to do for the x1 visa?"), "What do I need to do for the x1 visa?");
-const visaTaskWordSources = prepareAnswerSources(searchIndex("What are the current to do visa tasks?"), "What are the current to do visa tasks?");const visaAnswerSourcesWithBody = prepareAnswerSources(searchIndex("What do I need for the X1 visa?"), "What do I need for the X1 visa?");
+const visaTaskWordSources = prepareAnswerSources(searchIndex("What are the current to do visa tasks?"), "What are the current to do visa tasks?");
+const visaAnswerSourcesWithBody = prepareAnswerSources(searchIndex("What do I need for the X1 visa?"), "What do I need for the X1 visa?");
+const duplicateVisaSources = prepareAnswerSources(searchIndex("What do I need for the X1 visa?"), "What do I need for the X1 visa?");
+const duplicateVisaFaqCount = duplicateVisaSources.filter((source) => /Visa FAQ 2026/i.test(source.title || source.base_title || "")).length;
+const exactVisaQuote = "Please begin your visa application as early as possible after you receive the JW202 and Tsinghua Admission Notice, as China visas may now take up longer than the past years to process, and in many countries you may be required to appear in person for fingerprinting.";
+const exactQuoteQuery = 'Why did you say that when I found this "' + exactVisaQuote + '"';
+const exactQuoteSources = prepareAnswerSources(searchIndex(exactQuoteQuery), exactQuoteQuery);
+const exactQuoteProblem = exactQuoteIssueForQuery(exactQuoteQuery, exactQuoteQuery, exactQuoteSources);
+const missingQuoteText = "Submit your visa application 1 month prior to your planned trip. Do not apply more than 3 months before your travel date.";
+const missingQuoteQuery = 'Where did you see this "' + missingQuoteText + '"';
+const missingQuoteSources = prepareAnswerSources(searchIndex(missingQuoteQuery), missingQuoteQuery);
+const missingQuoteProblem = exactQuoteIssueForQuery(missingQuoteQuery, missingQuoteQuery, missingQuoteSources);
+const sourceLocationPreserved = preserveEvidenceBackedAnswer(
+  "Where did you see that I should apply approximately one month before intended travel?",
+  { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
+  { text: "You should apply approximately one month before travel based on standard best practice [1].", sources: visaAnswerSourcesWithBody },
+  visaAnswerSourcesWithBody,
+  "Where did you see that I should apply approximately one month before intended travel?"
+);
+const unreadDocExactQuoteProblem = exactQuoteIssueForQuery(
+  exactQuoteQuery,
+  exactQuoteQuery,
+  [
+    {
+      score: 260,
+      kind: "document",
+      title: "Prerequisite Course Exemption Application Form.doc",
+      source: "Class of 2026-2027 Pre-program To Do",
+      text: "Prerequisite Course Exemption Application Form.doc Attached Files",
+      url: "https://lms.sc.tsinghua.edu.cn/form.doc"
+    }
+  ]
+);
 const visaReviewerFallback = preserveEvidenceBackedAnswer(
   "What do I need for the X1 visa?",
   { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
@@ -407,13 +453,13 @@ const feedbackFormUrl = buildFeedbackFormUrl(
 const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.", "");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, duplicateVisaSources, duplicateVisaFaqCount, exactQuoteSources, exactQuoteProblem, missingQuoteProblem, sourceLocationPreserved, unreadDocExactQuoteProblem, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, duplicateVisaSources, duplicateVisaFaqCount, exactQuoteSources, exactQuoteProblem, missingQuoteProblem, sourceLocationPreserved, unreadDocExactQuoteProblem, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -486,6 +532,24 @@ if (!visaNeedToDoSources.some((source) => source.resource_id === "x1-visa-pdf"))
 }
 if (!visaTaskWordSources.length || !visaTaskWordSources.some((source) => source.resource_id === "x1-visa-pdf")) {
   throw new Error(`Expected visa task wording to route to visa sources, not generic Blackboard To Do shell text.\n\n${JSON.stringify(visaTaskWordSources, null, 2)}`);
+}
+if (duplicateVisaFaqCount !== 1) {
+  throw new Error(`Expected duplicate Visa FAQ sources to collapse to one card.\n\n${JSON.stringify(duplicateVisaSources, null, 2)}`);
+}
+if (exactQuoteProblem) {
+  throw new Error(`Expected exact quote query to proceed when the indexed source contains the quote.\n\n${JSON.stringify(exactQuoteProblem, null, 2)}`);
+}
+if (!exactQuoteSources.some((source) => /Visa FAQ 2026/i.test(source.title || source.base_title || ""))) {
+  throw new Error(`Expected exact quote query to retrieve Visa FAQ 2026.\n\n${JSON.stringify(exactQuoteSources, null, 2)}`);
+}
+if (!missingQuoteProblem || !/exact quoted text/i.test(missingQuoteProblem.text)) {
+  throw new Error(`Expected missing quote query to fail closed without inventing timing guidance.\n\n${JSON.stringify(missingQuoteProblem, null, 2)}`);
+}
+if (!context.isCouldNotFindAnswer(sourceLocationPreserved.text)) {
+  throw new Error(`Expected source-location questions not to revive inferred best-practice timing.\n\n${sourceLocationPreserved.text}`);
+}
+if (!unreadDocExactQuoteProblem || !/exact quoted text/i.test(unreadDocExactQuoteProblem.text)) {
+  throw new Error(`Expected unread .doc listings not to count as evidence for an exact quote.\n\n${JSON.stringify(unreadDocExactQuoteProblem, null, 2)}`);
 }
 if (visaTaskWordSources.some((source) => /Open Quick Links|Page Landmarks|Keyboard Shortcuts|&ndash;/i.test(`${source.title} ${source.source} ${source.text}`))) {
   throw new Error(`Answer sources should exclude Blackboard navigation chrome and decoded entity junk.\n\n${JSON.stringify(visaTaskWordSources, null, 2)}`);
