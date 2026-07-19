@@ -7,6 +7,8 @@
     "mediasite",
     "bbcollab"
   ];
+  const MAX_SCRAPED_PAGE_CHARS = 200000;
+  const INDEXED_TEXT_TRUNCATION_PREFIX = "[Blackboard Search: indexed text truncated";
 
   function cleanText(value, limit = 500) {
     return String(value || "")
@@ -23,6 +25,21 @@
       .replace(/\n{3,}/g, "\n\n")
       .trim()
       .slice(0, limit);
+  }
+
+  function cleanIndexedPageText(value) {
+    const normalized = String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/[ \t\f\v]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (normalized.length <= MAX_SCRAPED_PAGE_CHARS) return normalized;
+    const marker =
+      "\n\n" + INDEXED_TEXT_TRUNCATION_PREFIX + " at " + MAX_SCRAPED_PAGE_CHARS +
+      " characters; remainder omitted from this Blackboard page scrape.]";
+    const bodyLimit = Math.max(0, MAX_SCRAPED_PAGE_CHARS - marker.length);
+    return normalized.slice(0, bodyLimit).trimEnd() + marker;
   }
 
   function absoluteUrl(rawUrl) {
@@ -127,7 +144,7 @@
       document.querySelector("#content") ||
       document.querySelector("[role='main']") ||
       document.body;
-    return cleanBodyText(main && main.innerText, 10000);
+    return cleanIndexedPageText(main && main.innerText);
   }
 
   function resourceFromUrl(rawUrl, label, type, element) {

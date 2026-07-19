@@ -1,11 +1,23 @@
+importScripts("../lib/blackboard-session.js");
+
 const RESOURCE_KEY = "resource_index";
 const TRANSCRIPT_KEY = "transcript_store";
 const CONTENT_KEY = "content_store";
+const MAX_INDEXED_BODY_CHARS = 500000;
+const MAX_SCRAPED_PAGE_CHARS = 200000;
+const CONTENT_SCHEMA_VERSION = 2;
+const LEGACY_INDEXED_BODY_CHARS = 20000;
+const INDEXED_TEXT_TRUNCATION_PREFIX = '[Blackboard Search: indexed text truncated';
 const META_KEY = "index_meta";
+const RESOURCE_PACK_KEY = "resource_pack_store";
 const DETECTED_MEDIA_KEY = "detected_media_store";
 const IGNORED_MEDIA_KEY = "ignored_media_store";
 const DEFAULT_CRAWL_SEED_URL =
   "https://lms.sc.tsinghua.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1";
+const DEFAULT_CRAWL_PAGE_TIMEOUT_MS = 20000;
+const CRAWL_HEARTBEAT_MS = 5000;
+const CRAWL_CHECKPOINT_TIMEOUT_MS = 60000;
+const BLACKBOARD_SESSION_TIMEOUT_MS = 15000;
 const BLOCKED_EXTERNAL_MEDIA_HOST_PATTERN = /(^|\.)(youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com)$/i;
 const ALLOWED_TRANSCRIPT_MEDIA_HOST_PATTERN = /(^|\.)(tsinghua\.edu\.cn|blackboard\.com|bbcollab\.com|kaltura\.com|panopto\.com|echo360\.org|echo360\.com|yuja\.com|mediasite\.com)$/i;
 
@@ -355,13 +367,17 @@ async function handleMessage(message) {
     case "STORE_CONTENT":
       return storeContent(message.payload || {});
     case "CLEAR_INDEX":
-      return clearIndex();
+      return clearIndex(message.payload || {});
     case "SCAN_ACTIVE_TAB":
       return scanActiveTab();
+    case "CHECK_BLACKBOARD_SESSION":
+      return checkBlackboardSession(message.payload || {});
     case "CRAWL_SITE":
       return startCrawlSite(message.payload || {});
     case "IMPORT_TRANSCRIPTS":
       return importTranscripts(message.payload || {});
+    case "INSTALL_RESOURCE_PACK":
+      return installResourcePack(message.payload || {});
     case "IMPORT_DETECTED_CAPTIONS":
       return importDetectedCaptions();
     case "DISMISS_MEDIA_CANDIDATE":
@@ -374,6 +390,39 @@ async function handleMessage(message) {
       return manualAttachTranscript(message.payload || {});
     default:
       return { ok: false, error: `unknown_message_type:${message.type}` };
+  }
+}
+
+async function checkBlackboardSession(payload = {}) {
+  const requestedUrl = normalizeUrlFrom(
+    payload.url || payload.seed_url || payload.seedUrl || DEFAULT_CRAWL_SEED_URL,
+    DEFAULT_CRAWL_SEED_URL
+  );
+  try {
+    const response = await fetchWithTimeout(requestedUrl, {
+      credentials: "include",
+      redirect: "follow",
+      cache: "no-store"
+    }, BLACKBOARD_SESSION_TIMEOUT_MS);
+    const contentType = response.headers.get("content-type") || "";
+    const body = /text\/html|application\/xhtml\+xml/i.test(contentType) ? await response.text() : "";
+    return {
+      ok: true,
+      ...BlackboardSession.assessBlackboardSession({
+        requested_url: requestedUrl,
+        final_url: response.url || requestedUrl,
+        status: response.status,
+        content_type: contentType,
+        body
+      })
+    };
+  } catch (_error) {
+    return {
+      ok: false,
+      authenticated: false,
+      reason: "request_failed",
+      error: "Could not verify the Blackboard session."
+    };
   }
 }
 
@@ -420,7 +469,7 @@ async function restoreDismissedMedia() {
   return { ok: true, restored_ignored: ignored.length };
 }
 async function getIndex() {
-  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, META_KEY, RESOURCE_PACK_KEY, DETECTED_MEDIA_KEY, IGNORED_MEDIA_KEY]);
   let resources = data[RESOURCE_KEY] || [];
   let transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
@@ -435,7 +484,14 @@ async function getIndex() {
     matchTranscriptsToResources(resources, transcripts);
     await saveIndex(resources, transcripts, contentStore);
   }
-  const meta = data[META_KEY] || { resource_count: resources.length, transcript_count: transcripts.length };
+  const meta = data[META_KEY] || {
+    resource_count: resources.length,
+    transcript_count: transcripts.length,
+    content_schema_version: CONTENT_SCHEMA_VERSION,
+    content_body_limit: MAX_INDEXED_BODY_CHARS,
+    legacy_content_truncation_risk: false,
+    legacy_truncated_resource_ids: []
+  };
   return {
     ok: true,
     resources,
@@ -443,29 +499,175 @@ async function getIndex() {
     detected_media: prunedDetectedMedia,
     ignored_media_keys: Array.from(ignoredKeys),
     ignored_media_count: ignoredRecords.length,
+    resource_packs: Array.isArray(data[RESOURCE_PACK_KEY]) ? data[RESOURCE_PACK_KEY] : [],
     content_store: contentStore,
     meta
   };
 }
 
-async function clearIndex() {
+async function clearIndex(payload = {}) {
+  const preserveResourcePacks = Boolean(payload.preserve_resource_packs || payload.preserveResourcePacks);
+  let resources = [];
+  let contentStore = {};
+  let resourcePacks = [];
+
+  if (preserveResourcePacks) {
+    const data = await chrome.storage.local.get([RESOURCE_KEY, CONTENT_KEY, RESOURCE_PACK_KEY]);
+    resources = (data[RESOURCE_KEY] || []).filter((resource) => Boolean(resource?.source_pack_id));
+    const preservedIds = new Set(resources.map((resource) => resource.id).filter(Boolean));
+    contentStore = Object.fromEntries(
+      Object.entries(data[CONTENT_KEY] || {}).filter(([resourceId]) => preservedIds.has(resourceId))
+    );
+    resourcePacks = Array.isArray(data[RESOURCE_PACK_KEY]) ? data[RESOURCE_PACK_KEY] : [];
+  }
+
+  const boundedTruncationIds = boundedContentTruncationIds(contentStore);
   await chrome.storage.local.set({
-    [RESOURCE_KEY]: [],
+    [RESOURCE_KEY]: resources,
     [TRANSCRIPT_KEY]: [],
-    [CONTENT_KEY]: {},
+    [CONTENT_KEY]: contentStore,
+    [RESOURCE_PACK_KEY]: resourcePacks,
     [DETECTED_MEDIA_KEY]: [],
     [IGNORED_MEDIA_KEY]: [],
     [META_KEY]: {
-      resource_count: 0,
+      resource_count: resources.length,
       transcript_count: 0,
-      content_count: 0,
-      content_char_count: 0,
+      content_count: Object.keys(contentStore).length,
+      content_char_count: Object.values(contentStore).reduce((sum, text) => sum + String(text || '').length, 0),
+      content_schema_version: CONTENT_SCHEMA_VERSION,
+      content_body_limit: MAX_INDEXED_BODY_CHARS,
+      legacy_content_truncation_risk: false,
+      legacy_truncated_resource_ids: [],
+      bounded_content_truncation_count: boundedTruncationIds.length,
+      bounded_truncated_resource_ids: boundedTruncationIds,
       last_updated: new Date().toISOString()
     }
   });
-  return { ok: true };
+  return {
+    ok: true,
+    preserved_resource_pack_count: resourcePacks.length,
+    preserved_resource_count: resources.length
+  };
 }
 
+async function installResourcePack(payload) {
+  const session = await checkBlackboardSession();
+  if (!session.ok) return { ok: false, error: session.error || "Could not verify the Blackboard session." };
+  if (!session.authenticated) {
+    return { ok: false, error: "Please log into Blackboard in this browser before installing resources." };
+  }
+
+  const pack = normalizeResourcePack(payload.pack || {});
+  if (!pack.id || !pack.title) return { ok: false, error: "invalid_resource_pack" };
+
+  const incomingResources = Array.isArray(payload.resources) ? payload.resources : [];
+  if (!incomingResources.length) return { ok: false, error: "resource_pack_empty" };
+
+  const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY, RESOURCE_PACK_KEY]);
+  const packResourcePrefix = `resource_pack:${pack.id}:`;
+  const currentResources = (data[RESOURCE_KEY] || []).filter((resource) => resource.source_pack_id !== pack.id);
+  const byId = new Map(currentResources.map((resource) => [resource.id, resource]));
+  const contentStore = { ...(data[CONTENT_KEY] || {}) };
+  const now = new Date().toISOString();
+  let installedResources = 0;
+  let searchableResources = 0;
+  const installedDocuments = new Set();
+
+  for (const raw of incomingResources) {
+    const rawId = cleanText(raw.pack_resource_id || raw.id || stableId([packResourcePrefix, raw.title, raw.url]), 90);
+    const resourceId = cleanText(raw.id || stableId([packResourcePrefix, rawId]), 120);
+    const normalized = normalizeResource({
+      ...raw,
+      id: resourceId,
+      canonical_key: cleanText(raw.canonical_key || `${packResourcePrefix}${rawId}`, 240),
+      type: cleanText(raw.type || inferType(raw.url || "", raw.title || ""), 80),
+      title: raw.title || raw.name || raw.url || pack.title,
+      url: raw.url || "",
+      preserve_url: true,
+      page_url: raw.page_url || raw.source_url || raw.url || "",
+      page_title: raw.page_title || pack.title,
+      section: raw.section || `Optional resources - ${pack.title}`,
+      context: raw.context || raw.description || pack.description || "",
+      discovered_at: raw.discovered_at || now
+    });
+    if (!normalized.title) continue;
+
+    const resource = {
+      ...resourceMetadataFrom(normalized),
+      source_pack_id: pack.id,
+      source_pack_title: pack.title,
+      source_pack_version: pack.version,
+      source_pack_document_id: cleanText(raw.document_id || raw.documentId || raw.pack_document_id || raw.packDocumentId || raw.pack_resource_id || raw.id || resourceId, 120),
+      source_pack_document_title: cleanText(raw.document_title || raw.documentTitle || raw.pack_document_title || raw.packDocumentTitle || raw.title || normalized.title, 240),
+      source_pack_page_range: cleanText(raw.page_range || raw.pageRange || "", 80),
+      source_pack_provenance: cleanText(raw.source_pack_provenance || raw.provenance || "", 120)
+    };
+    installedDocuments.add(resource.source_pack_document_id || resource.id);
+    const content = cleanIndexedBodyText(raw.content || raw.searchable_content || raw.searchableContent || raw.text || "", "optional resource pack body");
+    if (content) {
+      contentStore[resource.id] = content;
+      if (!isFileLikeResource(resource) || isReadableStoredFileBodyText(resource, content)) searchableResources += 1;
+    }
+
+    const existing = byId.get(resource.id);
+    byId.set(resource.id, {
+      ...(existing || {}),
+      ...withoutEmpty(resource),
+      transcript_ids: uniqueStrings([...(existing?.transcript_ids || []), ...(resource.transcript_ids || [])]),
+      first_seen_at: existing?.first_seen_at || resource.discovered_at || now,
+      last_seen_at: now
+    });
+    installedResources += 1;
+  }
+
+  const resources = Array.from(byId.values());
+  const transcripts = data[TRANSCRIPT_KEY] || [];
+  await saveIndex(resources, transcripts, contentStore);
+
+  const existingPacks = Array.isArray(data[RESOURCE_PACK_KEY]) ? data[RESOURCE_PACK_KEY] : [];
+  const previousPack = existingPacks.find((item) => item.id === pack.id);
+  const nextPack = {
+    ...pack,
+    resource_count: installedResources,
+    document_count: installedDocuments.size || installedResources,
+    content_count: searchableResources,
+    installed_at: previousPack?.installed_at || now,
+    updated_at: now
+  };
+  const resourcePacks = [
+    ...existingPacks.filter((item) => item.id !== pack.id),
+    nextPack
+  ].sort((a, b) => String(a.title || a.id).localeCompare(String(b.title || b.id)));
+  await chrome.storage.local.set({ [RESOURCE_PACK_KEY]: resourcePacks });
+
+  return {
+    ok: true,
+    pack: nextPack,
+    added_or_updated: installedResources,
+    document_count: installedDocuments.size || installedResources,
+    content_count: searchableResources,
+    resource_count: resources.length
+  };
+}
+
+function normalizeResourcePack(raw) {
+  const id = cleanResourcePackId(raw.id || raw.slug || raw.title || "");
+  return {
+    id,
+    title: cleanText(raw.title || raw.name || id, 160),
+    version: cleanText(raw.version || "", 80),
+    description: cleanText(raw.description || "", 500),
+    source_url: cleanText(raw.source_url || raw.sourceUrl || raw.manifest_url || raw.manifestUrl || "", 600)
+  };
+}
+
+function cleanResourcePackId(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
 async function mergeScrape(payload) {
   const scrapedResources = Array.isArray(payload.resources) ? payload.resources : [];
   const scrapedTranscripts = normalizeTranscriptBundle(payload.transcripts || []);
@@ -860,7 +1062,7 @@ async function scanActiveTab() {
 
 async function storeContent(payload) {
   const resourceId = cleanText(payload.resource_id || payload.resourceId || "", 120);
-  const content = cleanBodyText(payload.content || payload.text || "", 20000);
+  const content = cleanIndexedBodyText(payload.content || payload.text || "", "extracted resource body");
   if (!resourceId || !content) return { ok: false, error: "missing_resource_or_content" };
 
   const data = await chrome.storage.local.get([RESOURCE_KEY, TRANSCRIPT_KEY, CONTENT_KEY]);
@@ -876,8 +1078,14 @@ async function storeContent(payload) {
   return { ok: true, resource_id: resourceId, content_length: content.length };
 }
 
-function startCrawlSite(payload) {
+async function startCrawlSite(payload) {
   if (activeCrawlPromise) return { ok: false, error: "index_already_running" };
+  const session = await checkBlackboardSession(payload || {});
+  if (!session.ok) return { ok: false, error: session.error || "Could not verify the Blackboard session." };
+  if (!session.authenticated) {
+    return { ok: false, error: "Please log into Blackboard in this browser before indexing." };
+  }
+
   activeCrawlPromise = crawlSite(payload)
     .catch((error) => {
       emitCrawlProgress({
@@ -900,6 +1108,12 @@ async function crawlSite(payload) {
   );
   const maxPages = clampInteger(payload.max_pages || payload.maxPages, 1, 2000, 1500);
   const delayMs = clampInteger(payload.delay_ms || payload.delayMs, 0, 3000, 120);
+  const pageTimeoutMs = clampInteger(
+    payload.page_timeout_ms || payload.pageTimeoutMs,
+    5000,
+    60000,
+    DEFAULT_CRAWL_PAGE_TIMEOUT_MS
+  );
   const seedOrigin = new URL(seedUrl).origin;
   const queue = [seedUrl];
   const queued = new Set(queue);
@@ -910,6 +1124,7 @@ async function crawlSite(payload) {
   let rawCandidatesSeen = 0;
   let lastSavedResourceCount = 0;
   let lastCheckpointPage = 0;
+  let checkpointFailed = false;
 
   function recordCandidateResources(pageResources) {
     const items = Array.isArray(pageResources) ? pageResources : [];
@@ -929,6 +1144,7 @@ async function crawlSite(payload) {
       unique_candidates_seen: uniqueCandidateIds.size,
       raw_candidates_seen: rawCandidatesSeen,
       resource_count: lastSavedResourceCount,
+      failed_pages: failures.length,
       ...extra
     };
   }
@@ -943,9 +1159,35 @@ async function crawlSite(payload) {
     if (!shouldSave) {
       return { resource_count: lastSavedResourceCount };
     }
+
     const batch = resources.slice();
+    const progressStatus = force ? "finalizing" : "checkpointing";
+    const checkpointStartedAt = Date.now();
+    const reportCheckpointProgress = () => {
+      emitCrawlProgress({
+        status: progressStatus,
+        ...crawlProgress({
+          pages: visited.size,
+          queued: queue.length,
+          unsaved_resources: batch.length,
+          waiting_seconds: Math.max(0, Math.floor((Date.now() - checkpointStartedAt) / 1000))
+        })
+      });
+    };
+    reportCheckpointProgress();
+    const checkpointHeartbeat = setInterval(reportCheckpointProgress, CRAWL_HEARTBEAT_MS);
+    let checkpointTimeoutId = 0;
+
     try {
-      const mergeResult = await mergeScrape({ resources: batch });
+      const checkpointTimeout = new Promise((_, reject) => {
+        checkpointTimeoutId = setTimeout(() => {
+          const error = new Error(`Saving the local index did not finish within ${Math.ceil(CRAWL_CHECKPOINT_TIMEOUT_MS / 1000)} seconds.`);
+          error.name = "TimeoutError";
+          error.code = "checkpoint_timeout";
+          reject(error);
+        }, CRAWL_CHECKPOINT_TIMEOUT_MS);
+      });
+      const mergeResult = await Promise.race([mergeScrape({ resources: batch }), checkpointTimeout]);
       resources.splice(0, batch.length);
       lastSavedResourceCount = mergeResult.resource_count || lastSavedResourceCount;
       lastCheckpointPage = visited.size;
@@ -971,6 +1213,9 @@ async function crawlSite(payload) {
         })
       });
       throw error;
+    } finally {
+      clearInterval(checkpointHeartbeat);
+      clearTimeout(checkpointTimeoutId);
     }
   }
 
@@ -984,8 +1229,19 @@ async function crawlSite(payload) {
       ...crawlProgress({ current_url: currentUrl })
     });
 
+    const pageStartedAt = Date.now();
+    const heartbeatTimer = setInterval(() => {
+      emitCrawlProgress({
+        status: "fetching",
+        ...crawlProgress({
+          current_url: currentUrl,
+          waiting_seconds: Math.max(1, Math.floor((Date.now() - pageStartedAt) / 1000))
+        })
+      });
+    }, Math.min(CRAWL_HEARTBEAT_MS, Math.max(1000, Math.floor(pageTimeoutMs / 2))));
+
     try {
-      const page = await fetchCrawlPage(currentUrl);
+      const page = await fetchCrawlPage(currentUrl, pageTimeoutMs);
       const pageResources = Array.isArray(page.resources) ? page.resources : [];
       resources.push(...pageResources);
       recordCandidateResources(pageResources);
@@ -998,15 +1254,24 @@ async function crawlSite(payload) {
         queue.push(childUrl);
       }
     } catch (error) {
-      failures.push({
+      const failure = {
         url: currentUrl,
         error: String(error && error.message ? error.message : error)
+      };
+      failures.push(failure);
+      emitCrawlProgress({
+        status: "page_failed",
+        error: failure.error,
+        ...crawlProgress({ current_url: currentUrl })
       });
+    } finally {
+      clearInterval(heartbeatTimer);
     }
 
     try {
       await checkpointResources(false);
     } catch (error) {
+      checkpointFailed = true;
       failures.push({
         url: "index checkpoint",
         error: String(error && error.message ? error.message : error)
@@ -1018,13 +1283,26 @@ async function crawlSite(payload) {
   }
 
   let mergeResult = { resource_count: lastSavedResourceCount };
-  try {
-    mergeResult = await checkpointResources(true);
-  } catch (error) {
-    failures.push({
-      url: "final index save",
-      error: String(error && error.message ? error.message : error)
-    });
+  if (!checkpointFailed) {
+    try {
+      mergeResult = await checkpointResources(true);
+    } catch (error) {
+      checkpointFailed = true;
+      failures.push({
+        url: "final index save",
+        error: String(error && error.message ? error.message : error)
+      });
+    }
+  }
+  if (checkpointFailed) {
+    return {
+      ok: false,
+      error: "The local index checkpoint did not finish. Previously saved resources were retained.",
+      pages_crawled: visited.size,
+      resource_count: lastSavedResourceCount,
+      queued_remaining: queue.length,
+      failures: failures.slice(0, 20)
+    };
   }
   const response = {
     ok: true,
@@ -1048,12 +1326,34 @@ async function crawlSite(payload) {
   return response;
 }
 
-async function fetchCrawlPage(url) {
-  const response = await fetch(url, {
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_CRAWL_PAGE_TIMEOUT_MS) {
+  const durationMs = Math.max(1, Number(timeoutMs) || DEFAULT_CRAWL_PAGE_TIMEOUT_MS);
+  const controller = new AbortController();
+  let timeoutId = 0;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(`Blackboard did not respond within ${Math.ceil(durationMs / 1000)} seconds.`);
+      error.name = "TimeoutError";
+      error.code = "request_timeout";
+      reject(error);
+      controller.abort();
+    }, durationMs);
+  });
+
+  try {
+    const request = Promise.resolve().then(() => fetch(url, { ...options, signal: controller.signal }));
+    return await Promise.race([request, timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchCrawlPage(url, timeoutMs = DEFAULT_CRAWL_PAGE_TIMEOUT_MS) {
+  const response = await fetchWithTimeout(url, {
     credentials: "include",
     redirect: "follow",
     cache: "no-store"
-  });
+  }, timeoutMs);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
   const finalUrl = normalizeUrlFrom(response.url || url, url);
@@ -1171,7 +1471,7 @@ function extractResourcesFromHtml(html, pageUrl) {
     });
   });
 
-  const pageText = extractMainTextFromDocument(document, 10000);
+  const pageText = extractMainTextFromDocument(document, MAX_SCRAPED_PAGE_CHARS);
   if (pageText) {
     add({
       type: "page",
@@ -1285,12 +1585,41 @@ function extractResourcesFromHtmlFallback(html, pageUrl) {
 }
 
 async function saveIndex(resources, transcripts, contentStore = null) {
-  let nextContentStore = contentStore;
-  if (!nextContentStore) {
-    const data = await chrome.storage.local.get(CONTENT_KEY);
-    nextContentStore = data[CONTENT_KEY] || {};
-  }
+  const stored = await chrome.storage.local.get([CONTENT_KEY, META_KEY]);
+  let nextContentStore = contentStore || stored[CONTENT_KEY] || {};
   nextContentStore = pruneContentStore(nextContentStore, resources);
+
+  const existingMeta = stored[META_KEY] && typeof stored[META_KEY] === "object" ? stored[META_KEY] : {};
+  const resourcesById = new Map(resources.map((resource) => [String(resource?.id || ""), resource]));
+  const hadExistingMeta = Object.keys(existingMeta).length > 0;
+  const legacyRiskIds = new Set(
+    Array.isArray(existingMeta.legacy_truncated_resource_ids)
+      ? existingMeta.legacy_truncated_resource_ids.map(String)
+      : []
+  );
+  if (hadExistingMeta && Number(existingMeta.content_schema_version || 0) < CONTENT_SCHEMA_VERSION) {
+    for (const [resourceId, text] of Object.entries(nextContentStore)) {
+      const length = String(text || "").length;
+      if (
+        !resourcesById.get(String(resourceId))?.source_pack_id &&
+        length >= LEGACY_INDEXED_BODY_CHARS - 50 &&
+        length <= LEGACY_INDEXED_BODY_CHARS
+      ) {
+        legacyRiskIds.add(resourceId);
+      }
+    }
+  }
+  for (const resourceId of Array.from(legacyRiskIds)) {
+    if (
+      !Object.prototype.hasOwnProperty.call(nextContentStore, resourceId) ||
+      resourcesById.get(String(resourceId))?.source_pack_id
+    ) {
+      legacyRiskIds.delete(resourceId);
+    }
+  }
+  const legacyTruncatedResourceIds = Array.from(legacyRiskIds).sort();
+  const boundedTruncationIds = boundedContentTruncationIds(nextContentStore);
+
   await chrome.storage.local.set({
     [RESOURCE_KEY]: resources,
     [TRANSCRIPT_KEY]: transcripts,
@@ -1302,6 +1631,12 @@ async function saveIndex(resources, transcripts, contentStore = null) {
       content_count: Object.keys(nextContentStore).length,
       content_char_count: Object.values(nextContentStore).reduce((sum, text) => sum + String(text || "").length, 0),
       video_count: resources.filter(isVideoResource).length,
+      content_schema_version: CONTENT_SCHEMA_VERSION,
+      content_body_limit: MAX_INDEXED_BODY_CHARS,
+      legacy_content_truncation_risk: legacyTruncatedResourceIds.length > 0,
+      legacy_truncated_resource_ids: legacyTruncatedResourceIds,
+      bounded_content_truncation_count: boundedTruncationIds.length,
+      bounded_truncated_resource_ids: boundedTruncationIds,
       last_updated: new Date().toISOString()
     }
   });
@@ -1317,13 +1652,16 @@ function pruneContentStore(contentStore, resources) {
         if (isFileLikeResource(resource) && !isReadableStoredFileBodyText(resource, text)) return false;
         return true;
       })
-      .map(([id, text]) => [id, cleanBodyText(text, 20000)])
+      .map(([id, text]) => [id, cleanIndexedBodyText(text, "stored resource body")])
   );
 }
 
 function isReadableStoredFileBodyText(resource, storedContent) {
   const text = String(storedContent || "").replace(/\s+/g, " ").trim();
   if (!text) return false;
+  // Resource-pack bodies are prepared for indexing. Crawler-shell detection
+  // below applies only to discovered file resources.
+  if (resource?.source_pack_id) return normalizeText(text).length > 40;
   const words = text.toLowerCase().match(/[a-z0-9']+/g) || [];
   if (words.length < 45) return false;
   if (/\bPage\s+\d+:/i.test(text) && words.length >= 45) return true;
@@ -1467,7 +1805,7 @@ function extractMainTextFromDocument(document, limit = 10000) {
       if (root) break;
     }
     if (!root) root = clone.body || clone.documentElement;
-    return cleanBodyText(readableTextFromNode(root), limit);
+    return cleanBoundedIndexedText(readableTextFromNode(root), limit, "Blackboard page extraction");
   } catch (_error) {
     return "";
   }
@@ -1629,7 +1967,7 @@ function normalizeResource(raw) {
     section: cleanText(raw.section || "", 240),
     context:
       type === "page"
-        ? cleanBodyText(raw.context || raw.description || "", 10000)
+        ? cleanBoundedIndexedText(raw.context || raw.description || "", MAX_SCRAPED_PAGE_CHARS, "Blackboard page body")
         : cleanText(raw.context || raw.description || "", 1800),
     discovered_at: cleanText(raw.discovered_at || new Date().toISOString(), 80),
     transcript_ids: uniqueStrings(raw.transcript_ids || raw.transcriptIds || [])
@@ -1639,7 +1977,9 @@ function normalizeResource(raw) {
 
 function searchableContentFrom(resource) {
   if (isFileLikeResource(resource)) return "";
-  const content = cleanBodyText(resource.context || "", resource.type === "page" ? 20000 : 5000);
+  const content = resource.type === "page"
+    ? cleanBoundedIndexedText(resource.context || "", MAX_SCRAPED_PAGE_CHARS, "Blackboard page body")
+    : cleanBodyText(resource.context || "", 5000);
   if (!content) return "";
   return [resource.title, resource.section, resource.page_title, content].filter(Boolean).join("\n\n");
 }
@@ -1897,6 +2237,33 @@ function cleanBodyText(value, limit = 5000) {
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, limit);
+}
+
+function cleanIndexedBodyText(value, label = "resource body") {
+  return cleanBoundedIndexedText(value, MAX_INDEXED_BODY_CHARS, label);
+}
+
+function cleanBoundedIndexedText(value, limit, label = "resource body") {
+  const normalized = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const safeLimit = Math.max(1, Number(limit) || MAX_INDEXED_BODY_CHARS);
+  if (normalized.length <= safeLimit) return normalized;
+  const marker =
+    "\n\n" + INDEXED_TEXT_TRUNCATION_PREFIX + " at " + safeLimit +
+    " characters; remainder omitted from " + cleanText(label, 80) + ".]";
+  const bodyLimit = Math.max(0, safeLimit - marker.length);
+  return normalized.slice(0, bodyLimit).trimEnd() + marker;
+}
+
+function boundedContentTruncationIds(contentStore) {
+  return Object.entries(contentStore || {})
+    .filter(([_resourceId, text]) => String(text || "").includes(INDEXED_TEXT_TRUNCATION_PREFIX))
+    .map(([resourceId]) => resourceId)
+    .sort();
 }
 
 function normalizeText(value) {

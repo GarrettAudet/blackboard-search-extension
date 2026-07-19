@@ -208,13 +208,44 @@ state.contentStore = {
   "visa-faq-pdf": "Page 1: Visa FAQ 2026. Before you book your travel, please carefully read the travel policy. Please begin your visa application as early as possible after you receive the JW202 and Tsinghua Admission Notice, as China visas may now take up longer than the past years to process, and in many countries you may be required to appear in person for fingerprinting. X1 visa students should prepare passport documents, JW202, admission notice, visa application materials, and check local embassy requirements.",
   "visa-faq-pdf-direct": "Page 1: Visa FAQ 2026. Before you book your travel, please carefully read the travel policy. Please begin your visa application as early as possible after you receive the JW202 and Tsinghua Admission Notice, as China visas may now take up longer than the past years to process, and in many countries you may be required to appear in person for fingerprinting. X1 visa students should prepare passport documents, JW202, admission notice, visa application materials, and check local embassy requirements."
 };
+const notificationSettingsResources = [
+  {
+    id: "notification-settings-course",
+    type: "page",
+    title: "Current Notification Setting: Class of 2026-2027 Pre-program",
+    url: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/editNotificationSettings?course_id=preprogram",
+    page_title: "Current Notification Setting: Class of 2026-2027 Pre-program",
+    section: "Blackboard Learn",
+    context: "Settings On/Off Check to select all items Notification Dashboard Check to select all items Email Check to select all items Mobile Check to select all items Announcement Available Assignment Available Assignment Due Assignment Needs Grading Assignment Past Due Survey Available Survey Due Survey Overdue Test Available Test Due Test Overdue Unread Blog Posts Unread Discussion Board Messages Click Submit to proceed."
+  },
+  {
+    id: "change-settings-one",
+    type: "page",
+    title: "Change Settings - Blackboard Learn",
+    url: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/editNotificationSettings?course_id=one",
+    page_title: "Change Settings - Blackboard Learn",
+    section: "Change Settings - Blackboard Learn",
+    context: "SC_GRA_UPDATED Item Due Item Graded Journal Comment Item Posted Journal Needs Grading SCORM Content Item Available Course Message Assignment Past Due Survey Available Survey Due Survey Overdue Test Available Test Due Test Overdue Unread Blog Posts Submit to proceed."
+  },
+  {
+    id: "change-settings-two",
+    type: "page",
+    title: "Change Settings - Blackboard Learn",
+    url: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/execute/editNotificationSettings?course_id=two",
+    page_title: "Change Settings - Blackboard Learn",
+    section: "Change Settings - Blackboard Learn",
+    context: "SC_GRA_UPDATED Item Due Item Graded Journal Comment Item Posted Journal Needs Grading SCORM Content Item Available Course Message Assignment Past Due Survey Available Survey Due Survey Overdue Test Available Test Due Test Overdue Unread Blog Posts Email Mobile Submit to proceed."
+  }
+];
+state.resources.push(...notificationSettingsResources);
+for (const resource of notificationSettingsResources) state.contentStore[resource.id] = resource.context;
 state.transcripts = [];
 state.settings = { hasApiKey: true };
 state.resources = state.resources;
 setIndexStatusSummary();
 const statusSummaryText = els.statusText.textContent;
 
-const query = "What are the current to do's?";
+const query = "Are there any current to do's?";
 const results = searchIndex(query);
 const answer = buildDirectAnswer(query, results);
 const alternateTaskQuery = "Do I have any to do's?";
@@ -225,6 +256,71 @@ const alternateTaskRetrievalQuery = enhanceRetrievalQueryForIntent(
 );
 const alternateTaskSources = prepareAnswerSources(searchIndex(alternateTaskRetrievalQuery), alternateTaskRetrievalQuery);
 const alternateTaskAnswer = buildDirectAnswer(alternateTaskQuery, alternateTaskSources);
+const notificationSettingsFlags = notificationSettingsResources.map((resource) =>
+  isBlackboardConfigurationResult({ ...resource, text: resource.context, source: resource.section })
+);
+const completeResources = state.resources;
+const completeContentStore = state.contentStore;
+state.resources = notificationSettingsResources;
+state.contentStore = Object.fromEntries(notificationSettingsResources.map((resource) => [resource.id, resource.context]));
+invalidateSearchIndexCache();
+const settingsOnlyQuery = "Are there any current to do's?";
+const settingsOnlyRawResults = searchIndex(settingsOnlyQuery);
+const settingsOnlySources = prepareAnswerSources(settingsOnlyRawResults, settingsOnlyQuery);
+const settingsOnlyAnswer = buildDirectAnswer(settingsOnlyQuery, settingsOnlySources);
+const emptyToDoBody =
+  "To Do &ndash; Class of 2026-2027 Pre-program To Do &ndash; Class of 2026-2027 Pre-program " +
+  "Open Quick Links Page Landmarks Content Outline Keyboard Shortcuts Global Menu Activity Updates Top Frame Tabs " +
+  "Current Location Class of 2026-2027 Pre-program To Do Course Menu Home IT Orientation VIDEOS To Do " +
+  "Academics (Read Before Orientation) Language Study Career Development Materials Resources Webinars " +
+  "International Student To Do Content There is no content to display.";
+const emptyToDoResource = {
+  id: "empty-todo-page",
+  type: "resource",
+  title: "Content",
+  url: "https://lms.sc.tsinghua.edu.cn/webapps/blackboard/content/listContent.jsp?course_id=preprogram&content_id=todo",
+  page_title: "Blackboard Learn",
+  section: "Class of 2026-2027 Pre-program",
+  context: emptyToDoBody
+};
+state.resources = [...notificationSettingsResources, emptyToDoResource];
+state.contentStore = {
+  ...Object.fromEntries(notificationSettingsResources.map((resource) => [resource.id, resource.context])),
+  [emptyToDoResource.id]: emptyToDoBody
+};
+invalidateSearchIndexCache();
+const emptyToDoRawResults = searchIndex(settingsOnlyQuery);
+const emptyToDoSources = prepareAnswerSources(emptyToDoRawResults, settingsOnlyQuery);
+const emptyToDoAnswer = buildDirectAnswer(settingsOnlyQuery, emptyToDoSources);
+state.resources = completeResources;
+state.contentStore = completeContentStore;
+invalidateSearchIndexCache();
+
+const semanticDuplicatePages = dedupeSourceCandidates(
+  [
+    {
+      score: 240,
+      resource_id: "orientation-page-a",
+      kind: "page",
+      title: "Orientation Overview - Blackboard Learn",
+      source: "Class of 2026-2027 Pre-program Orientation - Orientation Overview - Blackboard Learn",
+      url: "https://lms.sc.tsinghua.edu.cn/webapps/content/listContent.jsp?content_id=one",
+      text: "Orientation Overview. Review the arrival schedule and required orientation sessions.",
+      has_body: true
+    },
+    {
+      score: 230,
+      resource_id: "orientation-page-b",
+      kind: "page",
+      title: "Orientation Overview - Blackboard Learn",
+      source: "Class of 2026-2027 Pre-program Orientation - Orientation Overview - Blackboard Learn",
+      url: "https://lms.sc.tsinghua.edu.cn/webapps/content/listContent.jsp?content_id=two",
+      text: "Orientation Overview. Required sessions and the arrival schedule are listed here.",
+      has_body: true
+    }
+  ],
+  "orientation overview schedule"
+);
 const mandarinQuery = "Have they gives us any mandarin resources to learn from?";
 const mandarinIsCapability = isCapabilityQuestion(mandarinQuery);
 const mandarinResults = searchIndex(mandarinQuery);
@@ -346,11 +442,50 @@ const unreadDocExactQuoteProblem = exactQuoteIssueForQuery(
     }
   ]
 );
+const residenceVisaQuery = "What do I need for my Residence visa?";
+const residenceVisaSources = prepareAnswerSources(searchIndex(residenceVisaQuery), residenceVisaQuery);
+const residenceVisaDraft = alignAnswerCitations(
+  "For the X1 visa process:\\n\\n- Check that your passport will remain valid and has enough blank pages [1].\\n- Obtain the JW202 form and Tsinghua admission notice [1].\\n- Follow your local Chinese embassy or consulate's application requirements and prepare the visa form and photo [1].",
+  residenceVisaSources
+);
 const visaReviewerFallback = preserveEvidenceBackedAnswer(
-  "What do I need for the X1 visa?",
+  residenceVisaQuery,
   { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
-  { text: "I could not find that in the indexed Blackboard resources.", sources: visaAnswerSourcesWithBody },
-  visaAnswerSourcesWithBody,
+  residenceVisaDraft,
+  residenceVisaSources,
+  residenceVisaQuery
+);
+const rawResidenceVisaAnswer = enforceCitedAnswer(
+  residenceVisaQuery,
+  {
+    text: "I found relevant information in the indexed resources:\\n\\n- Page 1: OBTAINING YOUR X1 VISA Step 1: CHECK YOUR PASSPORT [1]",
+    sources: residenceVisaDraft.sources
+  },
+  residenceVisaSources,
+  residenceVisaQuery
+);
+const partiallyUncitedResidenceVisaAnswer = enforceCitedAnswer(
+  residenceVisaQuery,
+  {
+    text: "Check that your passport is valid [1].\\nBring the JW202 form and admission notice to support your application.",
+    sources: residenceVisaDraft.sources
+  },
+  residenceVisaSources,
+  residenceVisaQuery
+);
+const irrelevantResidenceVisaAnswer = enforceCitedAnswer(
+  residenceVisaQuery,
+  {
+    text: "The program admitted its first class in 2016 and is highly selective [1].",
+    sources: [{ score: 381, kind: "pdf", title: "Program Overview.pdf", text: "The program admitted its first class in 2016 and is highly selective." }]
+  },
+  residenceVisaSources,
+  residenceVisaQuery
+);
+const citedFollowUpAnswer = enforceCitedAnswer(
+  "What about that?",
+  { text: "You need the JW202 form and Tsinghua admission notice for the visa application [1].", sources: residenceVisaDraft.sources },
+  residenceVisaSources,
   "What do I need for the X1 visa?"
 );
 const preparedMandarinSources = prepareAnswerSources(
@@ -419,11 +554,16 @@ const packingDocumentReadinessIssue = documentReadinessIssueForQuery(
 const fakePackingSnippet = "Packing List for Students (2026).pdf Class of 2026-2027 Pre-program Resources Resources Content Blackboard User Guideline Incoming Students Packing List for Students (2026).pdf OBTAINING YOUR X1 STUDENT VISA 2026.pdf Visa FAQ 2026.pdf WeChat Registration FAQ 2026 BB.pdf Click for more options Open source";
 const packingFakeSnippetIsReadable = resourceHasReadableBody(state.resources.find((resource) => resource.id === "packing-pdf"), fakePackingSnippet);
 state.contentStore["packing-pdf"] = "Page 1: Packing List for Students 2026. Bring passport and copies of key documents, visa paperwork, admission notice, JW202 if applicable, prescription medication in original packaging, doctor letters for prescriptions, basic over-the-counter medicine, adapters, chargers, clothing layers, professional clothes, comfortable walking shoes, toiletries, glasses or contacts, insurance information, bank cards, some cash, emergency contacts, arrival address, vaccination records, and luggage items needed for daily life in China. Page 2: Recommended items include cold medicine, allergy medicine, pain relievers, sunscreen, personal hygiene products, small gifts, and copies of important forms.";
+invalidateSearchIndexCache();
 const packingSourcesWithBody = prepareAnswerSources(searchIndex("What should I pack for China?"), "What should I pack for China?");
+const packingDraft = alignAnswerCitations(
+  "Pack your passport and key document copies, prescription medication in its original packaging, adapters and chargers, suitable clothing, and your arrival and emergency information [1].",
+  packingSourcesWithBody
+);
 const packingReviewerFallback = preserveEvidenceBackedAnswer(
   "What should I pack for China?",
   { text: "I could not find that in the indexed Blackboard resources.", sources: packingSourcesWithBody },
-  { text: "I could not find that in the indexed Blackboard resources.", sources: packingSourcesWithBody },
+  packingDraft,
   packingSourcesWithBody,
   "What should I pack for China?"
 );
@@ -437,6 +577,32 @@ const packingDocumentReadinessAfterBody = documentReadinessIssueForQuery(
 const visaAuditText = buildRagAudit("What do I need for the X1 visa?");
 const packingAuditText = buildRagAudit("What should I pack for China?");
 const auditCommandChecks = [isAuditCommand("/audit"), isAuditCommand("/audit x1 visa"), !isAuditCommand("audit x1 visa")];
+const resourcePackCommandChecks = [
+  isResourcePackCommand("/SchwarzmanC11"),
+  isResourcePackCommand("/schwarzmanc11"),
+  !isResourcePackCommand("SchwarzmanC11"),
+  resourcePackResourceType({}, "chrome-extension://test/resource-packs/schwarzman-c11/files/Guide.PDF", "") === "pdf",
+  safeResourcePackId("Arrival Guide.pdf") === "arrival-guide-pdf"
+];
+const packChunkOne = {
+  score: 200,
+  kind: "pdf",
+  resource_id: "pack_schwarzman-c11_survival-guide-pages-001-008",
+  source_pack_id: "schwarzman-c11",
+  source_pack_document_id: "survival-guide",
+  source_pack_document_title: "Schwarzman Scholars Survival Guide.pdf",
+  title: "Schwarzman Scholars Survival Guide.pdf",
+  text: "Page 1: arrival and Beijing survival notes"
+};
+const packChunkTwo = {
+  ...packChunkOne,
+  resource_id: "pack_schwarzman-c11_survival-guide-pages-009-019",
+  text: "Page 9: housing and daily life notes"
+};
+const resourcePackDocumentReferenceChecks = [
+  sourceDedupeKey(packChunkOne) === sourceDedupeKey(packChunkTwo),
+  cleanSourceTitle(packChunkOne) === "Schwarzman Scholars Survival Guide.pdf"
+];
 delete state.contentStore["packing-pdf"];
 const feedbackFormUrl = buildFeedbackFormUrl(
   "The packing answer missed medications.",
@@ -453,13 +619,208 @@ const feedbackFormUrl = buildFeedbackFormUrl(
 const unconfiguredFeedbackFormUrl = buildFeedbackFormUrl("The packing answer missed medications.", "");
 const introText = introMessageText();
 const indexCommandChecks = [isIndexCommand("/index"), isIndexCommand("/reindex"), !isIndexCommand("what is indexed?")];
-globalThis.__regression = { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, duplicateVisaSources, duplicateVisaFaqCount, exactQuoteSources, exactQuoteProblem, missingQuoteProblem, sourceLocationPreserved, unreadDocExactQuoteProblem, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
+globalThis.__regression = { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, duplicateVisaSources, duplicateVisaFaqCount, exactQuoteSources, exactQuoteProblem, missingQuoteProblem, sourceLocationPreserved, unreadDocExactQuoteProblem, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, notificationSettingsFlags, settingsOnlyRawResults, settingsOnlySources, settingsOnlyAnswer, emptyToDoRawResults, emptyToDoSources, emptyToDoAnswer, semanticDuplicatePages, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, residenceVisaSources, rawResidenceVisaAnswer, partiallyUncitedResidenceVisaAnswer, irrelevantResidenceVisaAnswer, citedFollowUpAnswer, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, resourcePackCommandChecks, resourcePackDocumentReferenceChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks };
 `,
   context,
   { filename: "sidepanel-regression.vm.js" }
 );
 
-const { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, duplicateVisaSources, duplicateVisaFaqCount, exactQuoteSources, exactQuoteProblem, missingQuoteProblem, sourceLocationPreserved, unreadDocExactQuoteProblem, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+const { results, answer, cleanedMarkdownAnswer, x1NeedToDoIsTask, visaNeedToDoSources, visaTaskWordSources, duplicateVisaSources, duplicateVisaFaqCount, exactQuoteSources, exactQuoteProblem, missingQuoteProblem, sourceLocationPreserved, unreadDocExactQuoteProblem, alternateTaskRetrievalQuery, alternateTaskSources, alternateTaskAnswer, notificationSettingsFlags, settingsOnlyRawResults, settingsOnlySources, settingsOnlyAnswer, emptyToDoRawResults, emptyToDoSources, emptyToDoAnswer, semanticDuplicatePages, mandarinIsCapability, mandarinResults, mandarinFollowUpQuery, mandarinFollowUpSources, courseListSources, myClassesSources, taskSourcesWithCourseShell, normalizedPlanner, plannedCourseQuery, parsedReviewJson, packingHydrationCandidates, visaHydrationCandidates, linkTypedPdfHydrates, visaReviewerFallback, residenceVisaSources, rawResidenceVisaAnswer, partiallyUncitedResidenceVisaAnswer, irrelevantResidenceVisaAnswer, citedFollowUpAnswer, preparedMandarinSources, preparedMandarinSourcesWithShell, alignedCitations, strippedLinkAnswer, packingDocumentReadinessIssue, packingDocumentReadinessAfterBody, packingReviewerFallback, packingFakeSnippetIsReadable, visaAuditText, packingAuditText, auditCommandChecks, resourcePackCommandChecks, resourcePackDocumentReferenceChecks, statusSummaryText, feedbackFormUrl, unconfiguredFeedbackFormUrl, introText, indexCommandChecks } = context.__regression;
+
+const chineseX1DirectAnswer = vm.runInContext(
+  `(() => {
+    const query = "What do I need for the Chinese X1 visa?";
+    const sources = prepareAnswerSources(searchIndex(query), query);
+    return {
+      deterministic: hasDeterministicDirectAnswerIntent(query),
+      answer: buildDirectAnswer(query, sources)
+    };
+  })()`,
+  context
+);
+if (!chineseX1DirectAnswer.deterministic || !chineseX1DirectAnswer.answer?.sources?.length ||
+    !/passport/i.test(chineseX1DirectAnswer.answer?.text || "") ||
+    !/JW202/i.test(chineseX1DirectAnswer.answer?.text || "") ||
+    !/\[\d+\]/.test(chineseX1DirectAnswer.answer?.text || "")) {
+  throw new Error(`The exact live Chinese X1 visa query did not produce a deterministic cited answer.\n\n${JSON.stringify(chineseX1DirectAnswer, null, 2)}`);
+}
+
+const leakedReviewerOutput = [
+  "I could not find that in the indexed resources.",
+  "",
+  "The provided search results focus heavily on visa logistics and general expat tips, but they do not contain a consolidated set of practical tips.",
+  "The draft answer includes specific claims that are not explicitly supported by the provided source text. I must reject the unsupported parts.",
+  "",
+  "Let's re-evaluate. Can I extract enough tips from the sources to answer the question?",
+  "- Source 1: Beijing is crowded and English is not widely spoken.",
+  "- Source 2: Four transport modes are listed."
+].join("\n");
+const recoveredBeijingAnswer =
+  "Set up WeChat for messaging, payments, and restaurant ordering, and use Didi or the subway to get around Beijing [1].";
+const reviewerFixture = {
+  score: 240,
+  kind: "document",
+  title: "Schwarzman Life in China Webinar transcript",
+  source: "Optional webinar transcripts - Schwarzman C11",
+  text:
+    "Tips for living in Beijing: WeChat is used for messages, payments, and restaurant ordering. " +
+    "Didi is used for rides, and the Beijing subway is a common way to get around.",
+  source_pack_id: "schwarzman-c11",
+  source_pack_document_id: "life-in-china-webinar",
+  source_pack_provenance: "program webinar transcript",
+  has_body: true
+};
+
+function structuredReviewerResponse(text) {
+  const sourceIds = Array.from(new Set(Array.from(String(text || "").matchAll(/\[(\d+)\]/g), (match) => Number(match[1]))));
+  const blockText = String(text || "")
+    .replace(/\[\d+\]/g, "")
+    .replace(/\s+([.!?])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  return JSON.stringify({
+    not_found: false,
+    answer_blocks: [{ text: blockText, source_ids: sourceIds }]
+  });
+}
+
+async function runReviewerSimulation(responses) {
+  context.__reviewResponses = [...responses];
+  context.__reviewCallCount = 0;
+  context.__reviewFixture = reviewerFixture;
+  vm.runInContext(`
+    state.settings = { provider: "openrouter", model: "test-model", apiKey: "test-key", hasApiKey: true };
+    callChatCompletion = async () => {
+      globalThis.__reviewCallCount += 1;
+      const response = globalThis.__reviewResponses.shift();
+      if (typeof response !== "string") throw new Error("Reviewer simulation ran out of responses.");
+      return response;
+    };
+    globalThis.__reviewPromise = reviewApiAnswer(
+      "Any tips for living in Beijing?",
+      "Use these practical Beijing tips [1].",
+      [globalThis.__reviewFixture],
+      [],
+      "Any tips for living in Beijing?",
+      defaultRagPlan("Any tips for living in Beijing?")
+    );
+  `, context);
+  return { text: await context.__reviewPromise, calls: context.__reviewCallCount };
+}
+
+const malformedReviewerRecovery = await runReviewerSimulation([leakedReviewerOutput]);
+const validReviewerJson = await runReviewerSimulation([structuredReviewerResponse(recoveredBeijingAnswer)]);
+const doubleMalformedReviewer = await runReviewerSimulation([leakedReviewerOutput]);
+const extraKeyReviewerJson = await runReviewerSimulation([
+  JSON.stringify({ not_found: false, answer_blocks: [{ text: "Set up WeChat for messaging.", source_ids: [1] }], reason: "This extra key must invalidate the object." })
+]);
+const adversarialReviewerAnswers = [
+  "Analysis: The draft needs another source check before it can be shown [1].",
+  "Reasoning: The evidence appears sufficient, so this could be returned [1].",
+  "Critique: The draft should cite a different excerpt [1].",
+  "I need to verify the cited evidence before answering [1].",
+  "I should remove the unsupported claim and cite the source [1].",
+  "I must evaluate whether the draft is supported [1].",
+  "Let me review the evidence before I rewrite the answer [1].",
+  "The answer should remove unsupported details before display [1].",
+  "My analysis is that the draft can be approved [1]."
+];
+const adversarialReviewerRuns = [];
+for (const adversarialAnswer of adversarialReviewerAnswers) {
+  adversarialReviewerRuns.push(
+    await runReviewerSimulation([structuredReviewerResponse(adversarialAnswer)])
+  );
+}
+context.__leakedReviewerOutput = leakedReviewerOutput;
+context.__reviewFixture = reviewerFixture;
+const guardedReviewerLeak = vm.runInContext(`
+  enforceCitedAnswer(
+    "Any tips for living in Beijing?",
+    { text: globalThis.__leakedReviewerOutput, sources: [globalThis.__reviewFixture] },
+    [globalThis.__reviewFixture],
+    "Any tips for living in Beijing?"
+  );
+`, context);
+const broadRejectedDraft = vm.runInContext(`
+  preserveEvidenceBackedAnswer(
+    "Any tips for living in Beijing?",
+    { text: "I could not find that in the indexed resources.", sources: [globalThis.__reviewFixture] },
+    { text: "Use unsupported robot delivery and restaurant-price recommendations in Beijing [1].", sources: [globalThis.__reviewFixture] },
+    [globalThis.__reviewFixture],
+    "Any tips for living in Beijing?"
+  );
+`, context);
+const supportedClaimAnswer = vm.runInContext(`
+  enforceCitedAnswer(
+    "Any tips for living in Beijing?",
+    { text: "Use WeChat for messaging, payments, and restaurant ordering, and use Didi or the subway for travel [1].", sources: [globalThis.__reviewFixture] },
+    [globalThis.__reviewFixture],
+    "Any tips for living in Beijing?"
+  );
+`, context);
+const supportedAnswerWithFraming = vm.runInContext(`
+  enforceCitedAnswer(
+    "Any tips for living in Beijing?",
+    { text: "Here are the main recommendations from the indexed resources.\\n\\n- Use WeChat for messaging, payments, and restaurant ordering, and use Didi or the subway for travel [1].", sources: [globalThis.__reviewFixture] },
+    [globalThis.__reviewFixture],
+    "Any tips for living in Beijing?"
+  );
+`, context);
+const unsupportedClaimAnswer = vm.runInContext(`
+  enforceCitedAnswer(
+    "Any tips for living in Beijing?",
+    { text: "Use DaZhongDianPing for robot deliveries and expect every restaurant meal to cost 30 yuan [1].", sources: [globalThis.__reviewFixture] },
+    [globalThis.__reviewFixture],
+    "Any tips for living in Beijing?"
+  );
+`, context);
+const partiallyUnsupportedClaimAnswer = vm.runInContext(`
+  enforceCitedAnswer(
+    "Any tips for living in Beijing?",
+    { text: "Use WeChat for messaging, payments, and restaurant ordering. Every restaurant meal costs exactly 30 yuan [1].", sources: [globalThis.__reviewFixture] },
+    [globalThis.__reviewFixture],
+    "Any tips for living in Beijing?"
+  );
+`, context);
+const reviewerLeakPattern = /provided search results|draft answer|must reject|let'?s re-evaluate|source\s+\d+\s*:/i;
+
+if (malformedReviewerRecovery.calls !== 1 || malformedReviewerRecovery.text !== "" || reviewerLeakPattern.test(malformedReviewerRecovery.text)) {
+  throw new Error(`Malformed reviewer output should return control to the orchestrated recovery stage.\n\n${JSON.stringify(malformedReviewerRecovery, null, 2)}`);
+}
+if (validReviewerJson.calls !== 1 || validReviewerJson.text !== recoveredBeijingAnswer) {
+  throw new Error(`Valid reviewer JSON should be accepted without a recovery request.\n\n${JSON.stringify(validReviewerJson, null, 2)}`);
+}
+if (extraKeyReviewerJson.calls !== 1 || extraKeyReviewerJson.text !== "") {
+  throw new Error("Reviewer JSON with any key outside the structured answer contract must be rejected. " + JSON.stringify(extraKeyReviewerJson, null, 2));
+}
+if (adversarialReviewerRuns.some((run) => run.calls !== 1 || run.text !== "")) {
+  throw new Error("Reviewer analysis/process language escaped through a structured answer block. " + JSON.stringify(adversarialReviewerRuns, null, 2));
+}
+if (doubleMalformedReviewer.calls !== 1 || doubleMalformedReviewer.text !== "" || reviewerLeakPattern.test(doubleMalformedReviewer.text)) {
+  throw new Error(`Malformed reviewer output leaked instead of returning an empty repair result.\n\n${JSON.stringify(doubleMalformedReviewer, null, 2)}`);
+}
+if (!/could not produce a reliable cited answer/i.test(guardedReviewerLeak.text) || reviewerLeakPattern.test(guardedReviewerLeak.text)) {
+  throw new Error(`The final display guard allowed reviewer process text through.\n\n${guardedReviewerLeak.text}`);
+}
+if (!context.isCouldNotFindAnswer(broadRejectedDraft.text) || /robot delivery|restaurant-price/i.test(broadRejectedDraft.text)) {
+  throw new Error(`A rejected broad-answer draft was incorrectly revived.\n\n${broadRejectedDraft.text}`);
+}
+if (/could not produce/i.test(supportedClaimAnswer.text) || !/\[1\]/.test(supportedClaimAnswer.text)) {
+  throw new Error(`A source-supported Beijing claim failed the claim-level answer guard.\n\n${supportedClaimAnswer.text}`);
+}
+if (/could not produce/i.test(supportedAnswerWithFraming.text) || !/\[1\]/.test(supportedAnswerWithFraming.text)) {
+  throw new Error(`A supported answer was rejected because of a harmless uncited framing line.\n\n${supportedAnswerWithFraming.text}`);
+}
+if (!/could not produce a reliable cited answer/i.test(unsupportedClaimAnswer.text)) {
+  throw new Error(`Unsupported named and numeric Beijing claims passed the claim-level answer guard.\n\n${unsupportedClaimAnswer.text}`);
+}
+if (
+  /could not produce/i.test(partiallyUnsupportedClaimAnswer.text) ||
+  context.answerClaimsSupportedByCitedSources(partiallyUnsupportedClaimAnswer.text, partiallyUnsupportedClaimAnswer.sources) !== false
+) {
+  throw new Error(`The deterministic guard should leave absence-only semantic support to the verifier while retaining lexical overlap as a negative diagnostic.\n\n${partiallyUnsupportedClaimAnswer.text}`);
+}
+
 if (!/resources indexed; \d+ searchable bodies/.test(statusSummaryText)) {
   throw new Error(`Expected status summary helper to set index summary, got: ${statusSummaryText}`);
 }
@@ -495,6 +856,34 @@ if (!alternateTaskSources.some((source) => source.resource_id === "todo-page")) 
 }
 if (!alternateTaskAnswer || !alternateTaskAnswer.text.includes("I found 2 current To Do items")) {
   throw new Error(`Expected alternate task phrasing to produce the concrete To Do answer.\n\n${alternateTaskAnswer?.text || "no answer"}`);
+}
+const notificationNoise = /Current Notification Setting|Change Settings|Needs Grading|SCORM Content Item|Journal Comment|Unread Blog Posts/i;
+if (alternateTaskSources.some((source) => notificationNoise.test(`${source.title} ${source.source} ${source.text}`))) {
+  throw new Error(`Notification settings survived task source filtering.\n\n${JSON.stringify(alternateTaskSources, null, 2)}`);
+}
+if (notificationNoise.test(alternateTaskAnswer.text)) {
+  throw new Error(`Notification settings vocabulary survived task answer sanity checks.\n\n${alternateTaskAnswer.text}`);
+}
+if (notificationSettingsFlags.some((flag) => !flag)) {
+  throw new Error(`A screenshot-derived Blackboard configuration page was not recognized: ${JSON.stringify(notificationSettingsFlags)}`);
+}
+if (settingsOnlyRawResults.length || settingsOnlySources.length) {
+  throw new Error(`A settings-only index produced searchable task evidence.\n\n${JSON.stringify({ settingsOnlyRawResults, settingsOnlySources }, null, 2)}`);
+}
+if (!/could not verify current To Do items/i.test(settingsOnlyAnswer?.text || "") || settingsOnlyAnswer.sources.length) {
+  throw new Error(`A settings-only index did not fail safely at the task-answer layer.\n\n${JSON.stringify(settingsOnlyAnswer, null, 2)}`);
+}
+if (
+  emptyToDoSources.length !== 1 ||
+  emptyToDoSources[0].resource_id !== "empty-todo-page" ||
+  !/no active tasks/i.test(emptyToDoAnswer?.text || "") ||
+  emptyToDoAnswer.sources.length !== 1 ||
+  notificationNoise.test(`${emptyToDoAnswer.text} ${emptyToDoSources.map((source) => source.title).join(" ")}`)
+) {
+  throw new Error(`The live To Do empty state was not preserved and answered directly.\n\n${JSON.stringify({ emptyToDoRawResults, emptyToDoSources, emptyToDoAnswer }, null, 2)}`);
+}
+if (semanticDuplicatePages.length !== 1 || semanticDuplicatePages[0].matched_resource_ids?.length !== 2) {
+  throw new Error(`Semantically identical Blackboard pages were not collapsed into one source.\n\n${JSON.stringify(semanticDuplicatePages, null, 2)}`);
 }
 
 if (mandarinIsCapability) {
@@ -582,7 +971,14 @@ if (packingDocumentReadinessAfterBody) {
 ${JSON.stringify(packingDocumentReadinessAfterBody, null, 2)}`);
 }
 if (context.isCouldNotFindAnswer(packingReviewerFallback.text) || !/passport|prescription|adapters|packing/i.test(packingReviewerFallback.text)) {
-  throw new Error(`Reviewer fallback should preserve packing evidence instead of returning not-found.\n\n${packingReviewerFallback.text}`);
+  const diagnostics = vm.runInContext(`({
+    draft: packingDraft,
+    support: answerClaimsSupportedByCitedSources(packingDraft.text, packingDraft.sources),
+    usable: isUsableCitedAnswer("What should I pack for China?", packingDraft, packingSourcesWithBody),
+    sourceText: fullTextForResult(packingDraft.sources[0]),
+    evidenceScore: sourceEvidenceScore("What should I pack for China?", packingDraft.sources[0])
+  })`, context);
+  throw new Error(`Reviewer fallback should preserve packing evidence instead of returning not-found.\n\n${packingReviewerFallback.text}\n\n${JSON.stringify(diagnostics, null, 2)}`);
 }
 for (const expectedVisaResource of ["x1-visa-pdf", "visa-faq-pdf"]) {
   if (!visaHydrationCandidates.some((resource) => resource.id === expectedVisaResource)) {
@@ -594,6 +990,39 @@ if (!linkTypedPdfHydrates) {
 }
 if (context.isCouldNotFindAnswer(visaReviewerFallback.text) || !/passport|jw202|admission notice|visa application/i.test(visaReviewerFallback.text)) {
   throw new Error(`Reviewer fallback should preserve visa evidence instead of returning not-found.\n\n${visaReviewerFallback.text}`);
+}
+if (!/\[\d+\]/.test(visaReviewerFallback.text) || !visaReviewerFallback.sources.length) {
+  throw new Error(`Residence-visa fallback must remain cited.\n\n${JSON.stringify(visaReviewerFallback, null, 2)}`);
+}
+if (/I found relevant information in the indexed resources|(?:^|\n)\s*-?\s*Page\s+\d+\s*:/i.test(visaReviewerFallback.text)) {
+  throw new Error(`Residence-visa fallback exposed raw retrieval excerpts.\n\n${visaReviewerFallback.text}`);
+}
+if (!residenceVisaSources.some((source) => /X1|Visa FAQ/i.test(source.title || source.base_title || ""))) {
+  throw new Error(`The exact residence-visa query did not retrieve a visa document.\n\n${JSON.stringify(residenceVisaSources, null, 2)}`);
+}
+if (!/could not produce a reliable cited answer/i.test(rawResidenceVisaAnswer.text) || /Page\s+\d+\s*:|I found relevant information/i.test(rawResidenceVisaAnswer.text)) {
+  throw new Error(`Raw residence-visa excerpts were not rejected by the answer guard.\n\n${rawResidenceVisaAnswer.text}`);
+}
+if (!/could not produce a reliable cited answer/i.test(partiallyUncitedResidenceVisaAnswer.text)) {
+  throw new Error(`A partially uncited checklist was allowed through the answer guard.\n\n${partiallyUncitedResidenceVisaAnswer.text}`);
+}
+const irrelevantResidenceVisaDiagnostic = context.citedAnswerValidation(
+  "What do I need for my Residence visa?",
+  irrelevantResidenceVisaAnswer,
+  residenceVisaSources,
+  "What do I need for my Residence visa?"
+);
+if (
+  /could not produce/i.test(irrelevantResidenceVisaAnswer.text) ||
+  irrelevantResidenceVisaDiagnostic.diagnostics.visa_source_classifier_mismatch !== true
+) {
+  throw new Error(`Question relevance must remain a diagnostic for the semantic verifier, not a brittle deterministic rejection.\n\n${JSON.stringify(irrelevantResidenceVisaDiagnostic, null, 2)}`);
+}
+if (/could not produce/i.test(citedFollowUpAnswer.text) || !/\[1\]/.test(citedFollowUpAnswer.text)) {
+  throw new Error(`A grounded cited follow-up answer was incorrectly rejected.\n\n${citedFollowUpAnswer.text}`);
+}
+if (visaReviewerFallback.sources.some((source) => !context.isVisaResult(source))) {
+  throw new Error(`Residence-visa fallback retained a non-visa cited source.\n\n${JSON.stringify(visaReviewerFallback.sources, null, 2)}`);
 }
 if (preparedMandarinSources.some((source) => /English Language Resources/i.test(source.title || source.text || ""))) {
   throw new Error(`Mandarin answer sources should exclude English-language resource hits.\n\n${JSON.stringify(preparedMandarinSources, null, 2)}`);
@@ -632,6 +1061,12 @@ if (!indexCommandChecks.every(Boolean)) {
 if (!auditCommandChecks.every(Boolean)) {
   throw new Error(`Expected /audit command recognition to be scoped to slash commands.\n\n${JSON.stringify(auditCommandChecks)}`);
 }
+if (!resourcePackCommandChecks.every(Boolean)) {
+  throw new Error(`Expected optional resource-pack command recognition and file typing to stay stable.\n\n${JSON.stringify(resourcePackCommandChecks)}`);
+}
+if (!resourcePackDocumentReferenceChecks.every(Boolean)) {
+  throw new Error(`Expected resource-pack chunks to cite/dedupe as their parent document.\n\n${JSON.stringify(resourcePackDocumentReferenceChecks)}`);
+}
 if (!/Query audit: What do I need for the X1 visa/i.test(visaAuditText) || !/OBTAINING YOUR X1 STUDENT VISA 2026/i.test(visaAuditText) || !/Pipeline risk flags/i.test(visaAuditText)) {
   throw new Error(`Expected visa audit to expose query pipeline, risk flags, and the correct visa PDF.\n\n${visaAuditText}`);
 }
@@ -640,5 +1075,8 @@ if (!/Query audit: What should I pack for China/i.test(packingAuditText) || !/Pa
 }
 if (/Current index:|resources indexed|Transcript groups include/i.test(introText) || !/\/feedback/.test(introText) || !/\/index/.test(introText)) {
   throw new Error(`Intro text should be friendly, mention /index and /feedback, and avoid internal index dumps.\n\n${introText}`);
+}
+if (/SchwarzmanC11|optional packs?|pack command/i.test(introText)) {
+  throw new Error(`Intro text should not reveal hidden community-resource pack commands.\n\n${introText}`);
 }
 console.log("regression-check passed");

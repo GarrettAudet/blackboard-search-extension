@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "corpus_id": "local-blackboard-representative-v2",
+  "corpus_version": "2026.07.17.1",
+  "provenance": "Answerable Blackboard-style resources copied from the local regression fixture; this is not a dump of a live Chrome profile.",
+  "resources": [
+    {
+      "id": "v2-official-todo",
+      "document_id": "official-blackboard-todo",
+      "type": "page",
+      "title": "To Do - Class of 2026-2027 Pre-program",
+      "url": "https://lms.sc.tsinghua.edu.cn/todo",
+      "page_title": "To Do - Class of 2026-2027 Pre-program",
+      "section": "Class of 2026-2027 Pre-program",
+      "provenance": "official Blackboard page",
+      "text": "To Do\n\n【Deadline 23:59 on Jun 23 2026 (UTC+8)】2026-27 Capstone Preliminary Interest Survey\nReview the 2026-27 Partner Organizations Proposed Topics and fill out the 2026-27 Capstone Preliminary Interest Survey by 23:59 on Jun 23, 2026 (UTC+8) to indicate your interest in the Capstone project. The survey is mandatory for all C11 students.\nYou can access the survey by clicking the linked survey or scanning its QR code.\n\n【Deadline 23:59 on Jun 30 2026 (UTC+8)】Prerequisite Course Exemption Application\nStudents who wish to be exempted from the course and meet the exemption requirements should submit the Course Exemption Application by 23:59 on June 30, 2026 (UTC+8)."
+    },
+    {
+      "id": "v2-official-home",
+      "document_id": "official-blackboard-home",
+      "type": "page",
+      "title": "Home - Class of 2026-2027 Pre-program",
+      "url": "https://lms.sc.tsinghua.edu.cn/home",
+      "page_title": "Home - Class of 2026-2027 Pre-program",
+      "section": "Class of 2026-2027 Pre-program",
+      "provenance": "official Blackboard page",
+      "text": "Actions All Items (0). What's Due. Select Date: Go. Today (0) Nothing Due Today. Tomorrow (0). This Week (0). Future (0). Last Updated: June 19, 2026 6:25 AM."
+    },
+    {
+      "id": "v2-official-course-calendar",
+      "document_id": "official-blackboard-course-calendar",
+      "type": "page",
+      "title": "Course Calendar - Class of 2026-2027 Pre-program",
+      "url": "https://lms.sc.tsinghua.edu.cn/course-calendar",
+      "page_title": "Course Calendar - Class of 2026-2027 Pre-program",
+      "section": "Class of 2026-2027 Pre-program Academics",
+      "provenance": "official Blackboard page",
+      "text": "Course Calendar and Course Schedule. The list of courses has been released in the calendar. Students can review the academic calendar, course offerings, modules, and class schedule for the 2026-2027 pre-program."
+    }
+  ]
+}

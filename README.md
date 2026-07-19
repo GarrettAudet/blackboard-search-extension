@@ -15,8 +15,9 @@ The demo shows the core flow: index Blackboard content, ask a question, get an a
 - Indexes Blackboard pages available to the user's active logged-in browser session.
 - Indexes course pages, announcements, links, PDFs, and readable Office-style documents.
 - Stores the searchable resource index and extracted text in `chrome.storage.local`.
+- Supports maintainer-registered community resource packs that can be indexed locally after an active Blackboard session is confirmed.
 - Ranks local matches before sending anything to an API provider.
-- Sends only the user's question and selected top snippets when API answering is enabled.
+- Sends the user's question and a bounded candidate-evidence set when API answering is enabled; the provider selects the strongest evidence and may request a bounded read of at most one nominated parent document.
 - Supports OpenAI, DeepSeek, and OpenRouter with a user-provided API key.
 - Shows expandable source cards so answers can be checked against the original material.
 - Provides chat commands for reindexing, feedback, and retrieval diagnostics.
@@ -24,7 +25,7 @@ The demo shows the core flow: index Blackboard content, ask a question, get an a
 ## What It Does Not Do
 
 - It does not bypass Blackboard login, roles, permissions, or file access rules.
-- It does not upload the full local Blackboard index to a shared server by default.
+- It does not send the full local Blackboard index to the API provider or upload it to a shared server.
 - It does not include embedded API keys, GitHub tokens, or private write credentials.
 - It does not claim affiliation with Blackboard, Anthology, or any institution.
 - The `main` branch is focused on text and document search. Experimental video/transcript work should stay isolated until it does not degrade the core search experience.
@@ -38,7 +39,8 @@ The demo shows the core flow: index Blackboard content, ask a question, get an a
 - **Content scripts** for reading Blackboard pages from the user's authenticated browser context.
 - **Background service worker** for indexing, document fetching, extraction coordination, and storage updates.
 - **PDF.js** for browser-side PDF text extraction.
-- **Local retrieval logic** in `lib/search-index.js` for normalization, chunk ranking, source deduplication, and snippet selection.
+- **Local retrieval logic** in `lib/search-index.js` for normalization, fused query routing, chunk ranking, source deduplication, and candidate pooling.
+- **RAG orchestration** in `sidepanel/sidepanel.js` for query planning, semantic evidence selection, bounded nominated-document reading, cited synthesis, validation, and repair.
 - **Provider client logic** in `lib/llm-client.js` for OpenAI-compatible chat completion calls.
 - **Node.js scripts** for syntax checks, regression tests, prepublish checks, and store asset generation.
 - **Python + Pillow** for generated Chrome Web Store artwork.
@@ -46,12 +48,14 @@ The demo shows the core flow: index Blackboard content, ask a question, get an a
 ## How It Works
 
 1. The user logs in to Blackboard normally in Chrome.
-2. The extension indexes configured Blackboard domains using the user's existing browser session.
-3. Resource metadata is stored in `resource_index`.
-4. Extracted searchable text is stored in `content_store`.
-5. A user question is normalized and matched against the local index.
-6. The highest-value snippets are sent to the selected API provider with instructions to answer only from the provided excerpts.
-7. The side panel renders the answer and expandable source cards.
+2. Before indexing or optional pack installation, the extension verifies that Blackboard session with a credentialed request.
+3. The extension indexes configured Blackboard domains using the user's existing browser session.
+4. Resource metadata is stored in `resource_index`.
+5. Extracted searchable text is stored in `content_store`.
+6. A user question is normalized and searched through fused local retrieval routes.
+7. A bounded candidate-evidence set is sent to the selected API provider for semantic evidence selection. If the evidence is incomplete or requires careful policy interpretation, the provider may nominate at most one parent document for a bounded additional read.
+8. Evidence from at most five parent documents is sent for synthesized answer generation, citation validation, and bounded repair when needed.
+9. The side panel renders the final cited answer and one expandable source card per parent document.
 
 The result is a retrieval-augmented workflow that keeps Blackboard discovery local while still letting the user ask natural-language questions.
 
@@ -60,9 +64,10 @@ The result is a retrieval-augmented workflow that keeps Blackboard discovery loc
 The extension is designed around local control.
 
 - The index, extracted text, settings, and API-key configuration are stored locally in Chrome.
+- Community resource packs are installed only after an active Blackboard session check and are stored locally in the same Chrome storage index.
 - The user supplies their own API provider and key.
-- When answering is enabled, the extension sends the question and top matched snippets to the configured provider.
-- The full local index is not uploaded to a shared backend by default.
+- When answering is enabled, the extension sends the question and bounded subsets of candidate or selected evidence to the configured provider; one question may use multiple calls for planning, selection, generation, and validation or repair.
+- The full local index is not sent to the provider or uploaded to a shared backend.
 - Blackboard access remains governed by the user's existing Blackboard session and permissions.
 
 For the user-facing policy, see [PRIVACY.md](PRIVACY.md).
@@ -101,6 +106,23 @@ Opens the configured feedback form, if feedback collection is enabled. If the us
 ```
 
 Runs a local retrieval diagnostic for a question. It reports index health, top raw matches, answer sources, hydration candidates, duplicate clusters, and signs that strong evidence exists but the answer layer missed it.
+
+
+## Optional Resource Packs
+
+Optional resource packs are JSON manifests that list prepared resources outside Blackboard. The extension can register community-collated class resource packs, such as the draft pack at `resource-packs/schwarzman-c11/pack.json`.
+
+A pack can point to bundled files, such as PDFs committed with the extension, or to configured hosted files that Chrome is allowed to fetch. The installer first confirms an active Blackboard session and does not fetch the manifest or files while logged out. When a listed PDF or Office file is installed, the side panel extracts text with the existing browser-side document parser and saves only searchable text plus source metadata into local Chrome storage.
+
+Recommended authoring flow:
+
+1. Keep source PDFs and generated text in a private authoring repo if needed.
+2. Publish or copy only the distributable pack files into `resource-packs/<pack-id>/`.
+3. Add each file to the pack manifest.
+4. Reload the unpacked extension and run the maintainer-provided hidden pack trigger once during testing.
+5. Ask questions and verify the optional pack appears in source cards.
+
+Do not embed GitHub tokens, private repository credentials, or API keys in a pack manifest. For details, see [docs/resource-packs.md](docs/resource-packs.md).
 
 ## Configuration Notes
 
@@ -159,7 +181,7 @@ PRIVACY.md                    User-facing privacy policy
 
 ## Development
 
-There is no build step. Edit the files directly, then reload the unpacked extension from `chrome://extensions`.
+There is no runtime bundling or compilation step. Edit the files directly, then reload the unpacked extension from `chrome://extensions`. A separate release script builds and verifies the exact Chrome Web Store artifact.
 
 Useful checks:
 
@@ -171,20 +193,31 @@ node scripts\regression-check.mjs
 node scripts\prepublish-check.mjs
 ```
 
-`node scripts\prepublish-check.mjs` is the main release gate. It parses the manifest, checks the JavaScript entry points, and runs the local retrieval/regression suite.
+`node scripts\prepublish-check.mjs` is the main code gate. It checks session gating, bounded provider retries and truncation handling, generalized retrieval and reindex guards, semantic evidence selection and deep-read behavior, strict answer grounding and independently verified repair, randomized holdout accuracy, parent-document deduplication, performance budgets, transcript privacy/provenance, and the core regression suite.
+
+To run that gate and then build the verified upload ZIP plus its matching unpacked directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build-release.ps1
+```
+
+The builder packages only the extension runtime, icons, public documentation, and bundled resource packs. It rejects evaluation keys, fixtures, scripts, sample data, secret-like material, missing manifest references, and any ZIP whose entries differ from the verified unpacked directory.
 
 ## Testing Before Release
 
 Before packaging for the Chrome Web Store:
 
 - Reload the unpacked extension and test a clean install.
-- Run `/index` after signing in to Blackboard.
+- Confirm `/index` is blocked while logged out, then run it after signing in to Blackboard.
 - Ask representative course, deadline, document, and policy questions.
 - Confirm answers are grounded in indexed material.
 - Expand source cards and verify that `Open source` opens the expected page or file.
 - Confirm source numbering is compact and does not skip numbers.
+- Confirm multiple matching chunks from one document render as one source card without losing answer evidence.
+- Run `/reindex` once when the extension reports a legacy truncated index; confirm it refreshes Blackboard content without deleting installed resource packs or API settings.
+- Test the hidden pack trigger both logged out and logged in without exposing it in visible help text.
 - Confirm the answer body does not expose raw Blackboard URLs or duplicate source blocks.
-- Run `node scripts\prepublish-check.mjs`.
+- Build with `scripts\build-release.ps1`, reload the generated `dist\BlackboardSearchExtension-<version>-unpacked` directory, and upload only the matching ZIP after the final smoke test.
 
 See [docs/testing.md](docs/testing.md) for the full smoke-test and release checklist.
 

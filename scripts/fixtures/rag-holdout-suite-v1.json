@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "suite_id": "schwarzman-c11-holdout-v1",
+  "pack_id": "schwarzman-c11",
+  "pack_version": "2026.07.7",
+  "corpus_digest": "5855b05be21b7d63d4c3705bafbb70abed334d28099dc2b05f1f55ed36cbe20c",
+  "cases": [
+    {
+      "id": "h01", "kind": "answerable",
+      "variants": ["How many credits do I need, does that differ for mainland Chinese students, and is a Tsinghua course required?", "credit minimum for international vs mainland scholars + do we have to take a tsinghua class?", "Separate the ordinary degree-credit requirement, the mainland-China requirement, and the cross-registration rule."],
+      "expected_documents": ["academic-webinar"],
+      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["at least 28 degree credits", "total of 31 credits", "at least one Tsinghua course"]}],
+      "answer_key": {"patterns_all": ["28", "31", "Tsinghua course"], "forbidden_patterns": ["international students? (?:must|need to|are required to) (?:(?:complete|earn|take) )?31 credits", "Tsinghua course is optional"]}
+    },
+    {
+      "id": "h02", "kind": "negative_polarity",
+      "variants": ["Can someone with an IR background opt out of the prerequisite; what are the application deadline and supporting-document requirement; and do they keep its credits?", "IR prerequisite exemption: deadline, documents, and whether the credits are automatic?", "I studied political science already. Explain the exception process, its deadline and supporting documents, and what replaces the exempted course credits."],
+      "expected_documents": ["academic-webinar"],
+      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["supporting documents by June 30th", "does not imply the automatic award of its credits", "more courses from the electives"]}],
+      "answer_key": {"patterns_all": ["June 30", "not automatic", "electives"], "forbidden_patterns": ["you automatically (?:receive|keep|get|earn).*credits", "exemption automatically (?:awards|grants|keeps).*credits", "July 30"]}
+    },
+    {
+      "id": "h03", "kind": "answerable",
+      "variants": ["What is the Deep Dive course format, credit value, weekly schedule, and timing of the main field trip?", "Deep Dive: mandatory or optional, how many credits, when are its weekly lectures, and when is the week-long trip?", "Summarize the year-long Deep Dive structure, including Fridays and the trip between modules."],
+      "expected_documents": ["academic-webinar"],
+      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["mandatory two credit course", "lectures on Fridays", "in between Modules 1 and 2"]}],
+      "answer_key": {"patterns_all": ["two", "Friday", "Modules 1 and 2"], "forbidden_patterns": ["Deep Dive is optional", "between Modules? 2 and 3"]}
+    },
+    {
+      "id": "h04", "kind": "answerable",
+      "variants": ["What is the C11 stipend amount, and how and when is it deposited?", "How much stipend do we get, is it one payment or two, and when is the account set up?", "Explain the stipend total, the required bank account, currency, orientation timing, and installment schedule."],
+      "expected_documents": ["international-logistics-webinar"],
+      "evidence_groups": [{"document_id": "international-logistics-webinar", "patterns_all": ["stipend to $5,500", "during the orientation", "Bank of China", "divided into two payments", "in RMB"]}],
+      "answer_key": {"patterns_all": ["5,500", "orientation", "Bank of China", "two", "RMB"], "forbidden_patterns": ["5,000", "paid in one installment", "deposited in US dollars rather than RMB"]}
+    },
+    {
+      "id": "h05", "kind": "negative_polarity",
+      "variants": ["Do I need to create WeChat before arriving, and which channel is official before then?", "wechat before landing? where are official pre-arrival messages actually sent?", "Clarify whether WeChat is urgent before China and why a Chinese SIM changes registration."],
+      "expected_documents": ["international-logistics-webinar"],
+      "evidence_groups": [{"document_id": "international-logistics-webinar", "patterns_all": ["not in a rush to set up a WeChat prior to your arrival", "SC email is the only official channel", "Chinese phone number"]}],
+      "answer_key": {"patterns_all": ["not", "SC email", "Chinese"], "forbidden_patterns": ["must (?:set up|create|register).*WeChat before", "WeChat is the only official channel"]}
+    },
+    {
+      "id": "h06", "kind": "negative_polarity",
+      "variants": ["Can a positive cannabis test cause deportation even if the use happened legally outside China, and what preparation window is advised?", "Student-life drug rule: does pre-China use still matter on a later test, what can happen, and how early should I prepare?", "Explain the consequence risk from drug residue and the suggested preparation window."],
+      "expected_documents": ["student-life-webinar"],
+      "evidence_groups": [{"document_id": "student-life-webinar", "patterns_all": ["did not do that drug while in China", "deportation if you're if you're a foreign student", "Give yourself at least 30 days"]}],
+      "answer_key": {"patterns_all": ["positive", "deportation", "30 days"], "forbidden_patterns": ["no consequences", "use outside China has no consequences", "legal use outside China cannot cause consequences"]}
+    },
+    {
+      "id": "h07", "kind": "negative_polarity",
+      "variants": ["How and when should I request accommodations, and is every request guaranteed?", "academic/non-academic accommodation request process before arrival?", "Who receives the written request, how early should I send it, and what happens if it is infeasible?"],
+      "expected_documents": ["student-life-webinar"],
+      "evidence_groups": [{"document_id": "student-life-webinar", "patterns_all": ["request in writing to the student life email", "Do not wait until you're here", "review all requests on an individual basis", "explore alternative options"]}],
+      "answer_key": {"patterns_all": ["writing", "before", "individual", "alternative"], "forbidden_patterns": ["you should wait until .*arrive", "wait until arrival before requesting", "approval is automatic", "guaranteed approval", "requests are guaranteed"]}
+    },
+    {
+      "id": "h08", "kind": "conflict",
+      "variants": ["The resources conflict about tap water. Distinguish the webinar's general China advice from the guide's Schwarzman College-specific claim.", "Is the tap water drinkable or not? Preserve the different scope of both indexed claims.", "Reconcile the webinar's general warning with the guide's College-specific tap-water statement."],
+      "expected_documents": ["life-in-china-webinar", "survival-guide"],
+      "evidence_groups": [{"document_id": "life-in-china-webinar", "patterns_all": ["do not drink the tap water"]}, {"document_id": "survival-guide", "patterns_all": ["College tap water is clean and drinkable"]}],
+      "answer_key": {"patterns_all": ["do not drink", "College", "drinkable"], "forbidden_patterns": ["both sources (?:say|state|agree).*tap water is drinkable", "both sources (?:say|state|agree).*tap water is unsafe", "the sources make the same claim", "the sources agree on tap water"]}
+    },
+    {
+      "id": "h09", "kind": "negative_polarity",
+      "variants": ["When can College Wi-Fi provide international access, when do I need my own VPN, and when should I install it?", "VPN boundary: inside Schwarzman Wi-Fi versus outside on a Chinese SIM, plus setup timing before the move.", "Why install a VPN before landing even though the College network has access?"],
+      "expected_documents": ["life-in-china-webinar"],
+      "evidence_groups": [{"document_id": "life-in-china-webinar", "patterns_all": ["definitely get it before you land in China", "Schwarzman College's Wi-Fi has VPN on itself", "outside of the college"]}],
+      "answer_key": {"patterns_all": ["before", "College", "outside"], "forbidden_patterns": ["no (?:personal |own )?VPN (?:is )?(?:needed|required) outside", "you should wait until after .*arrive", "install it only after .*arrive"]}
+    },
+    {
+      "id": "h10", "kind": "answerable",
+      "variants": ["What paper and sanitizer should I carry for public bathrooms in Beijing, and what toilet style should I expect?", "Beijing bathroom prep: paper, sanitizer, squat versus western toilets?", "Give me the practical public-restroom supply and toilet-style advice from the Life in China webinar."],
+      "expected_documents": ["life-in-china-webinar"],
+      "evidence_groups": [{"document_id": "life-in-china-webinar", "patterns_all": ["toilet paper, is what you always need to carry", "might not provide toilet paper", "tissues and hand sanitizer", "squat toilet"]}],
+      "answer_key": {"patterns_all": ["toilet paper", "hand sanitizer", "squat"], "forbidden_patterns": ["public bathrooms always provide toilet paper", "toilet paper is always provided", "expect only western toilets", "toilets are exclusively western"]}
+    },
+    {
+      "id": "h11", "kind": "answerable",
+      "variants": ["Which map app should I use instead of Google Maps in China, and is it also called AMap?", "Google Maps is unreliable in Beijing—what is Gaode/AMap?", "Name the recommended alternative to Google Maps and clarify whether AMap and Gaode are separate."],
+      "expected_documents": ["life-in-china-webinar"],
+      "evidence_groups": [{"document_id": "life-in-china-webinar", "patterns_all": ["Google Map doesn't work in China", "recommend using Gouda Map", "also known as AMap"]}],
+      "answer_key": {"patterns_all": ["AMap"], "forbidden_patterns": ["Google Maps? is the recommended", "use Google Maps? instead", "AMap and Gaode are separate apps", "AMap and Gaode are not the same app"]}
+    },
+    {
+      "id": "h12", "kind": "negative_polarity",
+      "variants": ["Can I ride Tsinghua's purple shared bikes off campus or on sidewalks, and how must I park and lock them?", "Purple bikes: campus-only, are sidewalks allowed, and where do I return and lock them?", "State the location, sidewalk, designated-zone, and lock rules for shared bikes."],
+      "expected_documents": ["beijing-transportation-workshop"],
+      "evidence_groups": [{"document_id": "beijing-transportation-workshop", "patterns_all": ["only use them within the campus", "park them in the designated zones", "do not ride on sidewalks", "lock the bike properly"]}],
+      "answer_key": {"patterns_all": ["campus", "sidewalk", "designated", "lock"], "forbidden_patterns": ["may (?:ride|use).*outside (?:the )?campus", "\\bcan\\s+(?:ride|use).*outside (?:the )?campus", "parking anywhere is allowed", "may park .*anywhere", "may ride .*sidewalk", "riding on sidewalks is allowed"]}
+    },
+    {
+      "id": "h13", "kind": "answerable",
+      "variants": ["When taking a Beijing bus, when do I scan and which doors do I use?", "bus qr/card: scan once or twice, and front vs rear door?", "Describe the boarding, exit, and payment-scan sequence for a city bus."],
+      "expected_documents": ["beijing-transportation-workshop"],
+      "evidence_groups": [{"document_id": "beijing-transportation-workshop", "patterns_all": ["scan it when you get into the bus", "scan again when you get out", "front door", "rear door"]}],
+      "answer_key": {"patterns_all": ["scan", "front", "rear"], "forbidden_patterns": ["only scan once", "the rear door is for (?:boarding|entry)", "the front door is for (?:exiting|exit)"]}
+    },
+    {
+      "id": "h14", "kind": "answerable",
+      "variants": ["What was historically required to unlock the pool's deep lanes?", "deep-water pool test: fee/photo, tread time, and swim distance?", "List the historical deep-lane test requirements from the survival guide."],
+      "expected_documents": ["survival-guide"],
+      "evidence_groups": [{"document_id": "survival-guide", "patterns_all": ["deep-water test unlocks", "small cash fee", "physical passport photo", "treading water 30 seconds", "swimming 200 metres"]}],
+      "answer_key": {"patterns_all": ["fee", "30 seconds", "200", "photo"], "forbidden_patterns": ["no deep-water test is required", "100 metres", "60 seconds"]}
+    },
+    {
+      "id": "h15", "kind": "negative_polarity",
+      "variants": ["May a foreigner travel independently in Tibet, how is the permit arranged, and should current rules be rechecked?", "Tibet travel for foreigners: solo trip or licensed operator, and do current rules need checking?", "Explain the permit, independent-travel restriction, and need to verify current rules."],
+      "expected_documents": ["survival-guide"],
+      "evidence_groups": [{"document_id": "survival-guide", "patterns_all": ["Foreigners need a Tibet Travel Permit", "licensed tour operator", "cannot travel independently", "rules change"]}],
+      "answer_key": {"patterns_all": ["permit", "licensed", "cannot", "current"], "forbidden_patterns": ["can travel independently", "permit (?:is )?not (?:needed|required)", "traveler can arrange .*themselves", "you can arrange .*yourself"]}
+    },
+    {
+      "id": "h16", "kind": "answerable",
+      "variants": ["How should I book a train, enter the station gate, and time the booking?", "train booking in china: trip.com or 12306, which gate ID, how many days ahead?", "Summarize the guide's app, passport, orange-gate, and ticket-release advice."],
+      "expected_documents": ["survival-guide"],
+      "evidence_groups": [{"document_id": "survival-guide", "patterns_all": ["Trip.com (English) or the 12306 app", "register with your passport", "orange gate", "Tickets open 15 days ahead"]}],
+      "answer_key": {"patterns_all": ["Trip.com", "12306", "passport", "orange", "15 days"], "forbidden_patterns": ["30 days ahead", "a Chinese ID is required"]}
+    },
+    {
+      "id": "h17", "kind": "unanswerable",
+      "variants": ["What is the exact printer model and per-page printing fee, and where should I verify the current setup?", "Printer make/model plus precise cost per page at the College—if those are not listed, which support desk should I ask?", "Does the indexed guide specify the current printer hardware and an exact printing price, or direct me to someone who can confirm them?"],
+      "expected_documents": ["survival-guide"],
+      "evidence_groups": [{"document_id": "survival-guide", "patterns_all": ["ask IT for the current print setup and any per-page cost", "library front desk"]}],
+      "answer_key": {"required_behavior": "abstain_or_qualify", "patterns_all": ["not specified", "IT", "library front desk"], "forbidden_patterns": ["\\d+\\.\\d+ per page", "printer model is (?:Lenovo|HP|Canon|Brother|Epson|Xerox)"]}
+    },
+    {
+      "id": "h18", "kind": "unanswerable",
+      "variants": ["Which VPN is guaranteed to work for the entire academic year, and what strategy does the guide recommend instead?", "Name the one VPN that will definitely stay reliable all year in China—or explain the safer backup strategy if none is guaranteed.", "Does the guide guarantee ExpressVPN, Astrill, or any other provider for the full program; if not, what should I do?"],
+      "expected_documents": ["survival-guide"],
+      "evidence_groups": [{"document_id": "survival-guide", "patterns_all": ["Reliability is a moving target", "keep two VPNs", "ask a current cohort"]}],
+      "answer_key": {"required_behavior": "abstain_or_qualify", "patterns_all": ["not guaranteed", "two VPNs", "current cohort"], "forbidden_patterns": ["ExpressVPN is guaranteed", "Astrill is guaranteed", "guaranteed for (?:the )?(?:full|entire) (?:academic )?(?:year|program)"]}
+    }
+  ]
+}
