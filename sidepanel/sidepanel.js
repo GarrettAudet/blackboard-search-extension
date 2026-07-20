@@ -2418,7 +2418,13 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
     try {
       if (state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) continue;
       const content = await extractSearchableResourceText(resource);
-      if (!resourceHasReadableBody(resource, content)) throw new Error("Extracted text did not look like readable document body text.");
+      const fileLike = isFileLikeSearchResource(resource);
+      const verifiedResource = fileLike
+        ? { ...resource, body_verified: true, indexed_body_source: "extracted" }
+        : resource;
+      if (!resourceHasReadableBody(verifiedResource, content)) {
+        throw new Error("Extracted text did not look like readable document body text.");
+      }
       const storedContent = normalizeExtractedContent(content);
       const response = await sendMessage("STORE_CONTENT", {
         resource_id: resource.id,
@@ -2426,6 +2432,13 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
       });
       if (!response.ok) throw new Error(response.error || "Content store write failed");
       state.contentStore[resource.id] = storedContent;
+      if (fileLike) {
+        Object.assign(resource, {
+          body_verified: true,
+          indexed_body_source: "extracted",
+          content_origin: "extracted_attachment"
+        });
+      }
       state.hydrationDiagnostics[resource.id] = {
         ok: true,
         chars: storedContent.length,
@@ -3040,6 +3053,7 @@ async function handleAsk(event) {
   if (!query) return;
   els.queryInput.value = "";
   const memory = getConversationMemory();
+  const contextMemory = scopedConversationMemory(query, memory);
   appendMessage("user", query);
   if (isIndexCommand(query)) {
     await handleIndexCommand(query);
@@ -3064,15 +3078,16 @@ async function handleAsk(event) {
   }
 
   const canUseApiPipeline = state.settings.hasApiKey && !isCapabilityQuestion(query);
-  const baseRetrievalQuery = buildRetrievalQuery(query, memory);
+  const baseRetrievalQuery = buildRetrievalQuery(query, contextMemory);
+  const hasConversationMemory = hasConversationHistory(contextMemory);
   let retrievalQuery = baseRetrievalQuery;
   let queryPlan = defaultRagPlan(query, baseRetrievalQuery);
 
   if (canUseApiPipeline) {
     setStatus("Planning search with the selected API...");
     try {
-      queryPlan = await buildQueryPlan(query, memory, baseRetrievalQuery);
-      retrievalQuery = plannedRetrievalQuery(queryPlan, query, baseRetrievalQuery);
+      queryPlan = await buildQueryPlan(query, contextMemory, baseRetrievalQuery);
+      retrievalQuery = plannedRetrievalQuery(queryPlan, query, baseRetrievalQuery, hasConversationMemory);
     } catch (error) {
       console.warn("RAG query planning failed", error);
       setStatus(`Planner skipped: ${readableErrorMessage(error)}. Using local retrieval.`);
@@ -3080,7 +3095,13 @@ async function handleAsk(event) {
   }
 
   retrievalQuery = enhanceRetrievalQueryForIntent(query, retrievalQuery, queryPlan);
-  const retrievalQueries = retrievalQueriesForPlan(query, baseRetrievalQuery, retrievalQuery, queryPlan);
+  const retrievalQueries = retrievalQueriesForPlan(
+    query,
+    baseRetrievalQuery,
+    retrievalQuery,
+    queryPlan,
+    hasConversationMemory
+  );
   let results = searchAcrossRetrievalQueries(retrievalQueries);
 
   const hydrationResult = await hydrateLikelyResourceContentForQuery(retrievalQuery, results);
@@ -3129,7 +3150,8 @@ async function handleAsk(event) {
       deterministicAnswerSources,
       retrievalQueries,
       retrievalQuery,
-      queryPlan
+      queryPlan,
+      contextMemory
     );
     answerSources = evidenceSelection.sources;
   }
@@ -3162,7 +3184,7 @@ async function handleAsk(event) {
   els.searchBtn.classList.add("is-loading");
   const pending = appendMessage("assistant", "Planning the query, reading local matches, and reviewing the answer...");
   try {
-    const finalAnswer = await generateVerifiedApiAnswer(query, answerSources, memory, retrievalQuery, queryPlan);
+    const finalAnswer = await generateVerifiedApiAnswer(query, answerSources, contextMemory, retrievalQuery, queryPlan);
     updateMessage(pending, finalAnswer.text, finalAnswer.sources);
     rememberTurn(query, finalAnswer.text);
   } catch (error) {
@@ -3431,16 +3453,91 @@ function specificAnswerFacetBindingScore(facetText, source) {
   return Math.max(24, sourceEvidenceScore(facetText, source, facetText)) + bestBindingStrength;
 }
 
+function personalRecordIdentifiers(value) {
+  return deterministicNamedTerms(value).filter((term) => /\d/.test(term));
+}
+
+function sourceHasIdentifierBoundPersonalAnswer(facetText, source) {
+  const facet = normalizeText(facetText);
+  const asksForRecordOutcome =
+    /\b(?:claim|case|application|account|request|reimbursement)\b/.test(facet) &&
+    /\b(?:status|balance|approved|approval|decision|amount|remaining|result)\b/.test(facet);
+  if (!asksForRecordOutcome) return false;
+
+  const identifiers = personalRecordIdentifiers(facetText);
+  const evidence = String(answerEvidenceTextForSource(source) || "");
+  if (!identifiers.length || !identifiers.some((term) => sourceSupportsNamedTerm(evidence, term))) return false;
+  const identifierClauses = splitSentences(evidence)
+    .map((clause) => ({ clause, normalized: normalizeText(clause) }))
+    .filter(({ normalized }) => identifiers.some((identifier) => normalized.includes(identifier)));
+  if (!identifierClauses.length) return false;
+
+  const hasConcreteStatus = identifierClauses.some(({ normalized }) =>
+    /\b(?:claim|case|application|account|request|reimbursement)\b.{0,100}\b(?:is|was|remains?|has been|status(?: is| was)?|decision(?: is| was)?|approval(?: is| was)?)\s+(?:approved|denied|rejected|pending|paid|closed|open)\b/.test(normalized) ||
+    /\b(?:status|decision|approval|result)\b.{0,40}\b(?:is|was)\s+(?:approved|denied|rejected|pending|paid|closed|open)\b/.test(normalized)
+  );
+  const hasConcreteBalance = identifierClauses.some(({ normalized }) => {
+    const withoutIdentifiers = identifiers.reduce(
+      (text, identifier) => text.split(identifier).join(" "),
+      normalized
+    );
+    const explicitlyUnavailable =
+      /\b(?:remaining\s+)?balance\b.{0,40}\b(?:unavailable|unknown|not (?:available|listed|provided|recorded|shown|stated))\b/.test(withoutIdentifiers) ||
+      /\b(?:unavailable|unknown|not (?:available|listed|provided|recorded|shown|stated))\b.{0,40}\b(?:remaining\s+)?balance\b/.test(withoutIdentifiers);
+    if (explicitlyUnavailable) return false;
+    return (
+      /\b(?:remaining\s+)?balance\s+(?:(?:is|was|remains?|equals?|of)\s+)?(?:usd|cad|cny|rmb|yuan|eur|gbp|jpy)?\s*\d[\d ]*\b/.test(withoutIdentifiers) ||
+      /\b(?:usd|cad|cny|rmb|yuan|eur|gbp|jpy)?\s*\d[\d ]*\s+(?:remaining\s+)?balance\b/.test(withoutIdentifiers)
+    );
+  });
+  return hasConcreteStatus || hasConcreteBalance;
+}
+
+function sourceExplicitlyDefersOrOmitsPersonalAnswer(facetText, source) {
+  const facet = normalizeText(facetText);
+  const hasRecordIdentifier = personalRecordIdentifiers(facetText).length > 0;
+  const requestsPersonalValue =
+    (/\b(?:my|mine)\b/.test(facet) || hasRecordIdentifier) &&
+    /\b(?:claim|application|account|request|reimbursement)\b/.test(facet) &&
+    /\b(?:status|balance|approved|approval|decision|amount|remaining|result)\b/.test(facet) &&
+    !/\b(?:where|which portal|how (?:can|do|should) i (?:check|find|view|see))\b/.test(facet);
+  if (!requestsPersonalValue) return false;
+
+  const evidence = normalizeText(answerEvidenceTextForSource(source));
+  if (!evidence) return false;
+  const explicitAbsence =
+    /\b(?:contains?|includes?|lists?|provides?|records?|shows?|states?)\s+no\b.{0,120}\b(?:individual|personal|student specific|claim|application|approval|decision|status|balance)\b/.test(evidence) ||
+    /\b(?:does not|doesn t|cannot|can t)\s+(?:contain|include|list|provide|record|show|state)\b.{0,120}\b(?:individual|personal|approval|decision|status|balance)\b/.test(evidence) ||
+    /\bno\s+(?:individual|personal|student specific)\b.{0,100}\b(?:approval|decision|status|balance)\b/.test(evidence);
+  const explicitDeferral =
+    /\bportal only\b/.test(evidence) ||
+    /\b(?:status|balance|approval|decision|result)\b.{0,100}\b(?:only|solely)\s+(?:available|shown|visible|found|provided|recorded)\b.{0,80}\b(?:portal|account|system)\b/.test(evidence) ||
+    /\b(?:check|log in(?:to)?|sign in(?:to)?|use|consult)\b.{0,80}\b(?:portal|account|system)\b.{0,100}\b(?:status|balance|approval|decision|result)\b/.test(evidence);
+  return explicitAbsence || explicitDeferral;
+}
+
 function sourceHasSpecificAnswerForFacet(facetText, source) {
   return specificAnswerFacetBindingScore(facetText, source) > 0;
 }
 
-function selectedEvidenceSupportsConcreteAnswer(query, answerSources, retrievalQuery = query, queryPlan = null) {
-  const resolvedQuestion = resolvedQuestionForRag(query, queryPlan);
+function selectedEvidenceSupportsConcreteAnswer(
+  query,
+  answerSources,
+  retrievalQuery = query,
+  queryPlan = null,
+  memory = []
+) {
+  const resolvedQuestion = resolvedQuestionForRag(query, queryPlan, memory);
   const facets = semanticEvidenceFacets(resolvedQuestion, { ...(queryPlan || {}), rewritten_question: resolvedQuestion });
   const sources = answerSources || [];
+  if (sources.some((source) => sourceHasIdentifierBoundPersonalAnswer(resolvedQuestion, source))) {
+    return true;
+  }
   const exactFacets = facets.filter((facet) => requestedSpecificAnswerKinds(facet.text).size > 0);
-  if (exactFacets.some((facet) => sources.some((source) => sourceHasSpecificAnswerForFacet(facet.text, source)))) {
+  if (exactFacets.some((facet) => sources.some((source) =>
+    !sourceExplicitlyDefersOrOmitsPersonalAnswer(facet.text, source) &&
+    sourceHasSpecificAnswerForFacet(facet.text, source)
+  ))) {
     return true;
   }
 
@@ -3451,6 +3548,7 @@ function selectedEvidenceSupportsConcreteAnswer(query, answerSources, retrievalQ
   let coveredQualitativeFacets = 0;
   for (const facet of facets.filter((item) => !requestedSpecificAnswerKinds(item.text).size)) {
     const covered = sources.some((source) => {
+    if (sourceExplicitlyDefersOrOmitsPersonalAnswer(facet.text, source)) return false;
     const candidate = { result: source, text: source?.text, prompt: { text: source?.text } };
     return semanticCandidateProvidesConcreteFacetEvidence(facet, candidate, resolvedQuestion);
     });
@@ -3473,8 +3571,17 @@ async function evaluateGroundedAnswerCandidate(
   const aligned = cleanAbstention
     ? { text: cleaned, sources: [] }
     : alignAnswerCitations(cleaned, answerSources);
-  let validation = citedAnswerValidation(query, aligned, answerSources, retrievalQuery);
-  if (cleanAbstention && selectedEvidenceSupportsConcreteAnswer(query, answerSources, retrievalQuery, queryPlan)) {
+  let validation = citedAnswerValidation(
+    query,
+    aligned,
+    answerSources,
+    retrievalQuery,
+    userProvidedGroundingText(query, memory)
+  );
+  if (
+    cleanAbstention &&
+    selectedEvidenceSupportsConcreteAnswer(query, answerSources, retrievalQuery, queryPlan, memory)
+  ) {
     validation = {
       ...validation,
       ok: false,
@@ -4862,12 +4969,14 @@ function canonicalNumericFactsConflict(claimFacts, sourceFacts, sourceText) {
 function deterministicNamedTerms(value) {
   const text = String(value || "").replace(/\[(\d+)\]/g, " ");
   const terms = new Set();
+  const ignored = new Set(["am", "pm"]);
   for (const match of text.matchAll(/\b[A-Za-z][A-Za-z0-9&.-]{1,80}\b/g)) {
     const token = match[0].replace(/[.,;:]+$/, "");
     const hasDigit = /\d/.test(token);
     const acronym = /^[A-Z]{2,}[A-Za-z0-9.-]*$/.test(token);
     const internalCapital = /^[A-Z][a-z]+(?:[A-Z][A-Za-z0-9]*)+$/.test(token);
-    if ((hasDigit || acronym || internalCapital) && token.length >= 2) terms.add(normalizeText(token));
+    const normalized = normalizeText(token);
+    if (!ignored.has(normalized) && (hasDigit || acronym || internalCapital) && token.length >= 2) terms.add(normalized);
   }
   return Array.from(terms);
 }
@@ -4882,6 +4991,10 @@ function sourceSupportsNamedTerm(sourceText, term) {
   );
   if (sourceIdentifiers.has(identifier)) return true;
   if (/^[a-z]{3,6}$/.test(identifier)) {
+    for (const match of String(sourceText || "").matchAll(/\b[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*){1,5}\b/g)) {
+      const acronym = match[0].split("-").map((word) => word[0]).join("").toLowerCase();
+      if (acronym === identifier) return true;
+    }
     for (const match of String(sourceText || "").matchAll(/\b(?:[A-Z][a-z]+\s+){1,5}[A-Z][a-z]+\b/g)) {
       const acronym = match[0].split(/\s+/).map((word) => word[0]).join("").toLowerCase();
       if (acronym === identifier) return true;
@@ -5144,8 +5257,20 @@ function rawEvidenceCopyLooksLikeDump(text, sources) {
   return longCopies >= 2;
 }
 
-function deterministicClaimVetoReasons(text, sources) {
+function userProvidedGroundingText(query, memory = []) {
+  const relevantMemory = scopedConversationMemory(query, memory);
+  return [
+    query,
+    ...relevantMemory.map((turn) => turn?.user)
+  ]
+    .map((value) => clampText(String(value || ""), MAX_QUERY_CHARS))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function deterministicClaimVetoReasons(text, sources, userProvidedText = "") {
   const reasons = [];
+  const userProvidedNames = new Set(deterministicNamedTerms(userProvidedText));
   for (const block of answerClaimBlocks(text)) {
     const citationNumbers = Array.from(new Set(Array.from(block.matchAll(/\[(\d+)\]/g), (match) => Number(match[1]))));
     const citedSources = citationNumbers.map((number) => sources[number - 1]).filter(Boolean);
@@ -5163,7 +5288,9 @@ function deterministicClaimVetoReasons(text, sources) {
         }
       }
 
-      const missingNames = deterministicNamedTerms(claim).filter((term) => !sourceSupportsNamedTerm(namedSourceText, term));
+      const missingNames = deterministicNamedTerms(claim).filter((term) =>
+        !userProvidedNames.has(term) && !sourceSupportsNamedTerm(namedSourceText, term)
+      );
       if (missingNames.length) reasons.push("A cited claim introduced a named entity that is absent from its cited excerpt.");
 
       if (relevantSourceText && claimSourcePolarityContradiction(claim, relevantSourceText)) {
@@ -5174,7 +5301,13 @@ function deterministicClaimVetoReasons(text, sources) {
   return Array.from(new Set(reasons));
 }
 
-function citedAnswerValidation(query, answer, fallbackSources = [], retrievalQuery = query) {
+function citedAnswerValidation(
+  query,
+  answer,
+  fallbackSources = [],
+  retrievalQuery = query,
+  userProvidedText = query
+) {
   const value = answer || { text: "", sources: [] };
   const text = String(value.text || "").trim();
   const sourceList = (Array.isArray(value.sources) && value.sources.length ? value.sources : fallbackSources || []).slice(0, 8);
@@ -5205,7 +5338,7 @@ function citedAnswerValidation(query, answer, fallbackSources = [], retrievalQue
     if (text && !answerHasCitationCoverage(text)) {
       reasons.push("Every factual paragraph or checklist item needs a citation.");
     }
-    reasons.push(...deterministicClaimVetoReasons(text, sourceList));
+    reasons.push(...deterministicClaimVetoReasons(text, sourceList, userProvidedText));
   } else if (citationNumbers.length) {
     reasons.push("A clean not-found answer must not cite sources.");
   }
@@ -5433,11 +5566,29 @@ const SEMANTIC_EVIDENCE_LIMITS = Object.freeze({
   maxDeepSelectedTotal: 8
 });
 
-function resolvedQuestionForRag(query, queryPlan = null) {
+function hasConversationHistory(memory = []) {
+  return Array.isArray(memory) && memory.some((turn) => normalizeText(turn?.user || ""));
+}
+
+function resolvedQuestionForRag(query, queryPlan = null, memory = []) {
   const original = clampText(String(query || "").replace(/\s+/g, " ").trim(), MAX_QUERY_CHARS);
   const rewritten = clampText(String(queryPlan?.rewritten_question || "").replace(/\s+/g, " ").trim(), MAX_QUERY_CHARS);
-  if (!rewritten || !isFollowUpQuery(original)) return original || rewritten;
-  return rewritten;
+  if (!requiresConversationResolution(original) || !hasConversationHistory(memory)) {
+    return original || rewritten;
+  }
+
+  const standalone = [
+    rewritten,
+    queryPlan?.retrieval_query,
+    ...(queryPlan?.search_queries || [])
+  ]
+    .map((value) => clampText(String(value || "").replace(/\s+/g, " ").trim(), MAX_QUERY_CHARS))
+    .find((value) =>
+      value &&
+      normalizeText(value) !== normalizeText(original) &&
+      !isEllipticalFollowUpQuestion(value)
+    );
+  return standalone || rewritten || original;
 }
 
 function semanticEvidenceFacets(query, queryPlan = null) {
@@ -6060,7 +6211,7 @@ function semanticCandidateRankForFacet(facet, candidate, query = "") {
   if (facetTerms.length >= 5 && matchedTerms.length < 2) return -Infinity;
   const concrete = semanticCandidateComparableAnswerScore(facet, candidate);
   const routeBonus = Array.isArray(candidate.prompt?.route_types) ? candidate.prompt.route_types.length * 25 : 0;
-  const officialBonus = isPolicyOrYesNoEvidenceQuestion(query) && !candidate.result?.source_pack_id ? 5000 : 0;
+  const officialBonus = hasExplicitAuthorityIntent(query) && !candidate.result?.source_pack_id ? 5000 : 0;
   return officialBonus + relevance * 100 + Math.max(0, concrete) * 20 + routeBonus + (Number(candidate.result?.score) || 0) / 100;
 }
 
@@ -6074,7 +6225,7 @@ function semanticCandidateProvidesConcreteFacetEvidence(facet, candidate, query 
 function semanticCoverageAnchorCandidates(facets, candidatePool, query = "") {
   const anchors = [];
   const seen = new Set();
-  const comparison = /\b(?:compare|conflict|differ|difference|official|versus|vs)\b/i.test(String(query || ""));
+  const comparison = hasSourceComparisonIntent(query);
   for (const facet of facets || []) {
     const ranked = (candidatePool || [])
       .map((candidate) => ({
@@ -6101,9 +6252,10 @@ function semanticCoverageAnchorCandidates(facets, candidatePool, query = "") {
 }
 
 function semanticRawRouteAnchorCandidates(candidatePool, query = "") {
-  const comparison = /\b(?:compare|contrast|distinguish|versus|vs|conflict|superseded|operative|retired|newer|older|legacy)\b/i.test(String(query || ""));
+  const comparison = hasSourceComparisonIntent(query);
   const explicitMultipart = /\b(?:both|each|respectively)\b/i.test(String(query || ""));
   const maximumParents = comparison || explicitMultipart ? 2 : 1;
+  const rawFacet = { facet_id: "RAW", text: String(query || "") };
   const anchors = [];
   const seenParents = new Set();
   const ordered = (candidatePool || [])
@@ -6114,10 +6266,15 @@ function semanticRawRouteAnchorCandidates(candidatePool, query = "") {
       Array.isArray(candidate.prompt?.route_types) &&
       candidate.prompt.route_types.includes("raw")
     )
+    .map((entry) => ({
+      ...entry,
+      relevance: semanticCandidateRankForFacet(rawFacet, entry.candidate, query)
+    }))
+    .filter((entry) => Number.isFinite(entry.relevance))
     .sort((left, right) => {
       const leftIndex = Number.isFinite(left.candidate.sourceIndex) ? left.candidate.sourceIndex : left.index;
       const rightIndex = Number.isFinite(right.candidate.sourceIndex) ? right.candidate.sourceIndex : right.index;
-      return leftIndex - rightIndex || left.index - right.index;
+      return right.relevance - left.relevance || leftIndex - rightIndex || left.index - right.index;
     });
   for (const { candidate } of ordered) {
     const parent = sourceDedupeKey(candidate.result);
@@ -6283,6 +6440,33 @@ function isPolicyOrYesNoEvidenceQuestion(query) {
   return policySignal || (yesNoOpening && governedSubject);
 }
 
+function hasExplicitAuthorityIntent(query) {
+  const normalized = normalizeText(query);
+  const sourceNoun = "(?:guidance|instructions?|notice|policy|policies|requirements?|rules?|source|version)";
+  const authorityWord = "(?:official|authoritative|binding|operative|superseding)";
+  return (
+    new RegExp(`\\b${authorityWord}\\b.{0,80}\\b${sourceNoun}\\b`).test(normalized) ||
+    new RegExp(`\\b${sourceNoun}\\b.{0,80}\\b${authorityWord}\\b`).test(normalized) ||
+    new RegExp(`\\b(?:latest|current)\\b.{0,80}\\b${sourceNoun}\\b`).test(normalized) ||
+    new RegExp(`\\b${sourceNoun}\\b.{0,80}\\b(?:latest|current|operative|binding)\\b`).test(normalized) ||
+    /\b(?:blackboard specific|takes? precedence)\b/.test(normalized) ||
+    /\bwhich\b.{0,80}\b(?:controls?|should i (?:follow|trust|use|rely on))\b/.test(normalized)
+  );
+}
+
+function hasSourceComparisonIntent(query) {
+  const normalized = normalizeText(query);
+  const explicitComparison = /\b(?:authoritative|compare|conflict|contrast|current|differ|different|difference|distinguish|legacy|newer|old|older|operative|replaces?|retired|supersed(?:e|ed|es|ing)|versus|vs)\b/.test(normalized);
+  if (explicitComparison) return true;
+  const sourceFamilies = [
+    /\bblackboard\b/,
+    /\b(?:schwarzman|c11)\b/,
+    /\bofficial\b/,
+    /\b(?:unofficial|survival guide)\b/
+  ].filter((pattern) => pattern.test(normalized)).length;
+  return sourceFamilies >= 2 && /\b(?:but|however|whereas)\b/.test(normalized);
+}
+
 function semanticCompoundWindowKey(window) {
   return (window || []).map((item) => {
     const resourceId = String(item?.resource_id || "");
@@ -6322,7 +6506,8 @@ function semanticCompoundDeepReadResults(parentCandidates) {
         source_pack_page_range: pageRanges.join(", ") || window[0].source_pack_page_range || "",
         semantic_compound_part_count: window.length,
         semantic_compound_start_index: Number(window[0].search_part_index),
-        semantic_compound_window_key: semanticCompoundWindowKey(window)
+        semantic_compound_window_key: semanticCompoundWindowKey(window),
+        semantic_compound_chunk_keys: window.map((item) => evidenceChunkKey(item)).filter(Boolean)
       });
     }
   }
@@ -6414,6 +6599,9 @@ function semanticDeepReadBatches(results, requestedCandidate, retrievalQuery, fa
     parentId: requestedCandidate.parentId,
     result: entry.result,
     chunkKey: evidenceChunkKey(entry.result),
+    constituentChunkKeys: Array.isArray(entry.result?.semantic_compound_chunk_keys)
+      ? entry.result.semantic_compound_chunk_keys.filter(Boolean)
+      : [],
     text: entry.text,
     prompt: {
       candidate_id: "D" + (batchIndex + 1) + "C" + String(entryIndex + 1).padStart(2, "0"),
@@ -6424,6 +6612,25 @@ function semanticDeepReadBatches(results, requestedCandidate, retrievalQuery, fa
       text: entry.text
     }
   })));
+}
+
+function semanticCandidateChunkKeys(candidate) {
+  const primary = candidate?.chunkKey || evidenceChunkKey(candidate?.result || candidate);
+  const constituents = Array.isArray(candidate?.constituentChunkKeys)
+    ? candidate.constituentChunkKeys
+    : Array.isArray(candidate?.result?.semantic_compound_chunk_keys)
+      ? candidate.result.semantic_compound_chunk_keys
+      : [];
+  const keys = constituents.length ? constituents : [primary];
+  return Array.from(new Set(keys.filter(Boolean)));
+}
+
+function semanticCandidateHasUnseenChunk(candidate, seenChunkKeys) {
+  return semanticCandidateChunkKeys(candidate).some((key) => !seenChunkKeys.has(key));
+}
+
+function markSemanticCandidateChunksSeen(candidate, seenChunkKeys) {
+  for (const key of semanticCandidateChunkKeys(candidate)) seenChunkKeys.add(key);
 }
 
 function semanticDeepReadMessages(query, facets, batch, batchIndex) {
@@ -6581,7 +6788,8 @@ async function selectSemanticEvidenceForApi(
   deterministicSources,
   retrievalQueries = [],
   retrievalQuery = query,
-  queryPlan = null
+  queryPlan = null,
+  memory = []
 ) {
   const safeRetrievalResults = filterSemanticInstructionInjectedSources(retrievalResults);
   const safeDeterministicSources = filterSemanticInstructionInjectedSources(deterministicSources);
@@ -6589,9 +6797,12 @@ async function selectSemanticEvidenceForApi(
     return deterministicSemanticEvidenceFallback(safeDeterministicSources, "not_applicable", 0);
   }
 
-  const resolvedQuestion = resolvedQuestionForRag(query, queryPlan);
+  const resolvedQuestion = resolvedQuestionForRag(query, queryPlan, memory);
   const facets = semanticEvidenceFacets(resolvedQuestion, { ...(queryPlan || {}), rewritten_question: resolvedQuestion });
-  const candidatePool = buildSemanticEvidenceCandidatePool(safeRetrievalResults, query, retrievalQueries, queryPlan);
+  const candidatePool = buildSemanticEvidenceCandidatePool(
+    safeRetrievalResults, resolvedQuestion, retrievalQueries,
+    { ...(queryPlan || {}), rewritten_question: resolvedQuestion }
+  );
   if (!candidatePool.length) {
     return deterministicSemanticEvidenceFallback(safeDeterministicSources, "empty_candidate_pool", 0);
   }
@@ -6600,7 +6811,7 @@ async function selectSemanticEvidenceForApi(
   let selectorCalls = 0;
   try {
     let selection = null;
-    const enforceAuthority = isPolicyOrYesNoEvidenceQuestion(resolvedQuestion);
+    const enforceAuthority = hasExplicitAuthorityIntent(resolvedQuestion);
     let selectorFailureReason = "invalid_selector_output";
     for (let attempt = 0; attempt < 2 && !selection; attempt += 1) {
       selectorCalls += 1;
@@ -6680,7 +6891,7 @@ async function selectSemanticEvidenceForApi(
     const deepReadRank = (candidate) => {
       const facetScore = Math.max(0, ...facets.map((facet) => sourceEvidenceScore(facet.text, candidate.result, facet.text)));
       const selectedBonus = selectedIdSet.has(candidate.id) ? 3000 : 0;
-      const officialBonus = policyOrYesNo && !candidate.result?.source_pack_id ? 10000 : 0;
+      const officialBonus = hasExplicitAuthorityIntent(resolvedQuestion) && !candidate.result?.source_pack_id ? 10000 : 0;
       return selectedBonus + officialBonus + facetScore * 100 + (Number(candidate.result?.score) || 0);
     };
     const explicitlyRequested = candidatePool.find((candidate) => candidate.id === selection.deepReadCandidateId);
@@ -6711,9 +6922,11 @@ async function selectSemanticEvidenceForApi(
       const unresolvedParent = unresolvedParentKeys.has(requestedParentKey);
       if (selectedCount >= SEMANTIC_EVIDENCE_LIMITS.maxCombinedPerParent && !unresolvedParent) continue;
       if (!selection.insufficient && !policyOrYesNo && !requestedCandidate.result?.source_pack_id && !unresolvedParent) continue;
-      const batches = semanticDeepReadBatches(safeRetrievalResults, requestedCandidate, retrievalQuery, deepFacets);
+      const batches = semanticDeepReadBatches(safeRetrievalResults, requestedCandidate, retrievalQuery, deepFacets)
+        .map((batch) => batch.filter((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys)))
+        .filter((batch) => batch.length);
       for (const batch of batches) deepVisibleCandidates.push(...batch);
-      const hasUnseenSibling = batches.some((batch) => batch.some((candidate) => !deepSelectedChunkKeys.has(candidate.chunkKey)));
+      const hasUnseenSibling = batches.some((batch) => batch.some((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys)));
       if (!hasUnseenSibling) continue;
       deepParentsRead += 1;
       const maximumForParent = Math.max(
@@ -6725,7 +6938,7 @@ async function selectSemanticEvidenceForApi(
            addedForParent < maximumForParent &&
            deepSelectedCandidates.length < SEMANTIC_EVIDENCE_LIMITS.maxDeepSelectedTotal; batchIndex += 1) {
         const batch = batches[batchIndex];
-        if (!batch.some((candidate) => !deepSelectedChunkKeys.has(candidate.chunkKey))) continue;
+        if (!batch.some((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys))) continue;
         selectorCalls += 1;
         deepReadCalls += 1;
         const deepResponse = await callChatCompletion({
@@ -6752,9 +6965,8 @@ async function selectSemanticEvidenceForApi(
         for (const id of deepSelection.selectedIds || []) {
           if (addedForParent >= maximumForParent || deepSelectedCandidates.length >= SEMANTIC_EVIDENCE_LIMITS.maxDeepSelectedTotal) break;
           const candidate = batch.find((item) => item.id === id);
-          const chunkKey = candidate?.chunkKey || evidenceChunkKey(candidate?.result);
-          if (!candidate || !chunkKey || deepSelectedChunkKeys.has(chunkKey)) continue;
-          deepSelectedChunkKeys.add(chunkKey);
+          if (!candidate || !semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys)) continue;
+          markSemanticCandidateChunksSeen(candidate, deepSelectedChunkKeys);
           deepSelectedCandidates.push(candidate);
           addedForParent += 1;
         }
@@ -6803,7 +7015,7 @@ async function selectSemanticEvidenceForApi(
 
 async function buildApiAnswer(query, results, memory = [], retrievalQuery = query, queryPlan = null) {
   const context = answerPromptSources(results, 5, 24000);
-  const promptQuery = resolvedQuestionForRag(query, queryPlan);
+  const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
   const memoryText = formatConversationMemory(memory);
   const expandedQueryText = promptRetrievalQuery !== promptQuery ? "\nExpanded retrieval query: " + promptRetrievalQuery : "";
@@ -6864,6 +7076,7 @@ async function buildQueryPlan(query, memory = [], fallbackRetrievalQuery = query
         "Valid intents: task_deadline, course_list, resource_lookup, document_question, comparison, capability, out_of_scope. " +
         "Return fields: intent, rewritten_question, retrieval_query, search_queries, source_preferences, scope, confidence. " +
         "search_queries must contain 2 to 4 short complementary searches: one faithful to the user's wording and others using likely source terminology or synonyms. Never omit a named entity from every search. " +
+        "For a follow-up, rewritten_question must be standalone and explicitly name the prior subject; never leave references such as 'service', 'the online part', 'it', or 'what happens next' unresolved. " +
         "Use scope=in_scope for Blackboard/Tsinghua/Schwarzman resource questions, capability for tool/about-index questions, out_of_scope for unrelated general knowledge."
     },
     {
@@ -6882,7 +7095,23 @@ async function buildQueryPlan(query, memory = [], fallbackRetrievalQuery = query
     maxTokens: 500,
     temperature: 0
   });
-  return normalizeQueryPlan(parseJsonObjectFromText(response), promptQuery, promptFallbackRetrievalQuery);
+  const rawPlan = parseJsonObjectFromText(response);
+  const allowedNamedTerms = new Set(deterministicNamedTerms(userProvidedGroundingText(promptQuery, memory)));
+  const plannerNamedTerms = deterministicNamedTerms([
+    rawPlan?.rewritten_question,
+    rawPlan?.retrieval_query,
+    ...(Array.isArray(rawPlan?.search_queries) ? rawPlan.search_queries : []),
+    ...(Array.isArray(rawPlan?.source_preferences) ? rawPlan.source_preferences : [])
+  ].filter(Boolean).join(" "));
+  if (plannerNamedTerms.some((term) => !allowedNamedTerms.has(term))) {
+    return defaultRagPlan(promptQuery, promptFallbackRetrievalQuery);
+  }
+  return normalizeQueryPlan(
+    rawPlan,
+    promptQuery,
+    promptFallbackRetrievalQuery,
+    hasConversationHistory(memory)
+  );
 }
 
 function defaultRagPlan(query, retrievalQuery = query) {
@@ -6898,7 +7127,12 @@ function defaultRagPlan(query, retrievalQuery = query) {
   };
 }
 
-function normalizeQueryPlan(value, query, fallbackRetrievalQuery = query) {
+function normalizeQueryPlan(
+  value,
+  query,
+  fallbackRetrievalQuery = query,
+  hasConversationMemory = null
+) {
   const raw = value && typeof value === "object" ? value : {};
   const plan = defaultRagPlan(query, fallbackRetrievalQuery);
   const allowedIntents = new Set([
@@ -6922,15 +7156,41 @@ function normalizeQueryPlan(value, query, fallbackRetrievalQuery = query) {
     4
   ).map((item) => clampText(item, 320));
   if (!plan.search_queries.length) plan.search_queries = [plan.retrieval_query];
-  plan.source_preferences = normalizeStringArray(raw.source_preferences || raw.sources || raw.keywords, 10);
+  if (hasConversationMemory === false && requiresConversationResolution(query)) {
+    plan.rewritten_question = query;
+    plan.retrieval_query = fallbackRetrievalQuery || query;
+    plan.search_queries = [plan.retrieval_query].filter(Boolean);
+    plan.source_preferences = [];
+  } else if (
+    hasConversationMemory !== false &&
+    requiresConversationResolution(query) &&
+    isEllipticalFollowUpQuestion(plan.rewritten_question)
+  ) {
+    const standalone = [plan.retrieval_query, ...plan.search_queries]
+      .map((item) => clampText(String(item || "").replace(/\s+/g, " ").trim(), 500))
+      .find((item) =>
+        item &&
+        normalizeText(item) !== normalizeText(query) &&
+        !isEllipticalFollowUpQuestion(item)
+      );
+    if (standalone) plan.rewritten_question = standalone;
+  }
+  if (!(hasConversationMemory === false && requiresConversationResolution(query))) {
+    plan.source_preferences = normalizeStringArray(raw.source_preferences || raw.sources || raw.keywords, 10);
+  }
   plan.needs_video_search = false;
   const confidence = Number(raw.confidence);
   if (Number.isFinite(confidence)) plan.confidence = Math.max(0, Math.min(1, confidence));
   return plan;
 }
 
-function plannedRetrievalQuery(plan, query, fallbackRetrievalQuery = query) {
-  const normalizedPlan = normalizeQueryPlan(plan, query, fallbackRetrievalQuery);
+function plannedRetrievalQuery(
+  plan,
+  query,
+  fallbackRetrievalQuery = query,
+  hasConversationMemory = null
+) {
+  const normalizedPlan = normalizeQueryPlan(plan, query, fallbackRetrievalQuery, hasConversationMemory);
   const pieces = [
     normalizedPlan.retrieval_query,
     ...normalizedPlan.search_queries,
@@ -6974,8 +7234,14 @@ function questionFacetRetrievalQueries(query, limit = 4) {
   return facets;
 }
 
-function retrievalQueriesForPlan(query, baseRetrievalQuery = query, primaryRetrievalQuery = query, plan = null) {
-  const normalizedPlan = normalizeQueryPlan(plan || {}, query, baseRetrievalQuery);
+function retrievalQueriesForPlan(
+  query,
+  baseRetrievalQuery = query,
+  primaryRetrievalQuery = query,
+  plan = null,
+  hasConversationMemory = null
+) {
+  const normalizedPlan = normalizeQueryPlan(plan || {}, query, baseRetrievalQuery, hasConversationMemory);
   const candidates = [
     query,
     baseRetrievalQuery,
@@ -7166,7 +7432,7 @@ async function verifyApiAnswerGrounding(
   queryPlan = null,
   phase = "draft"
 ) {
-  const promptQuery = resolvedQuestionForRag(query, queryPlan);
+  const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
   const sourceList = answerPromptSources(sources, 5, 24000);
   const finalPhase = phase === "recovery" || phase === "reviewer";
@@ -7220,7 +7486,7 @@ async function reviewApiAnswer(
   queryPlan = null,
   validationFeedback = ""
 ) {
-  const promptQuery = resolvedQuestionForRag(query, queryPlan);
+  const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
   const sourceList = answerPromptSources(sources, 5, 24000);
   const messages = [
@@ -7266,7 +7532,7 @@ async function reviewApiAnswer(
 }
 
 async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery = query, queryPlan = null, validationFeedback = "") {
-  const promptQuery = resolvedQuestionForRag(query, queryPlan);
+  const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
   const sourceList = answerPromptSources(sources, 5, 24000);
   const messages = [
@@ -7336,7 +7602,7 @@ function rememberTurn(userText, assistantText) {
 
 function buildRetrievalQuery(query, memory) {
   const recent = memory.slice(-2);
-  if (!recent.length || !isFollowUpQuery(query)) return query;
+  if (!recent.length || !requiresConversationResolution(query)) return query;
   const contextText = recent
     .flatMap((turn) => [turn.user, turn.assistant])
     .map((value) => clampText(value, 500))
@@ -7345,9 +7611,57 @@ function buildRetrievalQuery(query, memory) {
   return clampText(`${query} ${contextText}`, 1800);
 }
 
+function isEllipticalFollowUpQuestion(query) {
+  const normalized = normalizeText(query);
+  if (!normalized) return false;
+  const contextualPronoun = /\b(?:that|this|these|those|it|its|they|them|their|there|his|her|former|latter|above|previous|earlier|same)\b/.exec(normalized);
+  if (contextualPronoun) {
+    const pronoun = contextualPronoun[0];
+    const prefix = normalized.slice(0, contextualPronoun.index);
+    const hasLocalGeneralAntecedent = /\b(?:students?|visitors?|guests?|documents?|records?|forms?|courses?|classes?|resources?|requirements?|deadlines?|options?|services?|trains?|buses?|claims?|applications?)\b/.test(prefix);
+    const hasLocalPersonAntecedent = /\b(?:student|visitor|guest|applicant|traveler|person|member)\b/.test(prefix);
+    const hasLocalSingularThingAntecedent = /\b(?:document|record|form|course|class|resource|requirement|deadline|option|service|train|bus|claim|application|visa|passport|permit|bag|carry on|dining hall)\b/.test(prefix);
+    // A pronoun whose antecedent is stated in the same question is not a
+    // conversation follow-up (for example, "Can students ... and what must
+    // they retain?"). Keep the whole standalone question intact.
+    const locallyBound =
+      (/^(?:they|them|their)$/.test(pronoun) && hasLocalGeneralAntecedent) ||
+      (/^(?:his|her)$/.test(pronoun) && hasLocalPersonAntecedent) ||
+      (/^(?:it|its)$/.test(pronoun) && hasLocalSingularThingAntecedent);
+    if (!locallyBound) return true;
+  }
+  const ellipticalPhrase = /\b(?:what happens next|what comes next|online (?:part|portion|step)|what do i use once regular service (?:has )?(?:ended|stopped)|after regular service (?:has )?(?:ended|stopped))\b/.test(normalized);
+  if (!ellipticalPhrase) return false;
+  const ignored = new Set([
+    "after", "comes", "do", "ended", "happens", "has", "i", "next", "online", "once", "part",
+    "portion", "regular", "service", "step", "stopped", "the", "use", "what", "when"
+  ]);
+  const subjectTerms = normalized
+    .split(" ")
+    .map((term) => term.replace(/[^a-z0-9]/g, ""))
+    .filter((term) => term.length > 2 && !STOP_WORDS.has(term) && !ignored.has(term));
+  return subjectTerms.length === 0;
+}
+
+function requiresConversationResolution(query) {
+  if (isEllipticalFollowUpQuestion(query)) return true;
+  const normalized = normalizeText(query);
+  return (
+    /^(?:which ones?|which of (?:them|those))\b/.test(normalized) ||
+    /^(?:(?:can|could|would) you )?(?:link|send|show) me\b.{0,100}\b(?:resources?|links?)\b/.test(normalized)
+  );
+}
+
+function scopedConversationMemory(query, memory = []) {
+  if (!requiresConversationResolution(query) || !Array.isArray(memory)) return [];
+  return memory
+    .filter((turn) => normalizeText(turn?.user || ""))
+    .slice(-2);
+}
+
 function isFollowUpQuery(query) {
   const normalized = normalizeText(query);
-  return /\b(that|this|these|those|it|they|them|there|above|previous|earlier|same|also|compare|compared|differ|different|difference|versus|vs|what about|how about|follow up|link me|links?|specific resources?|specific links?|direct access|where can i find|send me|show me|which ones?)\b/.test(normalized);
+  return isEllipticalFollowUpQuestion(query) || /\b(also|compare|compared|differ|different|difference|versus|vs|what about|how about|follow up|link me|links?|specific resources?|specific links?|direct access|where can i find|send me|show me|which ones?)\b/.test(normalized);
 }
 
 function formatConversationMemory(memory) {

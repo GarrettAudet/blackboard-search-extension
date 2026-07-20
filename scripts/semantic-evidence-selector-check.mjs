@@ -182,14 +182,19 @@ async function runSelection({
   fallback = deterministicSources,
   queryPlan = plan,
   responder,
+  queries = retrievalQueries,
+  retrievalQuery = query,
+  memory = [],
   hasApiKey = true
 }) {
   const captured = [];
   context.__selectorQuery = query;
   context.__selectorResults = results;
   context.__selectorFallback = fallback;
-  context.__selectorQueries = retrievalQueries;
+  context.__selectorQueries = queries;
+  context.__selectorRetrievalQuery = retrievalQuery;
   context.__selectorPlan = queryPlan;
+  context.__selectorMemory = memory;
   context.__selectorHasApiKey = hasApiKey;
   context.__selectorResponder = async (request) => {
     captured.push(request);
@@ -203,8 +208,9 @@ async function runSelection({
       globalThis.__selectorResults,
       globalThis.__selectorFallback,
       globalThis.__selectorQueries,
-      globalThis.__selectorQuery,
-      globalThis.__selectorPlan
+      globalThis.__selectorRetrievalQuery,
+      globalThis.__selectorPlan,
+      globalThis.__selectorMemory
     );
   `, context);
   return { selection: await context.__selectorPromise, captured };
@@ -254,6 +260,214 @@ if (
   /SUPER_SECRET_API_KEY|ANSWER_KEY_SECRET|INTERNAL_RESOURCE_KEY|event-guide|finance-faq/.test(selectorPrompt)
 ) {
   throw new Error("Selector prompt leaked credentials, answer-key fields, or internal parent/resource keys.");
+}
+
+const transportFollowUpQuery = "What do I use once regular service has ended?";
+const transportResolvedQuestion = "What transportation options are available once regular campus transport service has ended?";
+const transportHistory = [
+  { user: "Can we continue the campus transport question?", assistant: "Yes. What time period do you need to cover?" }
+];
+const transportPlan = {
+  ...plan,
+  rewritten_question: transportResolvedQuestion,
+  retrieval_query: "campus transport after regular service late-night shuttle",
+  search_queries: ["campus transport after regular service late-night shuttle"],
+  source_preferences: []
+};
+const noMemoryTransportPlan = {
+  ...transportPlan,
+  rewritten_question: "Use the invented Orchid Ferry after regular service.",
+  retrieval_query: "invented Orchid Ferry service",
+  search_queries: ["invented Orchid Ferry service"],
+  source_preferences: ["Orchid Ferry"]
+};
+context.__transportFollowUpQuery = transportFollowUpQuery;
+context.__transportResolvedQuestion = transportResolvedQuestion;
+context.__transportHistory = transportHistory;
+context.__transportPlan = transportPlan;
+context.__noMemoryTransportPlan = noMemoryTransportPlan;
+const transportFollowUpContract = vm.runInContext(`({
+  classified: isFollowUpQuery(globalThis.__transportFollowUpQuery),
+  memoryQuery: buildRetrievalQuery(globalThis.__transportFollowUpQuery, globalThis.__transportHistory),
+  resolved: resolvedQuestionForRag(
+    globalThis.__transportFollowUpQuery,
+    globalThis.__transportPlan,
+    globalThis.__transportHistory
+  ),
+  withoutMemory: resolvedQuestionForRag(
+    globalThis.__transportFollowUpQuery,
+    globalThis.__noMemoryTransportPlan,
+    []
+  ),
+  noMemoryPlan: normalizeQueryPlan(
+    globalThis.__noMemoryTransportPlan,
+    globalThis.__transportFollowUpQuery,
+    globalThis.__transportFollowUpQuery,
+    false
+  ),
+  noMemoryPlannedQuery: plannedRetrievalQuery(
+    globalThis.__noMemoryTransportPlan,
+    globalThis.__transportFollowUpQuery,
+    globalThis.__transportFollowUpQuery,
+    false
+  ),
+  noMemoryRetrievalQueries: retrievalQueriesForPlan(
+    globalThis.__transportFollowUpQuery,
+    globalThis.__transportFollowUpQuery,
+    globalThis.__transportFollowUpQuery,
+    globalThis.__noMemoryTransportPlan,
+    false
+  )
+})`, context);
+if (
+  transportFollowUpContract.classified !== true ||
+  !/campus transport/i.test(transportFollowUpContract.memoryQuery) ||
+  transportFollowUpContract.resolved !== transportResolvedQuestion ||
+  transportFollowUpContract.withoutMemory !== transportFollowUpQuery ||
+  transportFollowUpContract.noMemoryPlan.rewritten_question !== transportFollowUpQuery ||
+  transportFollowUpContract.noMemoryPlan.retrieval_query !== transportFollowUpQuery ||
+  Array.from(transportFollowUpContract.noMemoryPlan.search_queries).join("|") !== transportFollowUpQuery ||
+  Array.from(transportFollowUpContract.noMemoryPlan.source_preferences).length !== 0 ||
+  /orchid ferry/i.test(transportFollowUpContract.noMemoryPlannedQuery) ||
+  /orchid ferry/i.test(Array.from(transportFollowUpContract.noMemoryRetrievalQueries).join(" "))
+) {
+  throw new Error(
+    "Elliptical rewrite handling did not require real history or preserve the history-backed rewrite: " +
+      JSON.stringify(transportFollowUpContract)
+  );
+}
+
+const standaloneDiningQuery = "Compare halal and kosher dining options.";
+const unrelatedHistory = [
+  { user: "What documents do I need for the X1 visa?", assistant: "The prior answer mentioned an Orchid Ferry example." }
+];
+const contaminatedStandalonePlan = {
+  ...plan,
+  rewritten_question: "Compare X1 visa guidance with halal and kosher dining options.",
+  retrieval_query: "X1 Orchid Ferry halal kosher dining",
+  search_queries: ["X1 Orchid Ferry halal kosher dining"],
+  source_preferences: ["Orchid Ferry"]
+};
+context.__standaloneDiningQuery = standaloneDiningQuery;
+context.__unrelatedHistory = unrelatedHistory;
+context.__contaminatedStandalonePlan = contaminatedStandalonePlan;
+context.__standalonePlannerRequests = [];
+vm.runInContext(`
+  callChatCompletion = async (request) => {
+    globalThis.__standalonePlannerRequests.push(request);
+    return JSON.stringify(globalThis.__contaminatedStandalonePlan);
+  };
+  globalThis.__standalonePlanPromise = buildQueryPlan(
+    globalThis.__standaloneDiningQuery,
+    scopedConversationMemory(globalThis.__standaloneDiningQuery, globalThis.__unrelatedHistory),
+    globalThis.__standaloneDiningQuery
+  );
+`, context);
+const sanitizedStandalonePlan = await context.__standalonePlanPromise;
+context.__sanitizedStandalonePlan = sanitizedStandalonePlan;
+const standaloneMemoryContract = vm.runInContext(`({
+  requiresResolution: requiresConversationResolution(globalThis.__standaloneDiningQuery),
+  scopedMemoryLength: scopedConversationMemory(globalThis.__standaloneDiningQuery, globalThis.__unrelatedHistory).length,
+  baseQuery: buildRetrievalQuery(
+    globalThis.__standaloneDiningQuery,
+    scopedConversationMemory(globalThis.__standaloneDiningQuery, globalThis.__unrelatedHistory)
+  ),
+  resolved: resolvedQuestionForRag(
+    globalThis.__standaloneDiningQuery,
+    globalThis.__contaminatedStandalonePlan,
+    globalThis.__unrelatedHistory
+  ),
+  groundingText: userProvidedGroundingText(globalThis.__standaloneDiningQuery, globalThis.__unrelatedHistory),
+  plannedQuery: plannedRetrievalQuery(
+    globalThis.__sanitizedStandalonePlan,
+    globalThis.__standaloneDiningQuery,
+    globalThis.__standaloneDiningQuery,
+    false
+  ),
+  whichOnesContext: scopedConversationMemory("Which ones?", globalThis.__unrelatedHistory).length,
+  whichOnesQuery: buildRetrievalQuery(
+    "Which ones?",
+    scopedConversationMemory("Which ones?", globalThis.__unrelatedHistory)
+  ),
+  localStudentPossessive: requiresConversationResolution("What should a student put in her carry-on?"),
+  localDiningPossessive: requiresConversationResolution("What are the dining hall's hours and its meal options?")
+})`, context);
+const standalonePlannerPrompt = JSON.stringify(context.__standalonePlannerRequests[0]?.messages || []);
+const standaloneDiningSource = result({
+  index: 799,
+  parent: "standalone-dining",
+  title: "Dining options",
+  text: "The dining hall labels halal and kosher meal options at each serving station."
+});
+const unrelatedNameValidation = context.citedAnswerValidation(
+  standaloneDiningQuery,
+  { text: "The X1 visa determines the halal and kosher dining options [1].", sources: [standaloneDiningSource] },
+  [standaloneDiningSource],
+  standaloneDiningQuery,
+  context.userProvidedGroundingText(standaloneDiningQuery, unrelatedHistory)
+);
+if (
+  standaloneMemoryContract.requiresResolution !== false ||
+  standaloneMemoryContract.scopedMemoryLength !== 0 ||
+  standaloneMemoryContract.baseQuery !== standaloneDiningQuery ||
+  standaloneMemoryContract.resolved !== standaloneDiningQuery ||
+  standaloneMemoryContract.groundingText !== standaloneDiningQuery ||
+  /x1|orchid ferry/i.test(standalonePlannerPrompt) ||
+  /x1|orchid ferry/i.test(standaloneMemoryContract.plannedQuery) ||
+  sanitizedStandalonePlan.rewritten_question !== standaloneDiningQuery ||
+  unrelatedNameValidation.ok ||
+  standaloneMemoryContract.whichOnesContext !== 1 ||
+  !/x1 visa/i.test(standaloneMemoryContract.whichOnesQuery) ||
+  standaloneMemoryContract.localStudentPossessive !== false ||
+  standaloneMemoryContract.localDiningPossessive !== false
+) {
+  throw new Error("Unrelated conversation history contaminated a standalone query or its grounding whitelist: " + JSON.stringify({
+    standaloneMemoryContract, sanitizedStandalonePlan, standalonePlannerPrompt, unrelatedNameValidation
+  }));
+}
+
+const transportResult = result({
+  index: 800,
+  parent: "campus-transport",
+  title: "Campus transport hours",
+  text:
+    "CAMPUS_TRANSPORT_SENTINEL: Regular bus service ends at midnight. " +
+    "After midnight, request the late shuttle in the campus ride mini-program.",
+  routeIndex: 1,
+  routeQuery: transportPlan.retrieval_query
+});
+const transportFollowUpRun = await runSelection({
+  query: transportFollowUpQuery,
+  results: [transportResult],
+  fallback: [transportResult],
+  queryPlan: transportPlan,
+  queries: [transportFollowUpQuery, transportPlan.retrieval_query, transportResolvedQuestion],
+  retrievalQuery: transportPlan.retrieval_query,
+  memory: transportHistory,
+  responder: (request) => {
+    const payload = payloadFor(request);
+    const transport = payload.candidates.find((candidate) => /CAMPUS_TRANSPORT_SENTINEL/.test(candidate.text));
+    if (!transport) throw new Error("Resolved campus-transport evidence was absent from the selector payload.");
+    return JSON.stringify({
+      facet_selections: payload.facets.map((facet) => ({
+        facet_id: facet.facet_id,
+        candidate_ids: [transport.candidate_id]
+      })),
+      insufficient: false,
+      deep_read_candidate_id: null
+    });
+  }
+});
+const transportPayload = payloadFor(transportFollowUpRun.captured[0]);
+if (
+  transportPayload.question !== transportResolvedQuestion ||
+  transportFollowUpRun.selection.resolved_question !== transportResolvedQuestion ||
+  !transportFollowUpRun.selection.sources.some((source) => /CAMPUS_TRANSPORT_SENTINEL/.test(source.text))
+) {
+  throw new Error(
+    "The exact elliptical follow-up did not carry its resolved transport subject through selection: " +
+      JSON.stringify({ payloadQuestion: transportPayload.question, selection: transportFollowUpRun.selection })
+  );
 }
 
 const crowdoutResults = [
@@ -349,9 +563,9 @@ function anchorCandidate(id, parent, text, sourceIndex, routeTypes = ["raw"]) {
 }
 
 const rawAnchorContractCandidates = [
-  anchorCandidate("RA1", "raw-parent-a", "RAW_PARENT_A_FIRST", 0),
-  anchorCandidate("RA2", "raw-parent-a", "RAW_PARENT_A_SECOND", 1),
-  anchorCandidate("RB1", "raw-parent-b", "RAW_PARENT_B_FIRST", 2),
+  anchorCandidate("RA1", "raw-parent-a", "Schedule milestone deadlines for required actions RAW_PARENT_A_FIRST", 0),
+  anchorCandidate("RA2", "raw-parent-a", "Schedule milestone deadlines for required actions RAW_PARENT_A_SECOND", 1),
+  anchorCandidate("RB1", "raw-parent-b", "Schedule milestone deadlines for required actions RAW_PARENT_B_FIRST", 2),
   anchorCandidate("PL1", "planner-parent", "PLANNER_ONLY", 3, ["planner"])
 ];
 context.__rawAnchorContractCandidates = rawAnchorContractCandidates;
@@ -368,7 +582,244 @@ if (
   throw new Error("Raw-route anchors did not preserve the earliest distinct parent contract: " + JSON.stringify(rawAnchorContract));
 }
 
+const compoundParts = [0, 1].map((partIndex) => ({
+  ...result({
+    index: 1450 + partIndex,
+    parent: "compound-parent",
+    title: "Compound evidence",
+    text: "COMPOUND_PART_" + partIndex + " relevant evidence",
+    score: 4000 - partIndex
+  }),
+  resource_id: "compound-resource",
+  search_part_index: partIndex
+}));
+context.__compoundParts = compoundParts;
+const compoundDedupeContract = vm.runInContext(`(() => {
+  const combined = semanticCompoundDeepReadResults(globalThis.__compoundParts);
+  const compound = combined.find((item) => Number(item.semantic_compound_part_count || 0) > 1);
+  const candidate = {
+    result: compound,
+    chunkKey: evidenceChunkKey(compound),
+    constituentChunkKeys: compound?.semantic_compound_chunk_keys || []
+  };
+  const allSeen = new Set(candidate.constituentChunkKeys);
+  const oneMissing = new Set(candidate.constituentChunkKeys.slice(0, -1));
+  return {
+    constituentCount: candidate.constituentChunkKeys.length,
+    unseenWhenAllConstituentsSeen: semanticCandidateHasUnseenChunk(candidate, allSeen),
+    unseenWhenOneConstituentMissing: semanticCandidateHasUnseenChunk(candidate, oneMissing)
+  };
+})()`, context);
+if (compoundDedupeContract.constituentCount !== 2 || compoundDedupeContract.unseenWhenAllConstituentsSeen !== false || compoundDedupeContract.unseenWhenOneConstituentMissing !== true) {
+  throw new Error("Compound deep-read evidence was not deduplicated by its constituent chunks: " + JSON.stringify(compoundDedupeContract));
+}
+
+const genericRailTimingQuery = "What required lead time applies to sending the rail reservation in?";
+const railRawDistractor = anchorCandidate(
+  "RAIL_DISTRACTOR",
+  "todo-parent",
+  "A mandatory reflection appears in the current To Do panel.",
+  0
+);
+const railRawAnswer = anchorCandidate(
+  "RAIL_ANSWER",
+  "rail-parent",
+  "RAIL_TIMING_SENTINEL: Send the rail reservation at least three business days before departure.",
+  1
+);
+context.__railRawCandidates = [railRawDistractor, railRawAnswer];
+context.__genericRailTimingQuery = genericRailTimingQuery;
+const railRawAnchors = vm.runInContext(
+  "semanticRawRouteAnchorCandidates(globalThis.__railRawCandidates, globalThis.__genericRailTimingQuery).map((candidate) => candidate.id)",
+  context
+);
+if (Array.from(railRawAnchors).join(",") !== "RAIL_ANSWER") {
+  throw new Error("A generic required-timing query preseeded an earlier To Do distractor instead of relevant rail evidence: " + JSON.stringify(railRawAnchors));
+}
+
+const explicitRailAuthorityQuery =
+  "According to the official current Blackboard notice, what required lead time applies to the rail reservation?";
+context.__explicitRailAuthorityQuery = explicitRailAuthorityQuery;
+const authorityIntentContract = vm.runInContext(`({
+  genericDeepRead: isPolicyOrYesNoEvidenceQuestion(globalThis.__genericRailTimingQuery),
+  genericAuthority: typeof hasExplicitAuthorityIntent === "function"
+    ? hasExplicitAuthorityIntent(globalThis.__genericRailTimingQuery)
+    : null,
+  explicitAuthority: typeof hasExplicitAuthorityIntent === "function"
+    ? hasExplicitAuthorityIntent(globalThis.__explicitRailAuthorityQuery)
+    : null,
+  currentVisa: hasExplicitAuthorityIntent("What are the current X1 visa requirements?"),
+  latestRail: hasExplicitAuthorityIntent("Use the latest rail reservation instructions."),
+  currentBalance: hasExplicitAuthorityIntent("What is my current claim balance?"),
+  officialPassportCopy: hasExplicitAuthorityIntent("Do I need an official passport copy?"),
+  sourceConflict: hasSourceComparisonIntent(
+    "Schwarzman says submit three days ahead, but Blackboard says five days. Which should I follow?"
+  ),
+  sourceConflictAuthority: hasExplicitAuthorityIntent(
+    "Schwarzman says submit three days ahead, but Blackboard says five days. Which should I follow?"
+  )
+})`, context);
+if (
+  authorityIntentContract.genericDeepRead !== true ||
+  authorityIntentContract.genericAuthority !== false ||
+  authorityIntentContract.explicitAuthority !== true ||
+  authorityIntentContract.currentVisa !== true ||
+  authorityIntentContract.latestRail !== true ||
+  authorityIntentContract.currentBalance !== false ||
+  authorityIntentContract.officialPassportCopy !== false ||
+  authorityIntentContract.sourceConflict !== true ||
+  authorityIntentContract.sourceConflictAuthority !== true
+) {
+  throw new Error("Generic policy routing and explicit source-authority intent were not kept separate: " + JSON.stringify(authorityIntentContract));
+}
+
+const railPackResult = result({
+  index: 405,
+  parent: "rail-pack",
+  title: "Rail reservation required lead time",
+  text: "RAIL_PACK_TIMING: The required lead time for sending a rail reservation is at least three business days before departure.",
+  routeIndex: 0,
+  routeQuery: genericRailTimingQuery
+});
+const railOfficialResult = {
+  ...result({
+    index: 406,
+    parent: "rail-official",
+    title: "Rail reservation required lead time",
+    text: "RAIL_OFFICIAL_TIMING: The required lead time for sending a rail reservation is at least five business days before departure.",
+    routeIndex: 0,
+    routeQuery: genericRailTimingQuery
+  }),
+  source_pack_id: "",
+  source_pack_document_id: "",
+  source_pack_document_title: "",
+  source_pack_provenance: "Official Blackboard notice"
+};
+const railAuthorityPlan = {
+  ...plan,
+  rewritten_question: genericRailTimingQuery,
+  retrieval_query: genericRailTimingQuery,
+  search_queries: [genericRailTimingQuery],
+  source_preferences: []
+};
+const genericRailAuthorityRun = await runSelection({
+  query: genericRailTimingQuery,
+  results: [railOfficialResult, railPackResult],
+  fallback: [railPackResult],
+  queryPlan: railAuthorityPlan,
+  queries: [genericRailTimingQuery],
+  responder: (request) => {
+    const payload = payloadFor(request);
+    if (stageFor(request) === "deep") {
+      const candidate = payload.candidates[0];
+      return JSON.stringify({
+        facet_selections: payload.facets.map((facet) => ({
+          facet_id: facet.facet_id,
+          candidate_ids: candidate ? [candidate.candidate_id] : []
+        })),
+        insufficient: !candidate
+      });
+    }
+    const packCandidate = payload.candidates.find((candidate) => /RAIL_PACK_TIMING/.test(candidate.text));
+    if (!packCandidate) throw new Error("The generic rail selector payload lost its answer-bearing pack evidence.");
+    return JSON.stringify({
+      facet_selections: payload.facets.map((facet) => ({
+        facet_id: facet.facet_id,
+        candidate_ids: [packCandidate.candidate_id]
+      })),
+      insufficient: false,
+      deep_read_candidate_id: null
+    });
+  }
+});
+if (
+  !["semantic", "semantic_deep_read"].includes(genericRailAuthorityRun.selection.mode) ||
+  genericRailAuthorityRun.selection.reason !== "" ||
+  genericRailAuthorityRun.captured.filter((request) => stageFor(request) === "selector").length !== 1 ||
+  !genericRailAuthorityRun.selection.sources.some((source) => /RAIL_PACK_TIMING/.test(source.text))
+) {
+  throw new Error(
+    "A generic required-timing query incorrectly forced official-source selection or lost rail evidence: " +
+      JSON.stringify({
+        selection: genericRailAuthorityRun.selection,
+        selector_payloads: genericRailAuthorityRun.captured.map(payloadFor),
+        warnings
+      })
+  );
+}
+
+const railAuthorityFacet = { facet_id: "F01", text: genericRailTimingQuery };
+const railPackCandidate = { ...railRawAnswer, id: "PACK_ONLY", result: railPackResult, text: railPackResult.text, prompt: { text: railPackResult.text, route_types: ["raw"] } };
+const railOfficialCandidate = { ...railRawDistractor, id: "OFFICIAL", result: railOfficialResult, text: railOfficialResult.text, prompt: { text: railOfficialResult.text, route_types: ["raw"] } };
+context.__railAuthorityFacet = railAuthorityFacet;
+context.__railAuthorityCandidates = [railPackCandidate, railOfficialCandidate];
+const railAuthorityScores = vm.runInContext(`({
+  pack: semanticCandidateComparableAnswerScore(globalThis.__railAuthorityFacet, globalThis.__railAuthorityCandidates[0]),
+  official: semanticCandidateComparableAnswerScore(globalThis.__railAuthorityFacet, globalThis.__railAuthorityCandidates[1]),
+  packRank: semanticCandidateRankForFacet(globalThis.__railAuthorityFacet, globalThis.__railAuthorityCandidates[0], globalThis.__genericRailTimingQuery),
+  officialRank: semanticCandidateRankForFacet(globalThis.__railAuthorityFacet, globalThis.__railAuthorityCandidates[1], globalThis.__genericRailTimingQuery)
+})`, context);
+const explicitAuthoritySanity = vm.runInContext(
+  "semanticSelectionPassesDeterministicSanity(" +
+    "{ selectedIds: ['PACK_ONLY'], facetSelections: [{ facet_id: 'F01', candidate_ids: ['PACK_ONLY'] }] }, " +
+    "[globalThis.__railAuthorityFacet], globalThis.__railAuthorityCandidates, " +
+    "hasExplicitAuthorityIntent(globalThis.__explicitRailAuthorityQuery))",
+  context
+);
+if (explicitAuthoritySanity !== false) {
+  throw new Error(
+    "Explicit official/current authority intent did not reject a pack-only selection when comparable official evidence existed: " +
+      JSON.stringify(railAuthorityScores)
+  );
+}
+
 const requiredTodayCandidate = anchorCandidate("TODAY", "today-parent", "TODAY_PANEL_ANCHOR unrelated snapshot boundary", 0);
+
+const sourceConflictQuery =
+  "Schwarzman says submit three days ahead, but Blackboard says five days. Which should I follow?";
+const sourceConflictRun = await runSelection({
+  query: sourceConflictQuery,
+  results: [railPackResult, railOfficialResult],
+  fallback: [railPackResult],
+  queryPlan: {
+    ...railAuthorityPlan,
+    rewritten_question: sourceConflictQuery,
+    retrieval_query: sourceConflictQuery,
+    search_queries: [sourceConflictQuery]
+  },
+  queries: [sourceConflictQuery],
+  retrievalQuery: sourceConflictQuery,
+  responder: (request) => {
+    const payload = payloadFor(request);
+    const packCandidate = payload.candidates.find((candidate) => /RAIL_PACK_TIMING/.test(candidate.text));
+    if (stageFor(request) === "deep") {
+      return JSON.stringify({
+        facet_selections: payload.facets.map((facet) => ({
+          facet_id: facet.facet_id,
+          candidate_ids: packCandidate ? [packCandidate.candidate_id] : []
+        })),
+        insufficient: !packCandidate
+      });
+    }
+    return JSON.stringify({
+      facet_selections: payload.facets.map((facet) => ({
+        facet_id: facet.facet_id,
+        candidate_ids: packCandidate ? [packCandidate.candidate_id] : []
+      })),
+      insufficient: false,
+      deep_read_candidate_id: null
+    });
+  }
+});
+const sourceConflictSources = sourceConflictRun.selection.sources;
+const sourceConflictText = sourceConflictSources.map((source) => source.text).join("\n");
+if (
+  !/RAIL_PACK_TIMING/.test(sourceConflictText) ||
+  !/RAIL_OFFICIAL_TIMING/.test(sourceConflictText) ||
+  sourceConflictSources[0]?.source_pack_id
+) {
+  throw new Error("Implicit source conflict did not retain both parents with Blackboard authority first: " + JSON.stringify(sourceConflictRun.selection));
+}
 const facetFavoredCandidates = Array.from({ length: 5 }, (_, index) =>
   anchorCandidate(
     "FAV" + index,

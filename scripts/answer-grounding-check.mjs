@@ -338,6 +338,47 @@ if (validation("When does the dossier close?", "The dossier closes at 14:25 on A
   throw new Error("An invented acronym absent from the cited source escaped the named-entity veto.");
 }
 
+const plannerInventedName = context.citedAnswerValidation(
+  "When does the dossier close?",
+  { text: "The dossier closes at 14:25 on August 21, 2028 XYZ [1].", sources: [timezoneSource] },
+  [timezoneSource],
+  "planner-expanded dossier close time XYZ",
+  "When does the dossier close?"
+);
+if (plannerInventedName.ok) {
+  throw new Error(
+    "A named term supplied only by a planner-generated retrieval query bypassed the named-entity veto."
+  );
+}
+
+const codSource = source(
+  "parcel-cod-policy",
+  "Parcel acceptance policy",
+  "The residence will not accept cash-on-delivery parcels; students must arrange payment directly with the courier."
+);
+const codGuard = validation(
+  "Can the residence accept cash-on-delivery parcels?",
+  "The residence will not accept COD parcels [1].",
+  [codSource]
+);
+if (!codGuard.ok) {
+  throw new Error("A source-supported cash-on-delivery acronym tripped the named-entity veto: " + JSON.stringify(codGuard));
+}
+
+const midnightSource = source(
+  "late-service",
+  "Late service hours",
+  "After midnight, request the Night Heron shuttle in the Bright Ride mini-program."
+);
+const midnightGuard = validation(
+  "What service should I use after midnight?",
+  "At 12:00 AM, request the Night Heron shuttle in the Bright Ride mini-program [1].",
+  [midnightSource]
+);
+if (!midnightGuard.ok) {
+  throw new Error("A faithful midnight/12:00 AM restatement tripped a deterministic guard: " + JSON.stringify(midnightGuard));
+}
+
 const capstoneSource = source(
   "capstone-policy",
   "Capstone options",
@@ -386,6 +427,110 @@ if (
   !falseAbstentionDraft?.reason_codes?.includes("semantic_verifier_rejected")
 ) {
   throw new Error("A single-facet qualitative abstention was not decided semantically and repaired: " + JSON.stringify(falseAbstention));
+}
+
+const privateStatusQuery = "Has AlderSure claim AS-731902 been approved, and what balance remains?";
+const privateStatusAbsenceSource = source(
+  "private-status-guide",
+  "Insurance claim guide",
+  "Claim status and remaining balances are visible only in the member portal or through the insurer case line. " +
+    "The indexed guide contains no individual claim number, approval decision, payment, or balance."
+);
+const privateStatusConcreteSource = source(
+  "private-status-result",
+  "Insurance claim result",
+  "AlderSure claim AS-731902 is approved and its remaining balance is 1864.50."
+);
+const privateStatusPortalInstructionSource = source(
+  "private-status-portal-instruction",
+  "Insurance claim portal guide",
+  "For claim AS-731902, open the member portal. " +
+    "This guide contains no individual approval decision or balance."
+);
+const privateStatusSameClauseAbsenceSources = [
+  "Balance for claim AS-731902 is not provided here; check the portal.",
+  "Claim AS-731902 balance is unavailable.",
+  "Balance for claim AS-731902 is unavailable; call 555."
+].map((text, index) => source(
+  "private-status-same-clause-absence-" + index,
+  "Insurance claim balance guide",
+  text
+));
+const privateStatusBoundSources = [
+  ["open", "Claim AS-731902 is open."],
+  ["pending", "Claim AS-731902 is pending."],
+  ["approved", "Claim AS-731902 is approved."],
+  ["balance", "Claim AS-731902 has a remaining balance of 1864.50."]
+].map(([label, text]) => source(
+  "private-status-" + label,
+  "Insurance claim " + label,
+  text
+));
+if (context.selectedEvidenceSupportsConcreteAnswer(privateStatusQuery, [privateStatusAbsenceSource])) {
+  throw new Error("An explicit portal-only/no-individual-result statement was treated as a concrete personal approval or balance.");
+}
+if (context.selectedEvidenceSupportsConcreteAnswer(privateStatusQuery, [privateStatusPortalInstructionSource])) {
+  throw new Error("The instruction to open a portal was misread as an identifier-bound open claim status.");
+}
+for (const absenceSource of privateStatusSameClauseAbsenceSources) {
+  if (context.selectedEvidenceSupportsConcreteAnswer(privateStatusQuery, [absenceSource])) {
+    throw new Error(
+      "Digits inside the requested record ID were misread as a concrete balance amount: " + JSON.stringify(absenceSource)
+    );
+  }
+}
+if (!context.selectedEvidenceSupportsConcreteAnswer(privateStatusQuery, [privateStatusConcreteSource])) {
+  throw new Error("A concrete personal approval and remaining balance did not block abstention.");
+}
+for (const boundSource of privateStatusBoundSources) {
+  if (!context.selectedEvidenceSupportsConcreteAnswer(privateStatusQuery, [boundSource])) {
+    throw new Error(
+      "A genuinely identifier-bound personal status or numeric balance did not block abstention: " +
+        JSON.stringify(boundSource)
+    );
+  }
+}
+const privateStatusQualifiedAbsence = validation(
+  privateStatusQuery,
+  "The indexed guide contains no individual approval decision or balance for AS-731902; check the member portal or insurer case line [1].",
+  [privateStatusAbsenceSource]
+);
+if (!privateStatusQualifiedAbsence.ok) {
+  throw new Error(
+    "A cited, query-scoped explanation of an absent personal result was rejected: " +
+      JSON.stringify(privateStatusQualifiedAbsence)
+  );
+}
+const privateStatusAbstention = await runLadder(
+  privateStatusQuery,
+  [privateStatusAbsenceSource],
+  [cleanNotFound, justifiedAbstentionVerdict]
+);
+if (
+  privateStatusAbstention.stages.join(",") !== "answer,verifier" ||
+  privateStatusAbstention.answer.text !== cleanNotFound
+) {
+  throw new Error("An explicit personal-result absence did not permit a semantically justified abstention: " + JSON.stringify(privateStatusAbstention));
+}
+
+const conversationProvidedIdentifier = context.citedAnswerValidation(
+  "What about its approval and remaining balance?",
+  {
+    text:
+      "For AlderSure claim AS-731902, the indexed guide contains no individual approval decision or balance; " +
+      "check the member portal or insurer case line [1].",
+    sources: [privateStatusAbsenceSource]
+  },
+  [privateStatusAbsenceSource],
+  "planner-expanded claim portal result",
+  "Has AlderSure claim AS-731902 been approved, and what balance remains?\n" +
+    "What about its approval and remaining balance?"
+);
+if (!conversationProvidedIdentifier.ok) {
+  throw new Error(
+    "A named identifier actually supplied by the user in conversation was rejected: " +
+      JSON.stringify(conversationProvidedIdentifier)
+  );
 }
 
 const multiFacetQuery = "Explain the approval requirement and filing process, then describe the reimbursement documentation and retention rule.";
@@ -816,6 +961,32 @@ const orderingGuard = validation(
 );
 if (orderingGuard.ok || !orderingGuard.reasons.some((reason) => /negation, permission, obligation, or availability/i.test(reason))) {
   throw new Error("A scoped before/after reversal escaped the polarity veto: " + JSON.stringify(orderingGuard));
+}
+const railTimingSource = source(
+  "rail-timing",
+  "Rail request timing",
+  "Place a rail request by 16:00 at least three business days before departure. " +
+    "Request a change before 20:00 on the day before travel; later changes must be handled at the station."
+);
+const faithfulRailTiming = validation(
+  "What are the rail request and change deadlines?",
+  "Place the rail request by 16:00, at least three business days before departure. " +
+    "Request changes before 20:00 on the day before travel; later changes must be handled at the station [1].",
+  [railTimingSource]
+);
+if (!faithfulRailTiming.ok) {
+  throw new Error("A faithful mixed before/later deadline answer tripped the polarity guard: " + JSON.stringify(faithfulRailTiming));
+}
+const reversedRailTiming = validation(
+  "When must a rail change be requested?",
+  "Request the change after 20:00 on the day before travel [1].",
+  [railTimingSource]
+);
+if (
+  reversedRailTiming.ok ||
+  !reversedRailTiming.reasons.some((reason) => /negation, permission, obligation, or availability/i.test(reason))
+) {
+  throw new Error("A true rail deadline before/after reversal escaped the polarity guard: " + JSON.stringify(reversedRailTiming));
 }
 if (
   context.claimSourcePolarityContradiction(

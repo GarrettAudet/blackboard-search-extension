@@ -1069,12 +1069,24 @@ async function storeContent(payload) {
   const resources = data[RESOURCE_KEY] || [];
   const transcripts = data[TRANSCRIPT_KEY] || [];
   const contentStore = data[CONTENT_KEY] || {};
-  if (!resources.some((resource) => resource.id === resourceId)) {
+  const resourceIndex = resources.findIndex((resource) => resource.id === resourceId);
+  if (resourceIndex < 0) {
     return { ok: false, error: "resource_not_found" };
   }
 
+  const storedResource = resources[resourceIndex];
+  const nextResources = isFileLikeResource(storedResource)
+    ? resources.map((resource, index) => index === resourceIndex
+      ? {
+          ...resource,
+          body_verified: true,
+          indexed_body_source: "extracted",
+          content_origin: "extracted_attachment"
+        }
+      : resource)
+    : resources;
   contentStore[resourceId] = content;
-  await saveIndex(resources, transcripts, contentStore);
+  await saveIndex(nextResources, transcripts, contentStore);
   return { ok: true, resource_id: resourceId, content_length: content.length };
 }
 
@@ -1659,6 +1671,9 @@ function pruneContentStore(contentStore, resources) {
 function isReadableStoredFileBodyText(resource, storedContent) {
   const text = String(storedContent || "").replace(/\s+/g, " ").trim();
   if (!text) return false;
+  if (resource?.body_verified === true && resource?.indexed_body_source === "extracted") {
+    return normalizeText(text).length > 40;
+  }
   // Resource-pack bodies are prepared for indexing. Crawler-shell detection
   // below applies only to discovered file resources.
   if (resource?.source_pack_id) return normalizeText(text).length > 40;
@@ -1972,6 +1987,11 @@ function normalizeResource(raw) {
     discovered_at: cleanText(raw.discovered_at || new Date().toISOString(), 80),
     transcript_ids: uniqueStrings(raw.transcript_ids || raw.transcriptIds || [])
   };
+  if (raw.body_verified === true) resource.body_verified = true;
+  const indexedBodySource = cleanText(raw.indexed_body_source || raw.indexedBodySource || "", 40);
+  const contentOrigin = cleanText(raw.content_origin || raw.contentOrigin || "", 80);
+  if (indexedBodySource) resource.indexed_body_source = indexedBodySource;
+  if (contentOrigin) resource.content_origin = contentOrigin;
   return resource;
 }
 

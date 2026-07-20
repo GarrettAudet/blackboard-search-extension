@@ -1,8 +1,11 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
-const productionRoot = process.argv[2] || "C:/repos/BlackboardSearchExtension";
-const readProduction = (relativePath) => fs.readFileSync(new URL(`file:///${productionRoot.replace(/\\/g, "/")}/${relativePath}`), "utf8");
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const productionRoot = path.resolve(process.argv[2] || path.join(scriptDirectory, ".."));
+const readProduction = (relativePath) => fs.readFileSync(path.join(productionRoot, ...relativePath.split("/")), "utf8");
 const moduleSource = [
   "lib/answer-formatting.js",
   "lib/llm-client.js",
@@ -128,12 +131,13 @@ function cleanNotFound() {
   return JSON.stringify({ not_found: true, answer_blocks: [] });
 }
 
-async function runSelection({ query, results, fallback, plan, responder }) {
+async function runSelection({ query, results, fallback, plan, responder, memory = [] }) {
   const requests = [];
   context.__testQuery = query;
   context.__testResults = results;
   context.__testFallback = fallback;
   context.__testPlan = plan;
+  context.__testMemory = memory;
   context.__testQueries = [query, plan.retrieval_query, ...(plan.search_queries || [])];
   context.__testResponder = async (request) => {
     requests.push(request);
@@ -147,17 +151,19 @@ async function runSelection({ query, results, fallback, plan, responder }) {
       globalThis.__testFallback,
       globalThis.__testQueries,
       globalThis.__testPlan.retrieval_query,
-      globalThis.__testPlan
+      globalThis.__testPlan,
+      globalThis.__testMemory
     );
   `, context);
   return { selection: await context.__testPromise, requests };
 }
 
-async function runAnswer({ query, sources, plan, responder }) {
+async function runAnswer({ query, sources, plan, responder, memory = [] }) {
   const requests = [];
   context.__answerQuery = query;
   context.__answerSources = sources;
   context.__answerPlan = plan;
+  context.__answerMemory = memory;
   context.__answerResponder = async (request) => {
     requests.push(request);
     return await responder(request, requests);
@@ -167,7 +173,7 @@ async function runAnswer({ query, sources, plan, responder }) {
     globalThis.__answerPromise = generateVerifiedApiAnswer(
       globalThis.__answerQuery,
       globalThis.__answerSources,
-      [],
+      globalThis.__answerMemory,
       globalThis.__answerPlan.retrieval_query,
       globalThis.__answerPlan
     );
@@ -419,6 +425,9 @@ await check("COMPOUND_ADJACENT_FRAGMENT_SELECTION", async () => {
 await check("RESOLVED_FOLLOWUP_PROPAGATION", async () => {
   const rawQuestion = "What about that requirement?";
   const resolvedQuestion = "What documentation is required for the synthetic activity request?";
+  const memory = [
+    { user: "What is required for the synthetic activity request?", assistant: "It has a documentation requirement." }
+  ];
   const overview = result({
     parent: "followup-parent", title: "Activity Request",
     text: "FOLLOWUP_OVERVIEW The synthetic activity request has a documentation requirement."
@@ -429,7 +438,7 @@ await check("RESOLVED_FOLLOWUP_PROPAGATION", async () => {
   });
   const plan = planFor(resolvedQuestion);
   const selectionRun = await runSelection({
-    query: rawQuestion, results: [overview, detail], fallback: [overview], plan,
+    query: rawQuestion, results: [overview, detail], fallback: [overview], plan, memory,
     responder: (request) => {
       const payload = payloadFor(request);
       if (stageFor(request) === "selector") {
@@ -450,6 +459,7 @@ await check("RESOLVED_FOLLOWUP_PROPAGATION", async () => {
     query: rawQuestion,
     sources: selectionRun.selection.sources,
     plan,
+    memory,
     responder: (request) => stageFor(request) === "verifier"
       ? JSON.stringify({ answerable: true, supported: true, complete: true, contradiction: false })
       : structuredAnswer("Submit the activity request form before the event.")

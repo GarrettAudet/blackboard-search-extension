@@ -87,22 +87,71 @@ const conciseCrawlerShell = {
   type: "document",
   title: "Concise Crawler Shell"
 };
+const conciseVerifiedAttachmentBody =
+  "VERIFIED_ATTACHMENT_SENTINEL: Submit the signed waiver by 08:45 tomorrow and keep the confirmation receipt.";
+const conciseVerifiedAttachment = {
+  id: "concise-verified-attachment",
+  type: "document",
+  title: "Concise Verified Attachment.pdf",
+  body_verified: true,
+  indexed_body_source: "extracted",
+  content_origin: "extracted_attachment"
+};
+const conciseUnverifiedAttachment = {
+  id: "concise-unverified-attachment",
+  type: "document",
+  title: "Concise Unverified Attachment.pdf"
+};
+const concisePageBody =
+  "CONCISE_PAGE_SENTINEL: The advising desk opens at 08:15 and accepts walk-in questions.";
+const concisePageResource = {
+  id: "concise-page",
+  type: "page",
+  title: "Concise Blackboard Page"
+};
+assert.ok(
+  conciseVerifiedAttachmentBody.split(/\s+/).filter(Boolean).length < 45 && conciseVerifiedAttachmentBody.length < 900,
+  "Verified-attachment fixture no longer exercises the concise-body path."
+);
+assert.ok(
+  concisePageBody.split(/\s+/).filter(Boolean).length < 45 && concisePageBody.length < 900,
+  "Blackboard-page fixture no longer exercises the concise-body path."
+);
 context.__concisePackBody = concisePackBody;
 context.__concisePackResource = concisePackResource;
 context.__conciseCrawlerShell = conciseCrawlerShell;
+context.__conciseVerifiedAttachmentBody = conciseVerifiedAttachmentBody;
+context.__conciseVerifiedAttachment = conciseVerifiedAttachment;
+context.__conciseUnverifiedAttachment = conciseUnverifiedAttachment;
+context.__concisePageBody = concisePageBody;
+context.__concisePageResource = concisePageResource;
 const conciseReadability = vm.runInContext(`({
   pack: resourceHasReadableBody(globalThis.__concisePackResource, globalThis.__concisePackBody),
-  crawler: resourceHasReadableBody(globalThis.__conciseCrawlerShell, globalThis.__concisePackBody)
+  crawler: resourceHasReadableBody(globalThis.__conciseCrawlerShell, globalThis.__concisePackBody),
+  verifiedAttachment: resourceHasReadableBody(globalThis.__conciseVerifiedAttachment, globalThis.__conciseVerifiedAttachmentBody),
+  unverifiedAttachment: resourceHasReadableBody(globalThis.__conciseUnverifiedAttachment, globalThis.__conciseVerifiedAttachmentBody),
+  page: resourceHasReadableBody(globalThis.__concisePageResource, globalThis.__concisePageBody)
 })`, context);
 assert.equal(conciseReadability.pack, true, "A concise prepared pack fact was rejected as unreadable.");
 assert.equal(conciseReadability.crawler, false, "A concise ordinary file shell bypassed crawler-body validation.");
+assert.equal(conciseReadability.verifiedAttachment, true, "A concise verified extracted attachment was rejected as unreadable.");
+assert.equal(conciseReadability.unverifiedAttachment, false, "A concise unverified file body bypassed attachment verification.");
+assert.equal(conciseReadability.page, true, "A concise Blackboard page body was rejected as unreadable.");
 vm.runInContext(
-  "state.resources = [globalThis.__concisePackResource, globalThis.__conciseCrawlerShell]; " +
+  "state.resources = [" +
+    "globalThis.__concisePackResource, globalThis.__conciseCrawlerShell, " +
+    "globalThis.__conciseVerifiedAttachment, globalThis.__conciseUnverifiedAttachment, globalThis.__concisePageResource" +
+  "]; " +
   "state.contentStore = { " +
     "'concise-pack-policy': globalThis.__concisePackBody, " +
-    "'concise-crawler-shell': globalThis.__concisePackBody " +
+    "'concise-crawler-shell': globalThis.__concisePackBody, " +
+    "'concise-verified-attachment': globalThis.__conciseVerifiedAttachmentBody, " +
+    "'concise-unverified-attachment': globalThis.__conciseVerifiedAttachmentBody, " +
+    "'concise-page': globalThis.__concisePageBody " +
   "}; invalidateSearchIndexCache(); " +
-  "globalThis.__concisePackResults = searchIndex('CONCISE_PACK_SENTINEL', 10);",
+  "globalThis.__concisePackResults = searchIndex('CONCISE_PACK_SENTINEL', 10); " +
+  "globalThis.__conciseAttachmentResults = searchIndex('VERIFIED_ATTACHMENT_SENTINEL', 10); " +
+  "globalThis.__concisePageResults = searchIndex('CONCISE_PAGE_SENTINEL', 10);",
   context
 );
 assert.ok(
@@ -112,6 +161,22 @@ assert.ok(
 assert.ok(
   !context.__concisePackResults.some((item) => item.resource_id === "concise-crawler-shell" && /CONCISE_PACK_SENTINEL/.test(item.text)),
   "A rejected crawler shell leaked its stored body into search results."
+);
+assert.ok(
+  context.__conciseAttachmentResults.some((item) =>
+    item.resource_id === "concise-verified-attachment" && /VERIFIED_ATTACHMENT_SENTINEL/.test(item.text)
+  ),
+  "A concise verified extracted attachment was not searchable."
+);
+assert.ok(
+  !context.__conciseAttachmentResults.some((item) =>
+    item.resource_id === "concise-unverified-attachment" && /VERIFIED_ATTACHMENT_SENTINEL/.test(item.text)
+  ),
+  "A concise unverified attachment leaked its stored body into search results."
+);
+assert.ok(
+  context.__concisePageResults.some((item) => item.resource_id === "concise-page" && /CONCISE_PAGE_SENTINEL/.test(item.text)),
+  "A concise Blackboard page body was not searchable."
 );
 
 // A single punctuation-free unit must split at word boundaries, retain overlap,
@@ -534,7 +599,7 @@ function storageContext(initial) {
 const pruneContext = {
   Map,
   normalizeText(value) { return String(value || "").toLowerCase().replace(/\s+/g, " ").trim(); },
-  isFileLikeResource() { return true; },
+  isFileLikeResource(resource) { return resource?.type !== "page"; },
   cleanIndexedBodyText(value) { return String(value || "").trim(); }
 };
 vm.createContext(pruneContext);
@@ -545,14 +610,31 @@ vm.runInContext(
 const prunedConciseBodies = pruneContext.pruneContentStore(
   {
     "pack-short": concisePackBody,
-    "crawler-short": concisePackBody
+    "crawler-short": concisePackBody,
+    "verified-attachment-short": conciseVerifiedAttachmentBody,
+    "unverified-attachment-short": conciseVerifiedAttachmentBody,
+    "page-short": concisePageBody
   },
   [
     { id: "pack-short", type: "document", title: "Short pack", source_pack_id: "concise-test-pack" },
-    { id: "crawler-short", type: "document", title: "Short crawler file" }
+    { id: "crawler-short", type: "document", title: "Short crawler file" },
+    {
+      id: "verified-attachment-short",
+      type: "document",
+      title: "Short verified attachment.pdf",
+      body_verified: true,
+      indexed_body_source: "extracted",
+      content_origin: "extracted_attachment"
+    },
+    { id: "unverified-attachment-short", type: "document", title: "Short unverified attachment.pdf" },
+    { id: "page-short", type: "page", title: "Short Blackboard page" }
   ]
 );
-assert.deepEqual(Object.keys(prunedConciseBodies), ["pack-short"], "Background pruning did not distinguish prepared pack text from a short crawler shell.");
+assert.deepEqual(
+  Object.keys(prunedConciseBodies),
+  ["pack-short", "verified-attachment-short", "page-short"],
+  "Background pruning did not enforce concise pack, verified-attachment, unverified-file, and page body contracts."
+);
 
 // Background reset preserves installed optional packs and settings but removes
 // Blackboard-derived resources/content.
