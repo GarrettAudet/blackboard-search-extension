@@ -43,6 +43,13 @@ const context = {
 };
 vm.createContext(context);
 vm.runInContext(moduleSource + "\n\n" + sidepanelSource.slice(0, runtimeStart), context);
+const semanticSelectionProviderCallCap = vm.runInContext(
+  "SEMANTIC_EVIDENCE_LIMITS.maxSelectionProviderCalls",
+  context
+);
+if (semanticSelectionProviderCallCap !== 3) {
+  throw new Error("Semantic selection must reserve production call capacity for answer verification.");
+}
 vm.runInContext(`
   state.resources = [];
   state.contentStore = {};
@@ -1655,7 +1662,8 @@ const deepRequests = deepRun.captured.filter((request) => stageFor(request) === 
 if (
   deepRun.selection.mode !== "semantic_deep_read" ||
   deepRun.selection.deep_read_calls < 1 ||
-  deepRun.selection.deep_read_calls > 3 ||
+  deepRun.selection.deep_read_calls > 2 ||
+  deepRun.selection.selector_calls > semanticSelectionProviderCallCap ||
   !/not permitted/i.test(deepRun.selection.sources[0]?.text || "")
 ) {
   throw new Error("Conditional policy deep-read did not follow the explicitly nominated parent and recover negative evidence.");

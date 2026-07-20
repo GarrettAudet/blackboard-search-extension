@@ -7004,6 +7004,11 @@ const SEMANTIC_EVIDENCE_LIMITS = Object.freeze({
   maxParentTextChars: 32000,
   maxDeepParents: 3,
   maxDeepBatches: 3,
+  // Planner + semantic selection + answer + verifier must fit inside the
+  // production holdout's six-call per-question envelope. This cap includes
+  // selector retries and every deep-read selector call, so evidence refinement
+  // can never consume the call reserved for final grounding verification.
+  maxSelectionProviderCalls: 3,
   maxDeepBatchCandidates: 55,
   maxDeepCandidateTextChars: 9000,
   maxDeepBatchTextChars: 70000,
@@ -8269,7 +8274,9 @@ async function selectSemanticEvidenceForApi(
     let selection = null;
     const enforceAuthority = hasExplicitAuthorityIntent(resolvedQuestion);
     let selectorFailureReason = "invalid_selector_output";
-    for (let attempt = 0; attempt < 2 && !selection; attempt += 1) {
+    for (let attempt = 0;
+         attempt < 2 && !selection && selectorCalls < SEMANTIC_EVIDENCE_LIMITS.maxSelectionProviderCalls;
+         attempt += 1) {
       selectorCalls += 1;
       const selectorMessages = semanticEvidenceSelectorMessages(resolvedQuestion, queryPlan, facets, candidatePool);
       if (attempt) {
@@ -8372,7 +8379,8 @@ async function selectSemanticEvidenceForApi(
     let deepParentsRead = 0;
     for (const requestedCandidate of parentCandidates) {
       if (deepParentsRead >= SEMANTIC_EVIDENCE_LIMITS.maxDeepParents ||
-          deepSelectedCandidates.length >= SEMANTIC_EVIDENCE_LIMITS.maxDeepSelectedTotal) break;
+          deepSelectedCandidates.length >= SEMANTIC_EVIDENCE_LIMITS.maxDeepSelectedTotal ||
+          selectorCalls >= SEMANTIC_EVIDENCE_LIMITS.maxSelectionProviderCalls) break;
       const requestedParentKey = sourceDedupeKey(requestedCandidate.result);
       const selectedCount = selectedChunksPerParent.get(requestedParentKey) || 0;
       const unresolvedParent = unresolvedParentKeys.has(requestedParentKey);
@@ -8392,7 +8400,8 @@ async function selectSemanticEvidenceForApi(
       let addedForParent = 0;
       for (let batchIndex = 0; batchIndex < batches.length &&
            addedForParent < maximumForParent &&
-           deepSelectedCandidates.length < SEMANTIC_EVIDENCE_LIMITS.maxDeepSelectedTotal; batchIndex += 1) {
+           deepSelectedCandidates.length < SEMANTIC_EVIDENCE_LIMITS.maxDeepSelectedTotal &&
+           selectorCalls < SEMANTIC_EVIDENCE_LIMITS.maxSelectionProviderCalls; batchIndex += 1) {
         const batch = batches[batchIndex];
         if (!batch.some((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys))) continue;
         selectorCalls += 1;
