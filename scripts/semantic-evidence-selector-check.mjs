@@ -367,6 +367,33 @@ if (!/Alder Archive/.test(archiveResolved) || /Blue Archive/.test(archiveResolve
   throw new Error("A named follow-up subject was not retained in the resolved question: " + archiveResolved);
 }
 
+const facetOnlyFollowUps = [
+  {
+    query: "Tell me the size ceiling and acceptable extension.",
+    history: [{ user: "I need to prepare the submission for Nimbus Lantern.", assistant: "Which submission requirements should I check?" }],
+    expected: "Nimbus Lantern"
+  },
+  {
+    query: "Tell me the deadline and signer.",
+    history: [{ user: "Let's continue with Harbor Ledger's approval review.", assistant: "What should I confirm?" }],
+    expected: "Harbor Ledger"
+  }
+];
+context.__facetOnlyFollowUps = facetOnlyFollowUps;
+const facetOnlyFollowUpContract = vm.runInContext(`globalThis.__facetOnlyFollowUps.map((entry) => ({
+  requiresResolution: requiresConversationResolution(entry.query),
+  scopedMemoryLength: scopedConversationMemory(entry.query, entry.history).length,
+  retrievalQuery: buildRetrievalQuery(entry.query, scopedConversationMemory(entry.query, entry.history)),
+  resolved: resolvedQuestionForRag(entry.query, null, entry.history),
+  expected: entry.expected
+}))`, context);
+if (facetOnlyFollowUpContract.some((entry) =>
+  entry.requiresResolution !== true || entry.scopedMemoryLength !== 1 ||
+  !entry.retrievalQuery.includes(entry.expected) || !entry.resolved.includes(entry.expected)
+)) {
+  throw new Error("Facet-only follow-up did not retain its named history subject: " + JSON.stringify(facetOnlyFollowUpContract));
+}
+
 const standaloneDiningQuery = "Compare halal and kosher dining options.";
 const unrelatedHistory = [
   { user: "What documents do I need for the X1 visa?", assistant: "The prior answer mentioned an Orchid Ferry example." }

@@ -9195,8 +9195,35 @@ function requiresConversationResolution(query) {
   const normalized = normalizeText(query);
   return (
     /^(?:which ones?|which of (?:them|those))\b/.test(normalized) ||
-    /^(?:(?:can|could|would) you )?(?:link|send|show) me\b.{0,100}\b(?:resources?|links?)\b/.test(normalized)
+    /^(?:(?:can|could|would) you )?(?:link|send|show) me\b.{0,100}\b(?:resources?|links?)\b/.test(normalized) ||
+    isFacetOnlyFollowUpQuestion(query)
   );
+}
+
+function isFacetOnlyFollowUpQuestion(query) {
+  const text = String(query || "").trim();
+  const normalized = normalizeText(text);
+  if (!normalized || normalized.split(" ").length > 16) return false;
+  if (!/^(?:what (?:are|is|was|were)|give me|tell me|and (?:what|when|where|who|how)|when (?:is|was)|where (?:is|was)|who (?:is|was))\b/.test(normalized)) {
+    return false;
+  }
+  // A concrete name in the current question makes it self-contained. This
+  // deliberately recognizes ordinary multi-word title case names as well as
+  // identifiers handled by deterministicNamedTerms.
+  if (/\b[A-Z][a-z0-9&.-]+\s+[A-Z][a-z0-9&.-]+\b/.test(text) || deterministicNamedTerms(text).length) {
+    return false;
+  }
+  const genericFacetTerms = new Set([
+    "acceptable", "amount", "approving", "approval", "cap", "ceiling", "date", "day", "deadline", "details", "extension",
+    "file", "format", "limit", "location", "maximum", "minimum", "name", "number", "place", "required",
+    "requirement", "requirements", "role", "signer", "size", "status", "time", "type", "value", "version"
+  ]);
+  const ignored = new Set(["give", "tell", "about", "also", "and"]);
+  const substantive = normalized
+    .split(" ")
+    .map((term) => term.replace(/[^a-z0-9]/g, ""))
+    .filter((term) => term.length > 1 && !STOP_WORDS.has(term) && !genericFacetTerms.has(term) && !ignored.has(term));
+  return substantive.length === 0;
 }
 
 function scopedConversationMemory(query, memory = []) {
