@@ -1,14 +1,16 @@
 # Privacy Policy for Blackboard Search Extension
 
-Last updated: July 17, 2026
+Last updated: July 19, 2026
 
-Blackboard Search Extension helps users search Blackboard resources that they can already access in their logged-in browser, together with optional resource packs they deliberately install.
+Blackboard Search Extension helps users search Blackboard resources that they can already access in their logged-in browser, optional resource packs they deliberately install, and local files they deliberately add to My resources.
 
 ## Data stored locally
 
-The extension stores the Blackboard search index, installed optional resource-pack content, settings, and optional API configuration in Chrome storage on the user's device.
+The extension stores the Blackboard search index, installed optional resource-pack content, extracted text and filenames from files added to My resources, settings, and optional API configuration in Chrome storage on the user's device.
 
 Optional resource packs are installed only after the user enters a registered pack command and the extension confirms an active Blackboard session. Pack metadata and prepared searchable text remain in local Chrome storage unless the user asks an API-powered question, as described below.
+
+For My resources, extraction happens in the side panel. The extension does not persist the raw file, file blob, or local filesystem path. It stores the extracted searchable text, a sanitized filename, content hash, and indexing metadata until the user removes that resource or clears the local index.
 
 ## Blackboard session verification
 
@@ -18,9 +20,9 @@ The extension does not read or store the user's Blackboard password. Browser coo
 
 ## Data sent to API providers
 
-If a user configures an API provider and asks an API-powered question, the extension sends the user's question and a bounded set of candidate excerpts from indexed Blackboard or optional-pack resources to that provider. The provider selects relevant evidence before answering. When evidence appears incomplete or the question requires careful policy interpretation, the extension may send additional bounded excerpts from at most one provider-nominated parent document. The selected evidence is then used for answer generation and citation validation or repair. Providers may include OpenAI, OpenRouter, or DeepSeek, depending on the user's setup.
+If a user configures an API provider and asks an API-powered question, the extension sends the user's question and a bounded set of candidate excerpts from indexed Blackboard resources, optional resource packs, or files added to My resources to that provider. For My resources, a sanitized filename may accompany a relevant excerpt as its source title. The provider selects relevant evidence before answering. When evidence appears incomplete or the question requires careful policy interpretation, the extension may send additional bounded excerpts from provider-nominated parent documents. The selected evidence is then used for answer generation and citation validation or repair. Providers may include OpenAI, OpenRouter, or DeepSeek, depending on the user's setup.
 
-The full local index is not sent to the provider. Each request contains a bounded subset of local text, and one user question may require multiple provider calls for planning, evidence selection, answer generation, and validation or repair.
+The full local index and raw imported files are not sent to the provider. Each request contains a bounded subset of indexed text, and one user question may require multiple provider calls for planning, evidence selection, answer generation, and validation or repair.
 
 ## Feedback
 

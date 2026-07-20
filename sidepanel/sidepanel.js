@@ -18,11 +18,42 @@ const OPTIONAL_RESOURCE_PACKS = [
   }
 ];
 const MAX_CONTENT_CHARS = 500000;
+const LOCAL_RESOURCE_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const LOCAL_RESOURCE_MAX_PREFLIGHT_FILES = 24;
+const LOCAL_RESOURCE_MAX_PREFLIGHT_RAW_BYTES = 100 * 1024 * 1024;
+const LOCAL_RESOURCE_MAX_PREFLIGHT_EXTRACTED_CHARS = 5 * 1000 * 1000;
+const LOCAL_RESOURCE_MAX_COMMIT_FILES = 6;
+const LOCAL_RESOURCE_MAX_COMMIT_CHARS = 2 * 1000 * 1000;
+const LOCAL_RESOURCE_CORPUS_MAX_FILES = 200;
+const LOCAL_RESOURCE_CORPUS_MAX_EXTRACTED_CHARS = 10 * 1000 * 1000;
+const LOCAL_RESOURCE_PDF_MAX_PAGES = 750;
+const LOCAL_RESOURCE_PDF_MAX_PARSE_MS = 30000;
+const LOCAL_RESOURCE_PREFLIGHT_MAX_PARSE_MS = 90000;
+const LOCAL_RESOURCE_PDF_MAX_TEXT_ITEMS_PER_PAGE = 25000;
+const LOCAL_RESOURCE_PDF_MAX_PAGE_CHARS = 100000;
+const LOCAL_RESOURCE_PDF_MAX_ITEM_CHARS = 10000;
+const OFFICE_ZIP_MAX_ENTRIES = 4096;
+const OFFICE_ZIP_MAX_TOTAL_COMPRESSED_BYTES = 25 * 1024 * 1024;
+const OFFICE_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
+const OFFICE_ZIP_MAX_SELECTED_XML_BYTES = 32 * 1024 * 1024;
+const OFFICE_ZIP_MAX_ENTRY_XML_BYTES = 12 * 1024 * 1024;
+const LOCAL_RESOURCE_TYPE_BY_EXTENSION = Object.freeze({
+  pdf: { label: "PDF", kind: "pdf", contentType: "application/pdf" },
+  docx: { label: "DOCX", kind: "document", contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+  pptx: { label: "PPTX", kind: "slides", contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
+  xlsx: { label: "XLSX", kind: "spreadsheet", contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+  txt: { label: "TXT", kind: "document", contentType: "text/plain" },
+  md: { label: "Markdown", kind: "document", contentType: "text/markdown" },
+  markdown: { label: "Markdown", kind: "document", contentType: "text/markdown" },
+  csv: { label: "CSV", kind: "spreadsheet", contentType: "text/csv" }
+});
 const CONTENT_SCHEMA_VERSION = 2;
 const LEGACY_INDEXED_BODY_CHARS = 20000;
 const INDEXED_TEXT_TRUNCATION_PREFIX = "[Blackboard Search: indexed text truncated";
 const MAX_QUERY_CHARS = 2000;
 const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
+const CONTENT_HYDRATION_BATCH_MAX_ENTRIES = 6;
+const CONTENT_HYDRATION_BATCH_MAX_CHARS = 2 * 1000 * 1000;
 const MAX_MEMORY_TURNS = 6;
 const CRAWL_STALL_WATCHDOG_MS = 35000;
 const MEDIA_RESOLVE_TIMEOUT_MS = 30000;
@@ -60,6 +91,11 @@ const autoTranscribeAttempted = new Set();
 let autoTranscribeRunning = false;
 let detectedMediaRefreshTimer = 0;
 let crawlProgressWatchdogTimer = 0;
+let localResourcePreflightItems = [];
+let localResourceBusy = false;
+let localResourceReplacementTarget = null;
+let localResourcePreflightSequence = 0;
+let localResourceMaintenanceControlSnapshot = null;
 
 const els = {
   statusText: document.getElementById("statusText"),
@@ -89,6 +125,15 @@ const els = {
   setupState: document.getElementById("setupState"),
   crawlState: document.getElementById("crawlState"),
   resourceCount: document.getElementById("resourceCount"),
+  localResourcesPanel: document.getElementById("localResourcesPanel"),
+  localResourceCount: document.getElementById("localResourceCount"),
+  localResourceFileInput: document.getElementById("localResourceFileInput"),
+  localResourcePickerBtn: document.getElementById("localResourcePickerBtn"),
+  localResourceDropzone: document.getElementById("localResourceDropzone"),
+  localResourceStatus: document.getElementById("localResourceStatus"),
+  localResourcePreflightList: document.getElementById("localResourcePreflightList"),
+  addLocalResourcesBtn: document.getElementById("addLocalResourcesBtn"),
+  localResourceList: document.getElementById("localResourceList"),
   videoCount: document.getElementById("videoCount"),
   transcriptCount: document.getElementById("transcriptCount"),
   queryInput: document.getElementById("queryInput"),
@@ -116,6 +161,64 @@ function sendMessage(type, payload = {}) {
 function isLaunchSearchResource(resource) {
   const type = String(resource?.type || resource?.kind || "").toLowerCase();
   return !/^(audio|video|video_embed|video_transcript)$/.test(type);
+}
+
+function sourceClassForResult(result) {
+  if (typeof searchResourceSourceClass === "function") {
+    return searchResourceSourceClass(result);
+  }
+  if (result?.source_pack_id) return "curated_pack";
+  const declared = normalizeText(
+    [
+      result?.source_class,
+      result?.collection_kind,
+      result?.content_origin,
+      result?.source_provenance
+    ].filter(Boolean).join(" ")
+  );
+  if (/\b(user|local|manual|import|upload|personal)\b/.test(declared)) return "user_import";
+  if (/\b(curated|pack|resource pack)\b/.test(declared)) return "curated_pack";
+  return "official_blackboard";
+}
+
+function isOfficialBlackboardResult(result) {
+  return sourceClassForResult(result) === "official_blackboard";
+}
+
+function hasValidatedSourceAuthority(result) {
+  if (!isOfficialBlackboardResult(result)) return false;
+  if (typeof searchResourceHasValidatedAuthority === "function") {
+    return searchResourceHasValidatedAuthority(result) === true;
+  }
+  if (result?.search_identity?.authority_validated !== undefined) {
+    return result.search_identity.authority_validated === true;
+  }
+  if (result?.authority_verified === true || result?.source_authority_verified === true) {
+    return true;
+  }
+  const trust = normalizeText(
+    result?.search_identity?.trust_identity ||
+    result?.search_trust_identity ||
+    result?.source_trust ||
+    result?.trust_tier ||
+    result?.authority_tier ||
+    result?.trust ||
+    result?.authority ||
+    ""
+  ).replace(/[\s-]+/g, "_");
+  return new Set(["authoritative", "verified_authoritative", "official_policy", "primary_official"]).has(trust);
+}
+
+function sourceAuthorityPreferenceRank(result) {
+  if (hasValidatedSourceAuthority(result)) return 0;
+  const sourceClass = sourceClassForResult(result);
+  if (sourceClass === "curated_pack") return 1;
+  if (sourceClass === "official_blackboard") return 2;
+  return 3;
+}
+
+function isCuratedPackResult(result) {
+  return sourceClassForResult(result) === "curated_pack";
 }
 
 function setStatus(message) {
@@ -185,7 +288,7 @@ function legacyTruncationRiskIds(meta, contentStore, resources = state.resources
     for (const [resourceId, text] of Object.entries(contentStore || {})) {
       const length = String(text || "").length;
       if (
-        !resourcesById.get(String(resourceId))?.source_pack_id &&
+        isOfficialBlackboardResult(resourcesById.get(String(resourceId))) &&
         length >= LEGACY_INDEXED_BODY_CHARS - 50 &&
         length <= LEGACY_INDEXED_BODY_CHARS
       ) {
@@ -196,7 +299,7 @@ function legacyTruncationRiskIds(meta, contentStore, resources = state.resources
   for (const resourceId of Array.from(riskIds)) {
     if (
       !Object.prototype.hasOwnProperty.call(contentStore || {}, resourceId) ||
-      resourcesById.get(String(resourceId))?.source_pack_id
+      !isOfficialBlackboardResult(resourcesById.get(String(resourceId)))
     ) {
       riskIds.delete(resourceId);
     }
@@ -280,14 +383,16 @@ async function scanActiveTab() {
   setStatus(`Scanned active tab. Found ${response.resource_count || 0} resources on this page.`);
 }
 
-async function crawlSite() {
+async function crawlSite({ fullReindex = false } = {}) {
   if (els.crawlBtn) {
     els.crawlBtn.disabled = true;
     els.crawlBtn.textContent = "Indexing";
   }
   if (els.crawlState) els.crawlState.textContent = "starting";
-  setStatus("Starting Blackboard index...");
-  const response = await sendMessage("CRAWL_SITE", {
+  setStatus(fullReindex
+    ? "Starting a fresh transactional Blackboard reindex. The active index remains available until promotion succeeds."
+    : "Starting Blackboard index update...");
+  const response = await sendMessage(fullReindex ? "REINDEX_SITE" : "CRAWL_SITE", {
     max_pages: 1500,
     delay_ms: 120,
     page_timeout_ms: 20000,
@@ -333,8 +438,799 @@ async function importTranscriptFile(file) {
   setView("transcripts");
 }
 
+function normalizeLocalResourceFileName(value) {
+  return String(value || "")
+    .split(/[\\/]/)
+    .pop()
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 240);
+}
+
+function localResourceFileDescriptor(fileName) {
+  const name = normalizeLocalResourceFileName(fileName);
+  const extension = (name.match(/\.([^.]+)$/)?.[1] || "").toLowerCase();
+  const descriptor = LOCAL_RESOURCE_TYPE_BY_EXTENSION[extension];
+  return descriptor ? { ...descriptor, extension, name } : null;
+}
+
+function importedLocalResources(resources = state.resources) {
+  return (Array.isArray(resources) ? resources : []).filter(
+    (resource) => String(resource?.collection_kind || "").toLowerCase() === "user_import"
+  );
+}
+
+function localResourceStoredName(resource) {
+  return normalizeLocalResourceFileName(
+    resource?.original_file_name || resource?.file_name || resource?.title || ""
+  );
+}
+
+function localResourceHash(resource) {
+  return String(
+    resource?.content_hash_sha256 || resource?.content_sha256 || resource?.sha256 || ""
+  ).toLowerCase().replace(/[^a-f0-9]/g, "").match(/^[a-f0-9]{64}$/)?.[0] || "";
+}
+
+function localResourceExtractedTextHash(resource) {
+  return String(
+    resource?.extracted_text_sha256 || resource?.indexed_text_sha256 || ""
+  ).toLowerCase().replace(/[^a-f0-9]/g, "").match(/^[a-f0-9]{64}$/)?.[0] || "";
+}
+
+function localResourceNameKey(value) {
+  return normalizeLocalResourceFileName(value).normalize("NFKC").toLowerCase();
+}
+
+function classifyLocalResourceCandidate(candidate, resources = state.resources, pending = [], forcedTarget = null) {
+  const existing = importedLocalResources(resources);
+  const nameKey = localResourceNameKey(candidate?.name);
+  const hash = String(candidate?.content_hash_sha256 || "").toLowerCase();
+  const extractedHash = String(candidate?.extracted_text_sha256 || "").toLowerCase();
+  const pendingActive = (Array.isArray(pending) ? pending : []).filter(
+    (item) => !["duplicate", "error", "skipped"].includes(item?.status)
+  );
+  const exactExisting = hash && extractedHash && existing.find((resource) =>
+    localResourceHash(resource) === hash && localResourceExtractedTextHash(resource) === extractedHash
+  );
+  const exactPending = hash && extractedHash && pendingActive.find((item) =>
+    item.content_hash_sha256 === hash && item.extracted_text_sha256 === extractedHash
+  );
+  if (exactExisting || exactPending) {
+    return {
+      status: "duplicate",
+      collision_action: "skip",
+      detail: `Exact copy already ${exactExisting ? "indexed" : "waiting in preflight"}; no action will be taken.`,
+      existing_resource_id: String(exactExisting?.id || ""),
+      existing_hash_sha256: hash
+    };
+  }
+
+  const forcedId = String(forcedTarget?.id || "");
+  const target = forcedId ? existing.find((resource) => String(resource.id || "") === forcedId) : null;
+  if (forcedId && !target) {
+    return { status: "error", collision_action: "skip", detail: "The file selected for update is no longer indexed. Refresh and try again." };
+  }
+  if (target && localResourceNameKey(localResourceStoredName(target)) !== nameKey) {
+    return {
+      status: "error",
+      collision_action: "skip",
+      detail: `Choose a replacement named “${localResourceStoredName(target)}”, or use Choose files to add a different file.`
+    };
+  }
+
+  const pendingSameName = pendingActive.find((item) => localResourceNameKey(item.name) === nameKey);
+  if (pendingSameName) {
+    return {
+      status: "error",
+      collision_action: "skip",
+      detail: "Another version with this filename is already waiting in preflight. Discard it before adding this one."
+    };
+  }
+  const sameName = target || existing.find((resource) => localResourceNameKey(localResourceStoredName(resource)) === nameKey);
+  if (sameName) {
+    return {
+      status: "needs_collision_choice",
+      collision_action: "",
+      detail: "A different file with this name is indexed. Choose Replace existing, Keep both, or Cancel / skip.",
+      existing_resource_id: String(sameName.id || ""),
+      existing_hash_sha256: localResourceHash(sameName),
+      existing_extracted_text_sha256: localResourceExtractedTextHash(sameName)
+    };
+  }
+  return { status: "ready", collision_action: "add", detail: "Ready to add." };
+}
+
+async function sha256Hex(buffer) {
+  if (!globalThis.crypto?.subtle) throw new Error("Secure file hashing is unavailable in this browser.");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function decodeLocalTextBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let encoding = "utf-8";
+  let offset = 0;
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    offset = 3;
+  } else if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    encoding = "utf-16le";
+    offset = 2;
+  } else if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    encoding = "utf-16be";
+    offset = 2;
+  }
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(bytes.subarray(offset)).replace(/^\uFEFF/, "");
+  } catch (_error) {
+    throw new Error("Text file is not valid UTF-8 or BOM-marked UTF-16 text.");
+  }
+}
+
+function validateLocalExtractedText(value) {
+  const text = String(value || "");
+  if (!text.trim()) throw new Error("No searchable text could be extracted from this file.");
+  const sample = text.slice(0, 200000);
+  const nulls = (sample.match(/\u0000/g) || []).length;
+  const replacements = (sample.match(/\uFFFD/g) || []).length;
+  const controls = (sample.match(/[\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f]/g) || []).length;
+  if (nulls || replacements || controls / Math.max(1, sample.length) > 0.01) {
+    throw new Error("File appears to contain binary or incorrectly encoded text.");
+  }
+  if (!/[\p{L}\p{N}]/u.test(sample)) {
+    throw new Error("No searchable letters or numbers could be extracted from this file.");
+  }
+  return text;
+}
+
+async function extractLocalResourceFile(file, deadline = Number.POSITIVE_INFINITY) {
+  if (Date.now() >= deadline) throw new Error("Local-import preflight exceeded its 90-second aggregate extraction limit.");
+  const descriptor = localResourceFileDescriptor(file?.name);
+  if (!descriptor) {
+    throw new Error("Unsupported file type. Choose PDF, DOCX, PPTX, XLSX, TXT, Markdown, or CSV.");
+  }
+  const declaredSize = Number(file?.size || 0);
+  if (declaredSize > LOCAL_RESOURCE_MAX_FILE_BYTES) {
+    throw new Error("File exceeds the 25 MB local-import limit.");
+  }
+  if (typeof file?.arrayBuffer !== "function") throw new Error("The selected file could not be read.");
+  const buffer = await localExtractionPromiseBeforeDeadline(
+    file.arrayBuffer(),
+    deadline,
+    "Local-import preflight exceeded its 90-second aggregate extraction limit."
+  );
+  if (!buffer || !Number.isFinite(buffer.byteLength) || buffer.byteLength > LOCAL_RESOURCE_MAX_FILE_BYTES) {
+    throw new Error("File exceeds the 25 MB local-import limit.");
+  }
+  const contentHash = await localExtractionPromiseBeforeDeadline(
+    sha256Hex(buffer),
+    deadline,
+    "Local-import preflight exceeded its 90-second aggregate extraction limit."
+  );
+  let text = "";
+  if (descriptor.extension === "pdf") text = await extractPdfText(buffer, deadline);
+  else if (descriptor.extension === "docx") text = await localExtractionPromiseBeforeDeadline(extractDocxText(buffer), deadline, "Local-import preflight exceeded its 90-second aggregate extraction limit.");
+  else if (descriptor.extension === "pptx") text = await localExtractionPromiseBeforeDeadline(extractPptxText(buffer), deadline, "Local-import preflight exceeded its 90-second aggregate extraction limit.");
+  else if (descriptor.extension === "xlsx") text = await localExtractionPromiseBeforeDeadline(extractXlsxText(buffer), deadline, "Local-import preflight exceeded its 90-second aggregate extraction limit.");
+  else text = normalizeExtractedContent(decodeLocalTextBuffer(buffer));
+  text = validateLocalExtractedText(text);
+  const extractedTextHash = await localExtractionPromiseBeforeDeadline(
+    sha256Hex(new TextEncoder().encode(text).buffer),
+    deadline,
+    "Local-import preflight exceeded its 90-second aggregate extraction limit."
+  );
+  return {
+    name: descriptor.name,
+    extension: descriptor.extension,
+    type_label: descriptor.label,
+    kind: descriptor.kind,
+    content_type: descriptor.contentType,
+    content_hash_sha256: contentHash,
+    extracted_text_sha256: extractedTextHash,
+    byte_size: buffer.byteLength,
+    extracted_chars: text.length,
+    content: text
+  };
+}
+
+async function buildLocalResourcePreflightItem(file, resources = state.resources, pending = [], forcedTarget = null, deadline = Number.POSITIVE_INFINITY) {
+  const clientId = `local-${++localResourcePreflightSequence}`;
+  try {
+    const extracted = await extractLocalResourceFile(file, deadline);
+    return {
+      client_id: clientId,
+      ...extracted,
+      ...classifyLocalResourceCandidate(extracted, resources, pending, forcedTarget)
+    };
+  } catch (error) {
+    const descriptor = localResourceFileDescriptor(file?.name);
+    return {
+      client_id: clientId,
+      name: normalizeLocalResourceFileName(file?.name) || "Unnamed file",
+      extension: descriptor?.extension || "",
+      type_label: descriptor?.label || "Unsupported",
+      kind: descriptor?.kind || "",
+      content_type: descriptor?.contentType || "",
+      content_hash_sha256: "",
+      extracted_text_sha256: "",
+      byte_size: Number(file?.size || 0),
+      extracted_chars: 0,
+      content: "",
+      status: "error",
+      collision_action: "skip",
+      detail: readableErrorMessage(error)
+    };
+  }
+}
+
+function localResourcePreflightUsage(items = []) {
+  const retained = Array.isArray(items) ? items : [];
+  return {
+    files: retained.length,
+    rawBytes: retained.reduce((sum, item) => sum + Math.max(0, Number(item?.byte_size || 0)), 0),
+    extractedChars: retained.reduce((sum, item) => sum + String(item?.content || "").length, 0)
+  };
+}
+
+function assertLocalResourcePreflightSelectionWithinBounds(files, pending = []) {
+  const selected = Array.from(files || []);
+  const usage = localResourcePreflightUsage(pending);
+  if (usage.files + selected.length > LOCAL_RESOURCE_MAX_PREFLIGHT_FILES) {
+    throw new Error(
+      `Preflight can hold at most ${LOCAL_RESOURCE_MAX_PREFLIGHT_FILES} files. Add or discard the current files before selecting more.`
+    );
+  }
+  const selectedBytes = selected.reduce((sum, file) => {
+    const size = Number(file?.size || 0);
+    return sum + (Number.isFinite(size) && size > 0 ? size : 0);
+  }, 0);
+  if (usage.rawBytes + selectedBytes > LOCAL_RESOURCE_MAX_PREFLIGHT_RAW_BYTES) {
+    throw new Error("Selected files exceed the 100 MB aggregate preflight limit.");
+  }
+}
+
+async function createLocalResourcePreflightBatch(
+  files,
+  resources = state.resources,
+  pending = [],
+  forcedTarget = null,
+  onProgress = null
+) {
+  const selected = Array.from(files || []);
+  assertLocalResourcePreflightSelectionWithinBounds(selected, pending);
+  const created = [];
+  let extractedChars = localResourcePreflightUsage(pending).extractedChars;
+  const deadline = Date.now() + LOCAL_RESOURCE_PREFLIGHT_MAX_PARSE_MS;
+  for (let index = 0; index < selected.length; index += 1) {
+    const item = await buildLocalResourcePreflightItem(
+      selected[index],
+      resources,
+      [...pending, ...created],
+      selected.length === 1 ? forcedTarget : null,
+      deadline
+    );
+    const candidateChars = String(item.content || "").length;
+    if (candidateChars && extractedChars + candidateChars > LOCAL_RESOURCE_MAX_PREFLIGHT_EXTRACTED_CHARS) {
+      item.status = "error";
+      item.collision_action = "skip";
+      item.detail = "This selection exceeds the 5,000,000-character aggregate preflight limit. Add the ready files first, then select this file again.";
+      item.content = "";
+    } else {
+      extractedChars += candidateChars;
+    }
+    if (item.status === "duplicate") item.content = "";
+    created.push(item);
+    if (typeof onProgress === "function") onProgress(index + 1, selected.length, item);
+  }
+  return created;
+}
+
+function localResourceUpsertPayload(item) {
+  if (!["ready", "ready_replace", "ready_keep_both"].includes(item?.status)) return null;
+  const replacing = item.status === "ready_replace";
+  return {
+    client_id: String(item.client_id || ""),
+    operation: replacing ? "replace" : "add",
+    collision_action: replacing ? "replace" : item.status === "ready_keep_both" ? "keep_both" : "add",
+    replace_resource_id: replacing ? String(item.existing_resource_id || "") : "",
+    expected_previous_hash_sha256: replacing ? String(item.existing_hash_sha256 || "") : "",
+    expected_previous_extracted_text_sha256: replacing ? String(item.existing_extracted_text_sha256 || "") : "",
+    expected_index_revision: Number(state.meta?.index_revision || 0),
+    collection_kind: "user_import",
+    file_name: normalizeLocalResourceFileName(item.name),
+    title: normalizeLocalResourceFileName(item.name),
+    kind: String(item.kind || "document"),
+    content_type: String(item.content_type || ""),
+    content_hash_sha256: String(item.content_hash_sha256 || ""),
+    extracted_text_sha256: String(item.extracted_text_sha256 || ""),
+    byte_size: Number(item.byte_size || 0),
+    extracted_chars: Number(item.extracted_chars || 0),
+    body_verified: true,
+    indexed_body_source: "extracted",
+    content_origin: "user_import",
+    content: String(item.content || "")
+  };
+}
+
+function localResourceUpsertAckMatches(payload, result, committedIndexRevision) {
+  if (!payload || result?.ok !== true) return false;
+  const expectedRevision = Number(payload.expected_index_revision);
+  const committedRevision = Number(committedIndexRevision);
+  const allowedStatuses = payload.operation === "replace" ? ["replaced", "unchanged"] : ["added", "unchanged"];
+  return (
+    String(result.client_id || "") === String(payload.client_id || "") &&
+    String(result.operation || "") === String(payload.operation || "") &&
+    allowedStatuses.includes(String(result.status || "")) &&
+    String(result.resource_id || "") === `user_import:${String(payload.content_hash_sha256 || "")}` &&
+    String(result.content_hash_sha256 || "") === String(payload.content_hash_sha256 || "") &&
+    String(result.extracted_text_sha256 || "") === String(payload.extracted_text_sha256 || "") &&
+    String(result.previous_resource_id || "") === String(payload.operation === "replace" ? payload.replace_resource_id : "") &&
+    Number(result.expected_index_revision) === expectedRevision &&
+    Number(result.committed_index_revision) === committedRevision &&
+    Number.isInteger(committedRevision) &&
+    committedRevision >= expectedRevision &&
+    committedRevision <= expectedRevision + 1
+  );
+}
+
+function localResourceRemoveAckMatches(payload, response) {
+  return Boolean(response?.ok === true && response?.status === "removed" && response?.removed === 1 &&
+    String(response.resource_id || "") === String(payload.resource_id || "") &&
+    String(response.removed_hash_sha256 || "") === String(payload.expected_previous_hash_sha256 || "") &&
+    String(response.removed_extracted_text_sha256 || "") === String(payload.expected_previous_extracted_text_sha256 || "") &&
+    Number(response.expected_index_revision) === Number(payload.expected_index_revision) &&
+    Number(response.removed_at_index_revision) === Number(payload.expected_index_revision) &&
+    Number(response.committed_index_revision) === Number(payload.expected_index_revision) + 1);
+}
+
+function partitionLocalResourcePayloads(payloads) {
+  const batches = [];
+  let current = [];
+  let currentChars = 0;
+  for (const payload of Array.isArray(payloads) ? payloads : []) {
+    const contentChars = String(payload?.content || "").length;
+    if (contentChars > LOCAL_RESOURCE_MAX_COMMIT_CHARS) {
+      throw new Error("One extracted file exceeds the local-import message limit.");
+    }
+    if (
+      current.length &&
+      (current.length >= LOCAL_RESOURCE_MAX_COMMIT_FILES ||
+        currentChars + contentChars > LOCAL_RESOURCE_MAX_COMMIT_CHARS)
+    ) {
+      batches.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(payload);
+    currentChars += contentChars;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+function localResourceStatusLabel(item) {
+  const labels = {
+    ready: "Ready",
+    ready_replace: "Replace ready",
+    ready_keep_both: "Keep both ready",
+    needs_collision_choice: "Choose action",
+    duplicate: "Exact duplicate",
+    skipped: "Skipped",
+    saving: "Saving",
+    error: "Error"
+  };
+  return labels[item?.status] || "Waiting";
+}
+
+function setLocalResourceStatus(message) {
+  if (els.localResourceStatus) els.localResourceStatus.textContent = String(message || "");
+}
+
+function localResourceMaintenanceControls() {
+  return [
+    els.refreshBtn,
+    els.crawlBtn,
+    els.scanBtn,
+    els.clearBtn,
+    els.restoreDismissedBtn,
+    els.ragAuditBtn,
+    els.queryInput,
+    els.searchBtn
+  ].filter(Boolean);
+}
+
+function setLocalResourceBusy(busy, message = "") {
+  const nextBusy = Boolean(busy);
+  if (nextBusy && !localResourceBusy) {
+    localResourceMaintenanceControlSnapshot = new Map(
+      localResourceMaintenanceControls().map((control) => [control, Boolean(control.disabled)])
+    );
+  }
+  localResourceBusy = nextBusy;
+  if (els.localResourcesPanel) els.localResourcesPanel.setAttribute("aria-busy", String(localResourceBusy));
+  if (els.localResourcePickerBtn) els.localResourcePickerBtn.disabled = localResourceBusy;
+  if (els.localResourceFileInput) els.localResourceFileInput.disabled = localResourceBusy;
+  if (els.localResourceDropzone) els.localResourceDropzone.setAttribute("aria-disabled", String(localResourceBusy));
+  if (localResourceBusy) {
+    for (const control of localResourceMaintenanceControls()) control.disabled = true;
+  } else if (localResourceMaintenanceControlSnapshot) {
+    for (const [control, wasDisabled] of localResourceMaintenanceControlSnapshot) {
+      control.disabled = wasDisabled;
+    }
+    localResourceMaintenanceControlSnapshot = null;
+  }
+  if (message) setLocalResourceStatus(message);
+  renderLocalResources();
+}
+
+function applyLocalResourceCollisionChoice(clientId, choice) {
+  const item = localResourcePreflightItems.find((candidate) => candidate.client_id === clientId);
+  if (!item?.existing_resource_id) return;
+  if (choice === "replace") {
+    item.status = "ready_replace";
+    item.collision_action = "replace";
+    item.detail = "Ready to atomically replace the indexed copy after this extraction is committed.";
+  } else if (choice === "keep_both") {
+    item.status = "ready_keep_both";
+    item.collision_action = "keep_both";
+    item.detail = "Ready to keep both versions as separate indexed resources.";
+  } else if (choice === "skip") {
+    item.status = "skipped";
+    item.collision_action = "skip";
+    item.detail = "Cancelled; this file will not be sent to the index.";
+  } else {
+    item.status = "needs_collision_choice";
+    item.collision_action = "";
+    item.detail = "Choose Replace existing, Keep both, or Cancel / skip.";
+  }
+  renderLocalResources({ clientId, kind: "collision" });
+}
+
+function discardLocalResourcePreflight(clientId) {
+  const removedIndex = localResourcePreflightItems.findIndex((item) => item.client_id === clientId);
+  localResourcePreflightItems = localResourcePreflightItems.filter((item) => item.client_id !== clientId);
+  const nextItem = localResourcePreflightItems[Math.min(Math.max(0, removedIndex), Math.max(0, localResourcePreflightItems.length - 1))];
+  renderLocalResources(nextItem ? { clientId: nextItem.client_id, kind: "discard" } : null);
+  setLocalResourceStatus(localResourcePreflightItems.length ? "Preflight updated." : "No files waiting to be added.");
+  if (!nextItem && typeof els.localResourcePickerBtn?.focus === "function") els.localResourcePickerBtn.focus();
+}
+
+function renderLocalResourcePreflight(focusRequest = null) {
+  if (!els.localResourcePreflightList) return;
+  let focusControl = null;
+  els.localResourcePreflightList.textContent = "";
+  if (!localResourcePreflightItems.length) {
+    const empty = document.createElement("li");
+    empty.className = "local-resource-empty";
+    empty.textContent = "Choose or drop files to preview them before indexing.";
+    els.localResourcePreflightList.append(empty);
+  }
+  for (const item of localResourcePreflightItems) {
+    const row = document.createElement("li");
+    row.className = "local-resource-row";
+    const top = document.createElement("div");
+    top.className = "local-resource-row-top";
+    const name = document.createElement("span");
+    name.className = "local-resource-name";
+    name.textContent = item.name;
+    const badge = document.createElement("span");
+    badge.className = `local-resource-badge ${String(item.status || "").replace(/_/g, "-")}`;
+    badge.textContent = localResourceStatusLabel(item);
+    top.append(name, badge);
+    const meta = document.createElement("p");
+    meta.className = "local-resource-meta";
+    meta.textContent = `${item.type_label || "File"} · ${Number(item.extracted_chars || 0).toLocaleString()} extracted characters · ${item.detail || ""}`;
+    row.append(top, meta);
+
+    if (item.existing_resource_id && item.status !== "duplicate" && item.status !== "error") {
+      const label = document.createElement("label");
+      label.className = "local-resource-collision-choice";
+      label.textContent = "Same filename action";
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `Action for ${item.name}`);
+      for (const [value, text] of [["", "Choose an action"], ["replace", "Replace existing"], ["keep_both", "Keep both"], ["skip", "Cancel / skip"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        select.append(option);
+      }
+      select.value = item.collision_action || "";
+      select.disabled = localResourceBusy || item.status === "saving";
+      select.addEventListener("change", () => applyLocalResourceCollisionChoice(item.client_id, select.value));
+      if (focusRequest?.clientId === item.client_id && focusRequest?.kind === "collision") {
+        focusControl = select;
+      }
+      label.append(select);
+      row.append(label);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "local-resource-row-actions";
+    const discard = document.createElement("button");
+    discard.type = "button";
+    discard.className = "secondary";
+    discard.textContent = "Discard";
+    discard.setAttribute("aria-label", `Discard ${item.name} from preflight`);
+    discard.disabled = localResourceBusy || item.status === "saving";
+    discard.addEventListener("click", () => discardLocalResourcePreflight(item.client_id));
+    if (focusRequest?.clientId === item.client_id && focusRequest?.kind === "discard") {
+      focusControl = discard;
+    }
+    actions.append(discard);
+    row.append(actions);
+    els.localResourcePreflightList.append(row);
+  }
+  const readyCount = localResourcePreflightItems.filter((item) => localResourceUpsertPayload(item)).length;
+  if (els.addLocalResourcesBtn) {
+    els.addLocalResourcesBtn.disabled = localResourceBusy || readyCount === 0;
+    els.addLocalResourcesBtn.textContent = readyCount ? `Add ${readyCount} ready file${readyCount === 1 ? "" : "s"}` : "Add ready files";
+  }
+  if (focusControl && typeof focusControl.focus === "function") focusControl.focus();
+}
+
+function localResourceCorpusUsage() {
+  const resources = importedLocalResources();
+  return {
+    files: resources.length,
+    extractedChars: resources.reduce((sum, resource) => sum + String(state.contentStore?.[resource.id] || "").length, 0)
+  };
+}
+
+function renderLocalResourceLibrary() {
+  if (!els.localResourceList) return;
+  const resources = importedLocalResources();
+  const usage = localResourceCorpusUsage();
+  if (els.localResourceCount) els.localResourceCount.textContent = `${usage.files}/${LOCAL_RESOURCE_CORPUS_MAX_FILES} files Â· ${usage.extractedChars.toLocaleString()}/${LOCAL_RESOURCE_CORPUS_MAX_EXTRACTED_CHARS.toLocaleString()} characters`;
+  els.localResourceList.textContent = "";
+  if (!resources.length) {
+    const empty = document.createElement("li");
+    empty.className = "local-resource-empty";
+    empty.textContent = "No local files indexed yet.";
+    els.localResourceList.append(empty);
+    return;
+  }
+  for (const resource of resources) {
+    const row = document.createElement("li");
+    row.className = "local-resource-row";
+    const name = document.createElement("span");
+    name.className = "local-resource-name";
+    name.textContent = localResourceStoredName(resource) || "Local resource";
+    const meta = document.createElement("p");
+    meta.className = "local-resource-meta";
+    const chars = String(state.contentStore?.[resource.id] || "").length;
+    meta.textContent = `${String(resource.type || resource.kind || "document").toUpperCase()} · ${chars.toLocaleString()} indexed characters`;
+    const actions = document.createElement("div");
+    actions.className = "local-resource-row-actions";
+    const update = document.createElement("button");
+    update.type = "button";
+    update.className = "secondary";
+    update.textContent = "Update";
+    update.setAttribute("aria-label", `Update ${localResourceStoredName(resource) || "local resource"}`);
+    update.disabled = localResourceBusy;
+    update.addEventListener("click", () => openLocalResourcePicker(resource));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary danger";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${localResourceStoredName(resource) || "local resource"}`);
+    remove.disabled = localResourceBusy;
+    remove.addEventListener("click", () => removeLocalResource(resource.id).catch(reportError));
+    actions.append(update, remove);
+    row.append(name, meta, actions);
+    els.localResourceList.append(row);
+  }
+}
+
+function renderLocalResources(focusRequest = null) {
+  renderLocalResourcePreflight(focusRequest);
+  renderLocalResourceLibrary();
+}
+
+function openLocalResourcePicker(replacementTarget = null) {
+  if (localResourceBusy || !els.localResourceFileInput) return;
+  localResourceReplacementTarget = replacementTarget
+    ? { id: String(replacementTarget.id || ""), name: localResourceStoredName(replacementTarget) }
+    : null;
+  if (replacementTarget) setLocalResourceStatus(`Choose a new “${localResourceStoredName(replacementTarget)}” file to preflight. The indexed copy remains active until replacement succeeds.`);
+  els.localResourceFileInput.click();
+}
+
+async function preflightLocalResourceFiles(fileList, forcedTarget = null) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  if (forcedTarget && files.length !== 1) {
+    setLocalResourceStatus("Choose exactly one file when updating an indexed resource.");
+    return;
+  }
+  setLocalResourceBusy(true, `Extracting 0 of ${files.length} selected files…`);
+  try {
+    const created = await createLocalResourcePreflightBatch(
+      files,
+      state.resources,
+      localResourcePreflightItems,
+      forcedTarget,
+      (completed, total) => setLocalResourceStatus(`Extracting ${completed} of ${total} selected files…`)
+    );
+    localResourcePreflightItems.push(...created);
+    const ready = created.filter((item) => item.status === "ready").length;
+    const choices = created.filter((item) => item.status === "needs_collision_choice").length;
+    const duplicates = created.filter((item) => item.status === "duplicate").length;
+    const errors = created.filter((item) => item.status === "error").length;
+    setLocalResourceStatus(`Preflight complete: ${ready} ready, ${choices} need a same-name choice, ${duplicates} exact duplicate${duplicates === 1 ? "" : "s"}, ${errors} error${errors === 1 ? "" : "s"}.`);
+  } catch (error) {
+    setLocalResourceStatus(`Preflight stopped: ${readableErrorMessage(error)}`);
+    throw error;
+  } finally {
+    setLocalResourceBusy(false);
+    renderLocalResources();
+  }
+}
+
+async function commitLocalResourcePreflight() {
+  const items = localResourcePreflightItems.filter((item) => localResourceUpsertPayload(item));
+  if (!items.length) return;
+  const payloadItems = items.map(localResourceUpsertPayload);
+  const batches = partitionLocalResourcePayloads(payloadItems);
+  const priorStatus = new Map(items.map((item) => [item.client_id, item.status]));
+  const itemByClientId = new Map(items.map((item) => [item.client_id, item]));
+  for (const item of items) item.status = "saving";
+  setLocalResourceBusy(true, `Adding ${items.length} local file${items.length === 1 ? "" : "s"}…`);
+  const succeeded = new Set();
+  const failed = new Set();
+  const unconfirmed = new Set();
+  let expectedIndexRevision = Number(state.meta?.index_revision || 0);
+  try {
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      const batch = batches[batchIndex];
+      setLocalResourceStatus(`Adding bounded batch ${batchIndex + 1} of ${batches.length}…`);
+      let response = null;
+      try {
+        for (const payload of batch) payload.expected_index_revision = expectedIndexRevision;
+        response = await sendMessage("UPSERT_LOCAL_RESOURCES", {
+          collection_kind: "user_import",
+          resources: batch
+        });
+      } catch (error) {
+        for (const payload of batch) {
+          const item = itemByClientId.get(payload.client_id);
+          if (!item) continue;
+          unconfirmed.add(item.client_id);
+          item.status = "error";
+          item.detail = `Outcome unconfirmed because the worker response was lost. Refresh My resources to verify before retrying. ${readableErrorMessage(error)}`;
+        }
+        break;
+      }
+      const results = Array.isArray(response?.results)
+        ? response.results
+        : Array.isArray(response?.items)
+          ? response.items
+          : [];
+      const byClientId = new Map(results.map((result) => [String(result?.client_id || ""), result]));
+      const committedIndexRevision = Number(response?.committed_index_revision);
+      const topLevelAckValid = response?.ok === true &&
+        Number(response?.expected_index_revision) === expectedIndexRevision &&
+        Number.isInteger(committedIndexRevision) && committedIndexRevision >= expectedIndexRevision && committedIndexRevision <= expectedIndexRevision + 1;
+      for (const payload of batch) {
+        const item = itemByClientId.get(payload.client_id);
+        if (!item) continue;
+        const result = byClientId.get(item.client_id);
+        if (topLevelAckValid && localResourceUpsertAckMatches(payload, result, committedIndexRevision)) {
+          succeeded.add(item.client_id);
+          continue;
+        }
+        if (response?.ok === true || result?.ok === true) {
+          unconfirmed.add(item.client_id);
+          item.status = "error";
+          item.detail = "Outcome unconfirmed because the worker did not return the complete file identity receipt. Refresh My resources to verify before retrying.";
+          continue;
+        }
+        failed.add(item.client_id);
+        item.status = "error";
+        item.detail = readableErrorMessage(
+          result?.error ||
+            response?.error ||
+            "Worker did not return a positive per-file storage confirmation."
+        );
+      }
+      if (!topLevelAckValid && response?.ok === true) break;
+      if (topLevelAckValid) expectedIndexRevision = committedIndexRevision;
+    }
+    for (const item of items) {
+      if (item.status !== "saving") continue;
+      unconfirmed.add(item.client_id);
+      item.status = "error";
+      item.detail = "Outcome unconfirmed after an earlier worker response was lost. Refresh My resources to verify before retrying.";
+    }
+    localResourcePreflightItems = localResourcePreflightItems.filter((item) => !succeeded.has(item.client_id));
+
+    let refreshError = null;
+    if (succeeded.size || unconfirmed.size) {
+      try {
+        await refreshAll();
+      } catch (error) {
+        refreshError = error;
+        console.warn("Local import committed, but index refresh failed", error);
+      }
+    }
+    if (refreshError) {
+      setLocalResourceStatus(
+        `Confirmed ${succeeded.size} local file${succeeded.size === 1 ? "" : "s"}; ${unconfirmed.size} outcome${unconfirmed.size === 1 ? " is" : "s are"} unconfirmed, and the display could not refresh. Use Refresh index and verify before retrying. ${readableErrorMessage(refreshError)}`
+      );
+    } else if (succeeded.size) {
+      setLocalResourceStatus(
+        unconfirmed.size
+          ? `Local import: ${succeeded.size} confirmed, ${unconfirmed.size} unconfirmed, ${failed.size} rejected. My resources was refreshed; verify the file list before retrying any unconfirmed file.`
+          : `Local import finished: ${succeeded.size} added or updated, ${failed.size} failed. Exact duplicates and skipped files were not sent.`
+      );
+    } else if (unconfirmed.size) {
+      setLocalResourceStatus(
+        `Outcome unconfirmed for ${unconfirmed.size} file${unconfirmed.size === 1 ? "" : "s"}. Refresh My resources and verify the file list before retrying; storage may already have committed.`
+      );
+    } else {
+      for (const item of items) {
+        if (!failed.has(item.client_id)) item.status = priorStatus.get(item.client_id) || "ready";
+      }
+      setLocalResourceStatus(
+        `No files were stored; ${failed.size} failed or lacked a per-file confirmation. Existing indexed copies were left unchanged.`
+      );
+    }
+  } finally {
+    setLocalResourceBusy(false);
+    renderLocalResources();
+  }
+}
+
+function localResourceRemovePayload(resource) {
+  return {
+    resource_id: String(resource?.id || ""),
+    collection_kind: "user_import",
+    expected_previous_hash_sha256: localResourceHash(resource),
+    expected_previous_extracted_text_sha256: localResourceExtractedTextHash(resource),
+    expected_index_revision: Number(state.meta?.index_revision || 0)
+  };
+}
+
+async function removeLocalResource(resourceId) {
+  const resource = importedLocalResources().find((item) => String(item.id || "") === String(resourceId || ""));
+  if (!resource) throw new Error("That local resource is no longer indexed.");
+  if (!confirm(`Remove “${localResourceStoredName(resource)}” from this browser's local index?`)) return;
+  setLocalResourceBusy(true, `Removing “${localResourceStoredName(resource)}”…`);
+  try {
+    const payload = localResourceRemovePayload(resource);
+    let response = null;
+    try {
+      response = await sendMessage("REMOVE_LOCAL_RESOURCE", payload);
+    } catch (error) {
+      setLocalResourceStatus(`Removal outcome is unconfirmed because the worker response was lost. Refresh My resources to verify before retrying. ${readableErrorMessage(error)}`);
+      throw error;
+    }
+    if (response?.ok === true && !localResourceRemoveAckMatches(payload, response)) {
+      const error = new Error("Worker did not return the complete removal identity receipt.");
+      setLocalResourceStatus(`Removal outcome is unconfirmed. Refresh My resources to verify before retrying. ${readableErrorMessage(error)}`);
+      throw error;
+    }
+    if (response?.ok !== true) {
+      const error = new Error(response?.error || "Local resource removal failed");
+      setLocalResourceStatus(`Removal was rejected; the indexed copy was left unchanged. ${readableErrorMessage(error)}`);
+      throw error;
+    }
+    try {
+      await refreshAll();
+      if (typeof els.localResourcePickerBtn?.focus === "function") els.localResourcePickerBtn.focus();
+      setLocalResourceStatus(`Removed “${localResourceStoredName(resource)}” from the local index.`);
+    } catch (error) {
+      console.warn("Local resource removal committed, but index refresh failed", error);
+      setLocalResourceStatus(
+        `Removal was confirmed, but the display could not refresh. Use Refresh index; the removed file was not restored. ${readableErrorMessage(error)}`
+      );
+    }
+  } finally {
+    setLocalResourceBusy(false);
+  }
+}
+
 async function clearIndex() {
-  if (!confirm("Clear all indexed Blackboard and optional resources from this browser?")) return;
+  if (!confirm("Clear all indexed Blackboard, optional-pack, and My resources content from this browser?")) return;
   const response = await sendMessage("CLEAR_INDEX");
   if (!response.ok) throw new Error(response.error || "Clear failed");
   await refreshAll();
@@ -355,6 +1251,7 @@ function render() {
   els.resourceCount.textContent = String(state.resources.length);
   setIndexStatusSummary();
   renderSettings();
+  renderLocalResources();
   seedIntroMessage();
 }
 
@@ -2409,44 +3306,78 @@ function documentCandidateSources(candidates) {
   }));
 }
 
+function isPendingBodyRevalidation(resource) {
+  const evidenceState = String(resource?.search_body_evidence_state || resource?.search_identity?.body_evidence_state || "").toLowerCase();
+  return Boolean(
+    resource?.body_revalidation_required === true ||
+    resource?.needs_body_hydration === true ||
+    String(resource?.indexed_body_source || "").toLowerCase() === "last_known_extracted" ||
+    evidenceState === "stale_last_known_extracted"
+  );
+}
+
+function partitionHydrationPayloads(items) {
+  const batches = [];
+  let current = [];
+  let currentChars = 0;
+  for (const item of items || []) {
+    const chars = String(item?.entry?.content || "").length;
+    if (
+      current.length &&
+      (current.length >= CONTENT_HYDRATION_BATCH_MAX_ENTRIES ||
+        currentChars + chars > CONTENT_HYDRATION_BATCH_MAX_CHARS)
+    ) {
+      batches.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(item);
+    currentChars += chars;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+function contentStorageAckMatches(entry, acknowledgement) {
+  return Boolean(
+    acknowledgement?.status === "stored" &&
+    String(acknowledgement.resource_id || "") === String(entry.resource_id || "") &&
+    Number(acknowledgement.content_length) === String(entry.content || "").length &&
+    String(acknowledgement.content_fingerprint || "") === String(entry.content_fingerprint || "") &&
+    String(acknowledgement.extracted_text_sha256 || "") === String(entry.extracted_text_sha256 || "") &&
+    String(acknowledgement.expected_hydration_token || "") === String(entry.expected_hydration_token || "") &&
+    String(acknowledgement.consumed_hydration_token || "") === String(entry.expected_hydration_token || "")
+  );
+}
+
 async function hydrateResourceContentBatch(candidates, statusMessage = "") {
   if (statusMessage) setStatus(statusMessage);
   let hydrated = 0;
   let failed = 0;
+  const prepared = [];
 
-  for (const resource of candidates) {
+  for (const resource of candidates || []) {
     try {
-      if (state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) continue;
-      const content = await extractSearchableResourceText(resource);
+      const readable = Boolean(state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id]));
+      if (readable && !isPendingBodyRevalidation(resource)) continue;
+      const extracted = await extractSearchableResourceContent(resource);
       const fileLike = isFileLikeSearchResource(resource);
       const verifiedResource = fileLike
-        ? { ...resource, body_verified: true, indexed_body_source: "extracted" }
+        ? { ...resource, body_verified: true, indexed_body_source: "extracted", body_revalidation_required: false }
         : resource;
-      if (!resourceHasReadableBody(verifiedResource, content)) {
+      if (!resourceHasReadableBody(verifiedResource, extracted.content)) {
         throw new Error("Extracted text did not look like readable document body text.");
       }
-      const storedContent = normalizeExtractedContent(content);
-      const response = await sendMessage("STORE_CONTENT", {
-        resource_id: resource.id,
-        content: storedContent
+      prepared.push({
+        resource,
+        entry: {
+          resource_id: String(resource.id),
+          content: extracted.content,
+          content_fingerprint: extracted.content_fingerprint,
+          extracted_text_sha256: extracted.extracted_text_sha256,
+          expected_hydration_token: String(resource.hydration_token || "")
+        }
       });
-      if (!response.ok) throw new Error(response.error || "Content store write failed");
-      state.contentStore[resource.id] = storedContent;
-      if (fileLike) {
-        Object.assign(resource, {
-          body_verified: true,
-          indexed_body_source: "extracted",
-          content_origin: "extracted_attachment"
-        });
-      }
-      state.hydrationDiagnostics[resource.id] = {
-        ok: true,
-        chars: storedContent.length,
-        truncated: hasIndexedTextTruncationMarker(storedContent),
-        at: new Date().toISOString()
-      };
-      hydrationFailures.delete(resource.id);
-      hydrated += 1;
     } catch (error) {
       failed += 1;
       state.hydrationDiagnostics[resource.id] = {
@@ -2455,7 +3386,82 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
         at: new Date().toISOString()
       };
       hydrationFailures.add(resource.id);
-      console.warn("Could not hydrate searchable content", resource.title, error);
+      console.warn("Could not extract searchable content", resource.title, error);
+    }
+  }
+
+  for (const batch of partitionHydrationPayloads(prepared)) {
+    let response = null;
+    try {
+      response = await sendMessage("STORE_CONTENT_BATCH", {
+        entries: batch.map((item) => item.entry)
+      });
+      if (!response?.ok) throw new Error(response?.error || "Content batch write failed");
+    } catch (error) {
+      failed += batch.length;
+      for (const item of batch) {
+        state.hydrationDiagnostics[item.resource.id] = {
+          ok: false,
+          error: readableErrorMessage(error),
+          at: new Date().toISOString()
+        };
+        hydrationFailures.add(item.resource.id);
+      }
+      console.warn("Could not store searchable content batch", error);
+      try {
+        await refreshAll();
+      } catch (refreshError) {
+        console.warn("Could not refresh after an unconfirmed content-storage outcome", refreshError);
+      }
+      continue;
+    }
+
+    const storedById = new Map((Array.isArray(response?.stored) ? response.stored : [])
+      .map((item) => [String(item?.resource_id || ""), item]));
+    let hasUnconfirmedReceipt = false;
+    for (const item of batch) {
+      const { resource, entry } = item;
+      if (!contentStorageAckMatches(entry, storedById.get(entry.resource_id))) {
+        failed += 1;
+        hasUnconfirmedReceipt = true;
+        state.hydrationDiagnostics[resource.id] = {
+          ok: false,
+          error: "Content-storage outcome unconfirmed: the worker did not return the complete resource identity receipt. Refresh before retrying.",
+          at: new Date().toISOString()
+        };
+        hydrationFailures.add(resource.id);
+        continue;
+      }
+      if (!state.contentStore) state.contentStore = {};
+      state.contentStore[resource.id] = entry.content;
+      if (isFileLikeSearchResource(resource)) {
+        Object.assign(resource, {
+          body_verified: true,
+          indexed_body_source: "extracted",
+          content_origin: "extracted_attachment",
+          content_fingerprint: entry.content_fingerprint,
+          last_verified_content_fingerprint: entry.content_fingerprint,
+          extracted_text_sha256: entry.extracted_text_sha256
+        });
+        delete resource.needs_body_hydration;
+        delete resource.body_revalidation_required;
+        delete resource.hydration_token;
+      }
+      state.hydrationDiagnostics[resource.id] = {
+        ok: true,
+        chars: entry.content.length,
+        truncated: hasIndexedTextTruncationMarker(entry.content),
+        at: new Date().toISOString()
+      };
+      hydrationFailures.delete(resource.id);
+      hydrated += 1;
+    }
+    if (hasUnconfirmedReceipt) {
+      try {
+        await refreshAll();
+      } catch (refreshError) {
+        console.warn("Could not refresh after an unconfirmed content-storage receipt", refreshError);
+      }
     }
   }
 
@@ -2466,7 +3472,8 @@ async function hydrateResourceContentBatch(candidates, statusMessage = "") {
 function shouldHydrateResourceContent(resource, retryFailure = false) {
   if (!resource || !resource.id || !resource.url) return false;
   if (!retryFailure && hydrationFailures.has(resource.id)) return false;
-  if (state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) return false;
+  const mustRevalidate = isPendingBodyRevalidation(resource);
+  if (!mustRevalidate && state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) return false;
   const type = String(resource.type || "").toLowerCase();
   const url = String(resource.url || "").toLowerCase();
   const fileHint = resourceFileHint(resource).toLowerCase();
@@ -2475,15 +3482,27 @@ function shouldHydrateResourceContent(resource, retryFailure = false) {
   return ["pdf", "document", "slides", "spreadsheet"].includes(type) || /\.(pdf|docx|pptx|xlsx)(?:[?#]|$|\s)/i.test(fileHint);
 }
 
-async function extractSearchableResourceText(resource) {
+async function extractSearchableResourceContent(resource) {
   const { buffer, contentType } = await fetchResourceArrayBuffer(resource.url);
+  const contentFingerprint = await sha256Hex(buffer);
   const type = String(resource.type || "").toLowerCase();
   const fileHint = `${resourceFileHint(resource)} ${contentType}`.toLowerCase();
-  if (type === "pdf" || /(?:application\/pdf|\.pdf(?:[?#]|$|\s))/.test(fileHint)) return extractPdfText(buffer);
-  if (type === "document" || /\.(?:docx)(?:[?#]|$|\s)/i.test(fileHint)) return extractDocxText(buffer);
-  if (type === "slides" || /\.(?:pptx)(?:[?#]|$|\s)/i.test(fileHint)) return extractPptxText(buffer);
-  if (type === "spreadsheet" || /\.(?:xlsx)(?:[?#]|$|\s)/i.test(fileHint)) return extractXlsxText(buffer);
-  return "";
+  let extracted = "";
+  if (type === "pdf" || /(?:application\/pdf|\.pdf(?:[?#]|$|\s))/.test(fileHint)) extracted = await extractPdfText(buffer);
+  else if (type === "document" || /\.(?:docx)(?:[?#]|$|\s)/i.test(fileHint)) extracted = await extractDocxText(buffer);
+  else if (type === "slides" || /\.(?:pptx)(?:[?#]|$|\s)/i.test(fileHint)) extracted = await extractPptxText(buffer);
+  else if (type === "spreadsheet" || /\.(?:xlsx)(?:[?#]|$|\s)/i.test(fileHint)) extracted = await extractXlsxText(buffer);
+  const content = normalizeExtractedContent(extracted);
+  return {
+    content,
+    content_fingerprint: contentFingerprint,
+    extracted_text_sha256: await sha256Hex(new TextEncoder().encode(content).buffer)
+  };
+}
+
+async function extractSearchableResourceText(resource) {
+  const extracted = await extractSearchableResourceContent(resource);
+  return extracted.content;
 }
 
 async function fetchResourceArrayBuffer(url) {
@@ -2509,33 +3528,109 @@ async function fetchResourceArrayBuffer(url) {
   return { buffer, contentType };
 }
 
-async function extractPdfText(buffer) {
+async function localExtractionPromiseBeforeDeadline(promise, deadline, message) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(message);
+  let timer = 0;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timer = globalThis.setTimeout(() => reject(new Error(message)), remaining);
+      })
+    ]);
+  } finally {
+    if (timer) globalThis.clearTimeout(timer);
+  }
+}
+
+async function extractPdfText(buffer, externalDeadline = Number.POSITIVE_INFINITY) {
   if (typeof pdfjsLib === "undefined") {
     throw new Error("PDF parser is not available.");
   }
   pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("lib/pdf.worker.min.js");
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-  const pages = [];
-  let accumulatedChars = 0;
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const pageBody = textContent.items.map((item) => item.str || "").join(" ").replace(/\s+/g, " ").trim();
-    if (!pageBody) continue;
-    const pageText = "Page " + pageNumber + ": " + pageBody;
-    const separatorChars = pages.length ? 2 : 0;
-    if (accumulatedChars + separatorChars + pageText.length > MAX_CONTENT_CHARS) {
-      const available = Math.max(0, MAX_CONTENT_CHARS - accumulatedChars - separatorChars);
-      if (available) pages.push(pageText.slice(0, available));
-      return normalizeExtractedContent(
-        pages.join("\n\n"),
-        "PDF extraction reached the indexed-text safety limit while reading page " + pageNumber + " of " + pdf.numPages
-      );
+  const loadingTask = pdfjsLib.getDocument({ data: buffer });
+  const deadline = Math.min(Date.now() + LOCAL_RESOURCE_PDF_MAX_PARSE_MS, externalDeadline);
+  let pdf = null;
+  try {
+    pdf = await localExtractionPromiseBeforeDeadline(
+      loadingTask.promise,
+      deadline,
+      "PDF extraction exceeded the 30-second safety limit."
+    );
+    if (pdf.numPages > LOCAL_RESOURCE_PDF_MAX_PAGES) {
+      throw new Error(`PDF has more than ${LOCAL_RESOURCE_PDF_MAX_PAGES} pages and cannot be safely indexed in the side panel.`);
     }
-    pages.push(pageText);
-    accumulatedChars += separatorChars + pageText.length;
+    const pages = [];
+    let accumulatedChars = 0;
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      let page = null;
+      try {
+        page = await localExtractionPromiseBeforeDeadline(
+          pdf.getPage(pageNumber),
+          deadline,
+          "PDF extraction exceeded the 30-second safety limit."
+        );
+        const textContent = await localExtractionPromiseBeforeDeadline(
+          page.getTextContent(),
+          deadline,
+          "PDF extraction exceeded the 30-second safety limit."
+        );
+        const items = Array.isArray(textContent?.items) ? textContent.items : [];
+        if (items.length > LOCAL_RESOURCE_PDF_MAX_TEXT_ITEMS_PER_PAGE) {
+          throw new Error(`PDF page ${pageNumber} exceeds the ${LOCAL_RESOURCE_PDF_MAX_TEXT_ITEMS_PER_PAGE.toLocaleString()}-item safety limit.`);
+        }
+        const pieces = [];
+        let pageChars = 0;
+        let pageTruncated = false;
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+          if ((itemIndex & 127) === 0 && Date.now() >= deadline) {
+            throw new Error("PDF extraction exceeded the 30-second safety limit.");
+          }
+          const piece = String(items[itemIndex]?.str || "").replace(/\s+/g, " ").trim().slice(0, LOCAL_RESOURCE_PDF_MAX_ITEM_CHARS);
+          if (!piece) continue;
+          const separatorChars = pieces.length ? 1 : 0;
+          const available = LOCAL_RESOURCE_PDF_MAX_PAGE_CHARS - pageChars - separatorChars;
+          if (available <= 0) {
+            pageTruncated = true;
+            break;
+          }
+          pieces.push(piece.slice(0, available));
+          pageChars += separatorChars + Math.min(piece.length, available);
+          if (piece.length > available) {
+            pageTruncated = true;
+            break;
+          }
+        }
+        const pageBody = pieces.join(" ").trim();
+        if (!pageBody) continue;
+        const pageText = "Page " + pageNumber + ": " + pageBody + (pageTruncated ? " [Page text truncated at safety limit.]" : "");
+        const separatorChars = pages.length ? 2 : 0;
+        if (accumulatedChars + separatorChars + pageText.length > MAX_CONTENT_CHARS) {
+          const available = Math.max(0, MAX_CONTENT_CHARS - accumulatedChars - separatorChars);
+          if (available) pages.push(pageText.slice(0, available));
+          return normalizeExtractedContent(
+            pages.join("\n\n"),
+            "PDF extraction reached the indexed-text safety limit while reading page " + pageNumber + " of " + pdf.numPages
+          );
+        }
+        pages.push(pageText);
+        accumulatedChars += separatorChars + pageText.length;
+      } finally {
+        if (typeof page?.cleanup === "function") page.cleanup();
+      }
+    }
+    return normalizeExtractedContent(pages.join("\n\n"));
+  } finally {
+    const destroyTarget = pdf || loadingTask;
+    if (typeof destroyTarget?.destroy === "function") {
+      try {
+        await destroyTarget.destroy();
+      } catch (error) {
+        console.warn("PDF parser cleanup failed", error);
+      }
+    }
   }
-  return normalizeExtractedContent(pages.join("\n\n"));
 }
 
 async function extractDocxText(buffer) {
@@ -2559,14 +3654,183 @@ async function extractPptxText(buffer) {
 
 async function extractXlsxText(buffer) {
   const entries = await extractZipTextEntries(buffer, (name) =>
-    /^xl\/(sharedStrings|worksheets\/sheet\d+)\.xml$/i.test(name)
+    /^xl\/(?:workbook\.xml|_rels\/workbook\.xml\.rels|styles\.xml|sharedStrings\.xml|worksheets\/[^/]+\.xml)$/i.test(name)
   );
-  return normalizeExtractedContent(
-    entries
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-      .map((entry) => xmlToText(entry.text))
-      .join("\n\n")
+  return normalizeExtractedContent(extractXlsxWorkbookText(entries));
+}
+
+function extractXlsxWorkbookText(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const sharedEntry = list.find((entry) => /^xl\/sharedStrings\.xml$/i.test(entry?.name || ""));
+  const sharedStrings = sharedEntry ? extractXlsxSharedStrings(sharedEntry.text) : [];
+  const workbookEntry = list.find((entry) => /^xl\/workbook\.xml$/i.test(entry?.name || ""));
+  const relationshipsEntry = list.find((entry) => /^xl\/_rels\/workbook\.xml\.rels$/i.test(entry?.name || ""));
+  const stylesEntry = list.find((entry) => /^xl\/styles\.xml$/i.test(entry?.name || ""));
+  const workbookXml = String(workbookEntry?.text || "");
+  const date1904 = /<workbookPr\b[^>]*\bdate1904\s*=\s*(["'])(?:1|true)\1/i.test(workbookXml);
+  const styles = extractXlsxStyles(stylesEntry?.text || "");
+  const entryByName = new Map(list.map((entry) => [String(entry?.name || "").toLowerCase(), entry]));
+  const relationTargets = new Map();
+  for (const match of String(relationshipsEntry?.text || "").matchAll(/<Relationship\b([^>]*)\/?\s*>/gi)) {
+    const id = xlsxXmlAttribute(match[1], "Id");
+    const target = normalizeXlsxRelationshipTarget(xlsxXmlAttribute(match[1], "Target"));
+    if (id && target) relationTargets.set(id, target);
+  }
+
+  const workbookSheets = [];
+  for (const match of workbookXml.matchAll(/<sheet\b([^>]*)\/?\s*>/gi)) {
+    const name = xlsxXmlAttribute(match[1], "name") || `Sheet ${workbookSheets.length + 1}`;
+    const relationshipId = xlsxXmlAttribute(match[1], "r:id");
+    const target = relationTargets.get(relationshipId) || "";
+    const entry = target ? entryByName.get(target.toLowerCase()) : null;
+    if (entry) workbookSheets.push({ entry, name });
+  }
+  const fallbackSheets = list
+    .filter((entry) => /^xl\/worksheets\/[^/]+\.xml$/i.test(entry?.name || ""))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    .map((entry, index) => ({ entry, name: `Sheet ${index + 1}` }));
+  const sheets = workbookSheets.length ? workbookSheets : fallbackSheets;
+  return sheets
+    .map(({ entry, name }) => extractXlsxWorksheetText(entry, sharedStrings, { sheetName: name, styles, date1904 }))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeXlsxRelationshipTarget(value) {
+  const raw = String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const rooted = /^xl\//i.test(raw) ? raw : `xl/${raw}`;
+  const parts = [];
+  for (const part of rooted.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length) parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function extractXlsxSharedStrings(xml) {
+  const values = [];
+  const source = String(xml || "");
+  for (const match of source.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gi)) {
+    values.push(xmlToText(match[1]));
+  }
+  return values;
+}
+
+function xlsxXmlAttribute(attributes, name) {
+  const match = String(attributes || "").match(
+    new RegExp(`(?:^|\\s)${String(name || "")}\\s*=\\s*(["'])(.*?)\\1`, "i")
   );
+  return match ? decodeXmlEntities(match[2]) : "";
+}
+
+function extractXlsxStyles(xml) {
+  const customFormats = new Map();
+  const source = String(xml || "");
+  for (const match of source.matchAll(/<numFmt\b([^>]*)\/?\s*>/gi)) {
+    const id = Number(xlsxXmlAttribute(match[1], "numFmtId"));
+    const formatCode = xlsxXmlAttribute(match[1], "formatCode");
+    if (Number.isInteger(id) && id >= 0 && formatCode) customFormats.set(id, formatCode);
+  }
+  const cellFormats = [];
+  const cellXfs = source.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/i)?.[1] || "";
+  for (const match of cellXfs.matchAll(/<xf\b([^>]*)\/?\s*>/gi)) {
+    const numFmtId = Number(xlsxXmlAttribute(match[1], "numFmtId"));
+    cellFormats.push({
+      numFmtId: Number.isInteger(numFmtId) && numFmtId >= 0 ? numFmtId : 0,
+      formatCode: customFormats.get(numFmtId) || ""
+    });
+  }
+  return { cellFormats };
+}
+
+function xlsxDateFormat(styleIndex, styles) {
+  const style = styles?.cellFormats?.[styleIndex];
+  if (!style) return false;
+  const builtInDateFormats = new Set([
+    14, 15, 16, 17, 18, 19, 20, 21, 22,
+    27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
+    45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58
+  ]);
+  if (builtInDateFormats.has(style.numFmtId)) return true;
+  const normalized = String(style.formatCode || "")
+    .replace(/"[^"]*"/g, "")
+    .replace(/\\./g, "")
+    .replace(/\[(?!h+\]|m+\]|s+\])[^\]]*\]/gi, "")
+    .replace(/_.|\*./g, "")
+    .toLowerCase();
+  return /(?:^|[^a-z])[ymdhis]+/.test(normalized);
+}
+
+function xlsxSerialDate(value, date1904 = false) {
+  const serial = Number(value);
+  if (!Number.isFinite(serial)) return String(value || "");
+  const wholeDays = Math.floor(serial);
+  const fraction = serial - wholeDays;
+  let dateText = "";
+  if (!date1904 && wholeDays === 60) {
+    dateText = "1900-02-29";
+  } else {
+    const adjustedDays = date1904 ? wholeDays : wholeDays - (wholeDays >= 60 ? 1 : 0);
+    const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 31);
+    const date = new Date(epoch + adjustedDays * 86400000);
+    dateText = `${date.getUTCFullYear().toString().padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+  if (Math.abs(fraction) < 1e-10) return dateText;
+  const seconds = Math.round(fraction * 86400 + 1e-8);
+  const hours = Math.floor(seconds / 3600) % 24;
+  const minutes = Math.floor(seconds / 60) % 60;
+  const remainingSeconds = seconds % 60;
+  return `${dateText} ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function xlsxCellValue(attributes, body, sharedStrings, options = {}) {
+  const type = xlsxXmlAttribute(attributes, "t").toLowerCase();
+  if (type === "inlinestr") {
+    const inline = String(body || "").match(/<is\b[^>]*>([\s\S]*?)<\/is>/i);
+    return xmlToText(inline?.[1] || "");
+  }
+  const formula = xmlToText(String(body || "").match(/<f\b[^>]*>([\s\S]*?)<\/f>/i)?.[1] || "");
+  const raw = xmlToText(String(body || "").match(/<v\b[^>]*>([\s\S]*?)<\/v>/i)?.[1] || "");
+  if (!raw) return formula ? `formula =${formula} (no cached result)` : "";
+  let value = raw;
+  if (type === "s") {
+    const index = Number(raw);
+    value = Number.isInteger(index) && index >= 0 && index < sharedStrings.length
+      ? sharedStrings[index]
+      : "";
+  }
+  if (type === "b") value = raw === "1" ? "true" : raw === "0" ? "false" : raw;
+  const styleIndex = Number(xlsxXmlAttribute(attributes, "s"));
+  if ((!type || type === "n") && Number.isFinite(Number(raw)) && xlsxDateFormat(styleIndex, options.styles)) {
+    value = xlsxSerialDate(raw, options.date1904);
+  }
+  return formula ? `${value} (cached result; formula =${formula})` : value;
+}
+
+function extractXlsxWorksheetText(entry, sharedStrings, options = {}) {
+  const source = String(entry?.text || "");
+  const sheetName = String(options.sheetName || String(entry?.name || "").split("/").pop()?.replace(/\.xml$/i, "") || "Sheet");
+  const rows = [];
+  let ordinal = 0;
+  for (const rowMatch of source.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/gi)) {
+    ordinal += 1;
+    const rowNumber = xlsxXmlAttribute(rowMatch[1], "r") || String(ordinal);
+    const cells = [];
+    let cellOrdinal = 0;
+    for (const cellMatch of rowMatch[2].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gi)) {
+      cellOrdinal += 1;
+      const value = xlsxCellValue(cellMatch[1], cellMatch[2], sharedStrings, options);
+      if (!value) continue;
+      const reference = xlsxXmlAttribute(cellMatch[1], "r") || `cell ${cellOrdinal}`;
+      cells.push(`${reference} = ${value}`);
+    }
+    if (cells.length) rows.push(`${sheetName}, row ${rowNumber}: ${cells.join("; ")}.`);
+  }
+  return rows.join("\n");
 }
 
 async function extractZipTextEntries(buffer, shouldExtract) {
@@ -2576,52 +3840,185 @@ async function extractZipTextEntries(buffer, shouldExtract) {
   const centralDirectory = findCentralDirectory(view);
   if (!centralDirectory) throw new Error("Could not read Office document zip directory.");
 
-  const entries = [];
+  const metadata = [];
   let offset = centralDirectory.offset;
   const end = centralDirectory.offset + centralDirectory.size;
-  while (offset < end && view.getUint32(offset, true) === 0x02014b50) {
+  if (end > centralDirectory.eocdOffset || end > view.byteLength) {
+    throw new Error("Office document zip directory is outside the file boundary.");
+  }
+  while (offset < end) {
+    if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) {
+      throw new Error("Office document zip directory contains an invalid entry.");
+    }
+    const flags = view.getUint16(offset + 8, true);
     const compressionMethod = view.getUint16(offset + 10, true);
     const compressedSize = view.getUint32(offset + 20, true);
+    const uncompressedSize = view.getUint32(offset + 24, true);
     const fileNameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
     const localHeaderOffset = view.getUint32(offset + 42, true);
+    const entryEnd = offset + 46 + fileNameLength + extraLength + commentLength;
+    if (entryEnd > end) throw new Error("Office document zip entry metadata exceeds the directory boundary.");
     const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + fileNameLength));
+    metadata.push({
+      name,
+      flags,
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      localHeaderOffset,
+      selected: Boolean(shouldExtract(name))
+    });
+    offset = entryEnd;
+  }
+  if (metadata.length !== centralDirectory.entries) {
+    throw new Error("Office document zip entry count does not match its directory.");
+  }
+  validateOfficeZipEntryMetadata(metadata);
 
-    if (shouldExtract(name)) {
-      const localNameLength = view.getUint16(localHeaderOffset + 26, true);
-      const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
-      const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
-      const compressed = bytes.slice(dataStart, dataStart + compressedSize);
-      const inflated = await inflateZipEntry(compressed, compressionMethod);
-      entries.push({ name, text: decoder.decode(inflated) });
+  const entries = [];
+  for (const entry of metadata.filter((item) => item.selected)) {
+    if (entry.localHeaderOffset + 30 > view.byteLength || view.getUint32(entry.localHeaderOffset, true) !== 0x04034b50) {
+      throw new Error("Office document contains an invalid local zip header.");
     }
-
-    offset += 46 + fileNameLength + extraLength + commentLength;
+    const localFlags = view.getUint16(entry.localHeaderOffset + 6, true);
+    const localCompressionMethod = view.getUint16(entry.localHeaderOffset + 8, true);
+    if ((localFlags & 1) !== 0) throw new Error("Encrypted Office documents are not supported.");
+    if (localCompressionMethod !== entry.compressionMethod) {
+      throw new Error("Office document zip compression metadata is inconsistent.");
+    }
+    const localNameLength = view.getUint16(entry.localHeaderOffset + 26, true);
+    const localExtraLength = view.getUint16(entry.localHeaderOffset + 28, true);
+    const dataStart = entry.localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + entry.compressedSize;
+    if (dataStart < 0 || dataEnd > bytes.byteLength) {
+      throw new Error("Office document zip entry data exceeds the file boundary.");
+    }
+    const compressed = bytes.slice(dataStart, dataEnd);
+    const inflated = await inflateZipEntry(
+      compressed,
+      entry.compressionMethod,
+      OFFICE_ZIP_MAX_ENTRY_XML_BYTES
+    );
+    if (inflated.byteLength !== entry.uncompressedSize) {
+      throw new Error("Office document zip entry expanded to an unexpected size.");
+    }
+    entries.push({ name: entry.name, text: decoder.decode(inflated) });
   }
   return entries;
 }
 
+function validateOfficeZipEntryMetadata(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) throw new Error("Office document zip contains no entries.");
+  if (list.length > OFFICE_ZIP_MAX_ENTRIES) {
+    throw new Error(`Office document zip contains more than ${OFFICE_ZIP_MAX_ENTRIES} entries.`);
+  }
+  let totalCompressed = 0;
+  let totalUncompressed = 0;
+  let selectedUncompressed = 0;
+  for (const entry of list) {
+    const compressedSize = Number(entry?.compressedSize);
+    const uncompressedSize = Number(entry?.uncompressedSize);
+    if (
+      !Number.isSafeInteger(compressedSize) || compressedSize < 0 ||
+      !Number.isSafeInteger(uncompressedSize) || uncompressedSize < 0 ||
+      compressedSize === 0xffffffff || uncompressedSize === 0xffffffff
+    ) {
+      throw new Error("ZIP64 or invalid Office document entry sizes are not supported.");
+    }
+    if ((Number(entry?.flags || 0) & 1) !== 0) {
+      throw new Error("Encrypted Office documents are not supported.");
+    }
+    if (![0, 8].includes(Number(entry?.compressionMethod))) {
+      throw new Error(`Unsupported Office zip compression method ${entry?.compressionMethod}.`);
+    }
+    totalCompressed += compressedSize;
+    totalUncompressed += uncompressedSize;
+    if (entry?.selected) {
+      selectedUncompressed += uncompressedSize;
+      if (uncompressedSize > OFFICE_ZIP_MAX_ENTRY_XML_BYTES) {
+        throw new Error("An Office XML entry exceeds the safe extraction limit.");
+      }
+    }
+  }
+  if (totalCompressed > OFFICE_ZIP_MAX_TOTAL_COMPRESSED_BYTES) {
+    throw new Error("Office document compressed data exceeds the safe extraction limit.");
+  }
+  if (totalUncompressed > OFFICE_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES) {
+    throw new Error("Office document uncompressed data exceeds the safe extraction limit.");
+  }
+  if (selectedUncompressed > OFFICE_ZIP_MAX_SELECTED_XML_BYTES) {
+    throw new Error("Office document XML exceeds the safe extraction limit.");
+  }
+  return { totalCompressed, totalUncompressed, selectedUncompressed };
+}
+
 function findCentralDirectory(view) {
+  if (!view || view.byteLength < 22) return null;
   for (let offset = view.byteLength - 22; offset >= 0 && offset >= view.byteLength - 65558; offset -= 1) {
     if (view.getUint32(offset, true) === 0x06054b50) {
+      const diskNumber = view.getUint16(offset + 4, true);
+      const directoryDisk = view.getUint16(offset + 6, true);
+      const entriesOnDisk = view.getUint16(offset + 8, true);
+      const entries = view.getUint16(offset + 10, true);
+      const size = view.getUint32(offset + 12, true);
+      const directoryOffset = view.getUint32(offset + 16, true);
+      const commentLength = view.getUint16(offset + 20, true);
+      if (diskNumber || directoryDisk || entriesOnDisk !== entries) {
+        throw new Error("Multi-disk Office zip files are not supported.");
+      }
+      if (entries === 0xffff || size === 0xffffffff || directoryOffset === 0xffffffff) {
+        throw new Error("ZIP64 Office documents are not supported.");
+      }
+      if (offset + 22 + commentLength > view.byteLength) continue;
       return {
-        size: view.getUint32(offset + 12, true),
-        offset: view.getUint32(offset + 16, true)
+        size,
+        offset: directoryOffset,
+        entries,
+        eocdOffset: offset
       };
     }
   }
   return null;
 }
 
-async function inflateZipEntry(bytes, compressionMethod) {
-  if (compressionMethod === 0) return bytes;
+async function inflateZipEntry(bytes, compressionMethod, maximumBytes = OFFICE_ZIP_MAX_ENTRY_XML_BYTES) {
+  if (compressionMethod === 0) {
+    if (bytes.byteLength > maximumBytes) throw new Error("Office XML entry exceeds the safe extraction limit.");
+    return bytes;
+  }
   if (compressionMethod !== 8) throw new Error(`Unsupported zip compression method ${compressionMethod}`);
   if (typeof DecompressionStream === "undefined") {
     throw new Error("This browser cannot decompress Office documents.");
   }
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > maximumBytes) {
+        await reader.cancel("Office XML entry exceeded the safe extraction limit.");
+        throw new Error("Office XML entry exceeds the safe extraction limit.");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const inflated = new Uint8Array(total);
+  let writeOffset = 0;
+  for (const chunk of chunks) {
+    inflated.set(chunk, writeOffset);
+    writeOffset += chunk.byteLength;
+  }
+  return inflated;
 }
 
 function xmlToText(xml) {
@@ -2756,22 +4153,21 @@ function isIndexCommand(query) {
 }
 
 async function handleIndexCommand(query = "/index") {
+  if (localResourceBusy) {
+    setLocalResourceStatus("Finish the current My resources change before indexing or re-indexing.");
+    return;
+  }
   const isFullReindex = /^\/reindex(?:\s+|$)/i.test(String(query || "").trim());
   const pending = appendMessage(
     "assistant",
     isFullReindex
-      ? "Resetting Blackboard-derived index data while preserving installed optional resource packs, then starting a fresh crawl."
+      ? "Starting a fresh transactional Blackboard reindex. The current active index, My resources, and optional packs remain available unless the replacement index completes and is promoted."
       : "Updating the Blackboard index. Keep Blackboard open and stay logged in while it runs."
   );
   try {
-    if (isFullReindex) {
-      const reset = await sendMessage("CLEAR_INDEX", { preserve_resource_packs: true });
-      if (!reset.ok) throw new Error(reset.error || "Could not reset the Blackboard index");
-      await refreshAll();
-    }
-    const response = await crawlSite();
+    const response = await crawlSite({ fullReindex: isFullReindex });
     const text = response && response.started
-      ? (isFullReindex ? "Fresh indexing" : "Index update") + " started. Watch the status line at the top for progress. You can ask questions after it finishes."
+      ? (isFullReindex ? "Fresh transactional reindex" : "Index update") + " started. Watch the status line at the top for progress. The active index remains searchable while it runs."
       : "Indexing finished. You can ask questions from the refreshed local resources now.";
     updateMessage(pending, text);
   } catch (error) {
@@ -3049,6 +4445,10 @@ function countBy(values) {
 
 async function handleAsk(event) {
   event.preventDefault();
+  if (localResourceBusy) {
+    setLocalResourceStatus("Finish the current My resources change before asking a question or starting an index command.");
+    return;
+  }
   const query = clampText(els.queryInput.value.trim(), MAX_QUERY_CHARS);
   if (!query) return;
   els.queryInput.value = "";
@@ -3857,9 +5257,12 @@ function buildLocalAnswer(query, results, retrievalQuery = query) {
     return `${index + 1}. ${result.title}${result.timestamp ? ` (${result.timestamp})` : ""}: ${quote}`;
   });
 
-  const modeNote = state.settings.hasApiKey
-    ? "Local retrieval found these likely sources."
-    : "Local retrieval found these likely sources. Add an API key in Setup for synthesized answers.";
+  const staleOnlyForCurrentQuestion = isCurrentOrTimeSensitiveQuery(query) && top.every(isPendingBodyRevalidation);
+  const modeNote = staleOnlyForCurrentQuestion
+    ? "Only last-known indexed excerpts pending revalidation matched this time-sensitive question; they may be outdated."
+    : state.settings.hasApiKey
+      ? "Local retrieval found these likely sources."
+      : "Local retrieval found these likely sources. Add an API key in Setup for synthesized answers.";
   return `${modeNote}\n\n${lines.join("\n\n")}`;
 }
 
@@ -3993,17 +5396,19 @@ function isInboundBaggageQuery(query) {
 }
 
 function directAnswerSourceWithEvidence(results, predicate, requiredPhrases = []) {
-  return (results || []).find((source) =>
-    !sourceLooksLikeDocumentListing(source) &&
-    (!predicate || predicate(source)) &&
-    directAnswerSourceSupports(source, requiredPhrases)
-  ) || null;
+  return (results || [])
+    .filter((source) =>
+      !sourceLooksLikeDocumentListing(source) &&
+      (!predicate || predicate(source)) &&
+      directAnswerSourceSupports(source, requiredPhrases)
+    )
+    .sort((a, b) => Number(isPendingBodyRevalidation(a)) - Number(isPendingBodyRevalidation(b)))[0] || null;
 }
 
 function buildMandarinResourceLocationAnswer(results) {
   const source = directAnswerSourceWithEvidence(
     results,
-    (candidate) => !candidate?.source_pack_id,
+    (candidate) => hasValidatedSourceAuthority(candidate),
     ["key vocabulary", "grammar"]
   );
   if (!source) return null;
@@ -4090,7 +5495,7 @@ function buildVisitorAndClubAnswer(results) {
 function buildX1ArrivalCompositeAnswer(results) {
   const official = directAnswerSourceWithEvidence(
     results,
-    (candidate) => !candidate?.source_pack_id && isVisaResult(candidate),
+    (candidate) => hasValidatedSourceAuthority(candidate) && isVisaResult(candidate),
     ["jw202", "admission notice"]
   );
   const arrival = directAnswerSourceWithEvidence(
@@ -4111,7 +5516,7 @@ function buildX1ArrivalCompositeAnswer(results) {
 function buildPackingDepartureCompositeAnswer(results) {
   const official = directAnswerSourceWithEvidence(
     results,
-    (candidate) => !candidate?.source_pack_id && isPackingResult(candidate),
+    (candidate) => hasValidatedSourceAuthority(candidate) && isPackingResult(candidate),
     ["prescription medication", "original packaging"]
   );
   const studentLife = directAnswerSourceWithEvidence(
@@ -4142,7 +5547,7 @@ function isGeneralX1VisaGuidanceQuery(query) {
 function buildX1VisaAnswer(results) {
   const candidates = (results || [])
     .filter((source) => isVisaResult(source) && !sourceLooksLikeDocumentListing(source))
-    .sort((a, b) => Number(Boolean(a?.source_pack_id)) - Number(Boolean(b?.source_pack_id)));
+    .sort((a, b) => sourceAuthorityPreferenceRank(a) - sourceAuthorityPreferenceRank(b));
   const items = [];
   const sources = [];
   const sourceText = (source) => normalizeText(fullTextForResult(source));
@@ -5301,6 +6706,28 @@ function deterministicClaimVetoReasons(text, sources, userProvidedText = "") {
   return Array.from(new Set(reasons));
 }
 
+function isCurrentOrTimeSensitiveQuery(query) {
+  return /\b(?:current|currently|today|tonight|now|latest|newest|most recent|up to date|deadline|due date|this (?:term|semester|year|month|week)|next (?:term|semester|month|week)|when (?:is|are|does|do|will))\b/.test(
+    normalizeText(query)
+  );
+}
+
+function answerExplicitlyQualifiesStaleEvidence(text) {
+  return /\b(?:last[- ]known|pending revalidation|awaiting revalidation|may be outdated|might be outdated|could be outdated|not confirmed current|not yet revalidated)\b/i.test(
+    String(text || "")
+  );
+}
+
+function staleOnlyCurrentEvidenceReason(query, text, sourceList, citationNumbers) {
+  if (!isCurrentOrTimeSensitiveQuery(query) || answerExplicitlyQualifiesStaleEvidence(text)) return "";
+  const citedSources = Array.from(new Set(citationNumbers))
+    .filter((number) => number >= 1 && number <= sourceList.length)
+    .map((number) => sourceList[number - 1])
+    .filter(Boolean);
+  if (!citedSources.length || citedSources.some((source) => !isPendingBodyRevalidation(source))) return "";
+  return "A current or time-sensitive claim relied only on stale last-known evidence without saying that revalidation is pending and the information may be outdated.";
+}
+
 function citedAnswerValidation(
   query,
   answer,
@@ -5338,6 +6765,8 @@ function citedAnswerValidation(
     if (text && !answerHasCitationCoverage(text)) {
       reasons.push("Every factual paragraph or checklist item needs a citation.");
     }
+    const staleEvidenceReason = staleOnlyCurrentEvidenceReason(query, text, sourceList, citationNumbers);
+    if (staleEvidenceReason) reasons.push(staleEvidenceReason);
     reasons.push(...deterministicClaimVetoReasons(text, sourceList, userProvidedText));
   } else if (citationNumbers.length) {
     reasons.push("A clean not-found answer must not cite sources.");
@@ -5479,30 +6908,47 @@ function looksLikeRawEvidenceDump(text) {
 }
 
 function promptSourceProvenance(result) {
-  const explicit = [
-    result?.source_authority,
-    result?.authority,
-    result?.source_provenance,
-    result?.source_pack_provenance
-  ]
-    .map((value) => String(value || "").trim())
-    .find(Boolean);
-  if (explicit) return explicit;
-  return result?.source_pack_id
-    ? "community-collated optional resource"
-    : "Blackboard-indexed, authority unknown";
+  const sourceClass = sourceClassForResult(result);
+  const stale = isPendingBodyRevalidation(result);
+  if (sourceClass === "user_import") {
+    return "user-imported local resource; not official Blackboard guidance";
+  }
+  if (sourceClass === "curated_pack") {
+    const statedProvenance = clampText(
+      String(result?.source_pack_provenance || "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim(),
+      100
+    );
+    return `community-collated optional resource${statedProvenance ? `; stated provenance: ${statedProvenance}` : ""}${stale ? "; stale last-known extraction; revalidation pending" : ""}`;
+  }
+  if (stale) {
+    return hasValidatedSourceAuthority(result)
+      ? "validated official Blackboard/university attachment; stale last-known extraction; revalidation pending"
+      : "Blackboard-indexed attachment; stale last-known extraction; revalidation pending";
+  }
+  return hasValidatedSourceAuthority(result)
+    ? "validated official Blackboard/university guidance"
+    : "Blackboard-indexed resource; authority unknown";
 }
 
 function answerPromptSource(result, index, textLimit) {
+  const sourceClass = sourceClassForResult(result);
   return {
     id: index + 1,
     kind: clampText(String(result.kind || "resource"), 40),
+    source_class: sourceClass,
+    authority_validated: hasValidatedSourceAuthority(result),
+    body_evidence_state: isPendingBodyRevalidation(result) ? "stale_last_known_extracted" : clampText(String(result.search_body_evidence_state || ""), 80),
+    body_revalidation_required: isPendingBodyRevalidation(result),
     provenance: clampText(
       promptSourceProvenance(result),
       160
     ),
     title: clampText(cleanSourceTitle(result), 200),
-    source: clampText(compactSourceTrail(result) || "Indexed Blackboard resource", 240),
+    source: clampText(
+      compactSourceTrail(result) ||
+        (sourceClass === "user_import" ? "Imported local resource" : "Indexed Blackboard resource"),
+      240
+    ),
     page_range: clampText(String(result.source_pack_page_range || ""), 120),
     timestamp: clampText(String(result.timestamp || ""), 80),
     url: clampText(String(result.url || ""), 600),
@@ -5796,7 +7242,10 @@ function strictJsonObject(text) {
 
 function groundedAnswerPolicyInstruction() {
   return (
-    "Apply one authority policy at every answer stage: current official Blackboard or university guidance outranks community-collated material, and newer dated official guidance outranks older guidance. " +
+    "Treat source_class only as corpus ownership, never as proof of epistemic authority. Only a source with authority_validated=true may be described or prioritized as official/current authoritative guidance. " +
+    "Validated current Blackboard or university guidance outranks community-collated material, and newer dated validated guidance outranks older guidance. A Blackboard-indexed source with authority_validated=false has unknown authority. " +
+    "Source metadata can mark a body as stale_last_known_extracted with body_revalidation_required=true. Prefer comparable fresh verified evidence. " +
+    "For current or time-sensitive questions, never present stale last-known extraction as current; if it is the only useful evidence, explicitly qualify the answer as last-known information pending revalidation. " +
     "When useful sources conflict, state the conflict, identify which guidance controls, and do not invent a compromise or reconciliation that no source states. " +
     "When sources do not conflict, combine complementary facts without implying that community material is official. "
   );
@@ -6151,6 +7600,10 @@ function semanticCandidateComparableAnswerScore(facet, candidate) {
   return relevance + Math.round(coverage * 10);
 }
 
+function isManagedBlackboardSelectionCoverageCandidate(candidate) {
+  return isOfficialBlackboardResult(candidate?.result);
+}
+
 function semanticSelectionPassesDeterministicSanity(selection, facets, candidates, enforceAuthority = false) {
   if (!selection) return false;
   const facetById = new Map(facets.map((facet) => [facet.facet_id, facet]));
@@ -6170,24 +7623,24 @@ function semanticSelectionPassesDeterministicSanity(selection, facets, candidate
     const facet = facetById.get(facetSelection.facet_id);
     const selectedCandidates = (facetSelection.candidate_ids || []).map((id) => candidateById.get(id)).filter(Boolean);
     const selectedPackScores = selectedCandidates
-      .filter((candidate) => Boolean(candidate.result?.source_pack_id))
+      .filter((candidate) => isCuratedPackResult(candidate.result))
       .map((candidate) => semanticCandidateComparableAnswerScore(facet, candidate));
     if (!selectedPackScores.length) continue;
 
     const bestSelectedPackScore = Math.max(...selectedPackScores);
     const comparableThreshold = Math.max(24, bestSelectedPackScore - 3);
-    const comparableNonPackCandidates = candidates.filter(
+    const comparableManagedCandidates = candidates.filter(
       (candidate) =>
-        !candidate.result?.source_pack_id &&
+        isManagedBlackboardSelectionCoverageCandidate(candidate) &&
         semanticCandidateComparableAnswerScore(facet, candidate) >= comparableThreshold
     );
-    if (!comparableNonPackCandidates.length) continue;
-    const selectedComparableNonPack = selectedCandidates.some(
+    if (!comparableManagedCandidates.length) continue;
+    const selectedComparableManaged = selectedCandidates.some(
       (candidate) =>
-        !candidate.result?.source_pack_id &&
+        isManagedBlackboardSelectionCoverageCandidate(candidate) &&
         semanticCandidateComparableAnswerScore(facet, candidate) >= comparableThreshold
     );
-    if (!selectedComparableNonPack) return false;
+    if (!selectedComparableManaged) return false;
   }
   return true;
 }
@@ -6211,8 +7664,11 @@ function semanticCandidateRankForFacet(facet, candidate, query = "") {
   if (facetTerms.length >= 5 && matchedTerms.length < 2) return -Infinity;
   const concrete = semanticCandidateComparableAnswerScore(facet, candidate);
   const routeBonus = Array.isArray(candidate.prompt?.route_types) ? candidate.prompt.route_types.length * 25 : 0;
-  const officialBonus = hasExplicitAuthorityIntent(query) && !candidate.result?.source_pack_id ? 5000 : 0;
-  return officialBonus + relevance * 100 + Math.max(0, concrete) * 20 + routeBonus + (Number(candidate.result?.score) || 0) / 100;
+  const officialBonus = hasExplicitAuthorityIntent(query) && hasValidatedSourceAuthority(candidate.result) ? 5000 : 0;
+  const bodyFreshnessAdjustment = isPendingBodyRevalidation(candidate.result)
+    ? -2500
+    : candidate.result?.body_verified === true && String(candidate.result?.indexed_body_source || "").toLowerCase() === "extracted" ? 250 : 0;
+  return officialBonus + bodyFreshnessAdjustment + relevance * 100 + Math.max(0, concrete) * 20 + routeBonus + (Number(candidate.result?.score) || 0) / 100;
 }
 
 function semanticCandidateProvidesConcreteFacetEvidence(facet, candidate, query = "") {
@@ -6891,7 +8347,7 @@ async function selectSemanticEvidenceForApi(
     const deepReadRank = (candidate) => {
       const facetScore = Math.max(0, ...facets.map((facet) => sourceEvidenceScore(facet.text, candidate.result, facet.text)));
       const selectedBonus = selectedIdSet.has(candidate.id) ? 3000 : 0;
-      const officialBonus = hasExplicitAuthorityIntent(resolvedQuestion) && !candidate.result?.source_pack_id ? 10000 : 0;
+      const officialBonus = hasExplicitAuthorityIntent(resolvedQuestion) && hasValidatedSourceAuthority(candidate.result) ? 10000 : 0;
       return selectedBonus + officialBonus + facetScore * 100 + (Number(candidate.result?.score) || 0);
     };
     const explicitlyRequested = candidatePool.find((candidate) => candidate.id === selection.deepReadCandidateId);
@@ -6921,7 +8377,7 @@ async function selectSemanticEvidenceForApi(
       const selectedCount = selectedChunksPerParent.get(requestedParentKey) || 0;
       const unresolvedParent = unresolvedParentKeys.has(requestedParentKey);
       if (selectedCount >= SEMANTIC_EVIDENCE_LIMITS.maxCombinedPerParent && !unresolvedParent) continue;
-      if (!selection.insufficient && !policyOrYesNo && !requestedCandidate.result?.source_pack_id && !unresolvedParent) continue;
+      if (!selection.insufficient && !policyOrYesNo && !isCuratedPackResult(requestedCandidate.result) && !unresolvedParent) continue;
       const batches = semanticDeepReadBatches(safeRetrievalResults, requestedCandidate, retrievalQuery, deepFacets)
         .map((batch) => batch.filter((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys)))
         .filter((batch) => batch.length);
@@ -8113,10 +9569,42 @@ els.setupViewBtn.addEventListener("click", () => setView("setup"));
 els.providerSelect.addEventListener("change", () => {
   els.modelInput.value = defaultModel(els.providerSelect.value);
 });
+els.localResourcePickerBtn.addEventListener("click", () => openLocalResourcePicker());
+els.localResourceFileInput.addEventListener("change", () => {
+  const target = localResourceReplacementTarget;
+  localResourceReplacementTarget = null;
+  const files = Array.from(els.localResourceFileInput.files || []);
+  els.localResourceFileInput.value = "";
+  preflightLocalResourceFiles(files, target).catch(reportError);
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  els.localResourceDropzone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    if (!localResourceBusy) els.localResourceDropzone.classList.add("is-dragover");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  els.localResourceDropzone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    els.localResourceDropzone.classList.remove("is-dragover");
+  });
+}
+els.localResourceDropzone.addEventListener("drop", (event) => {
+  if (localResourceBusy) return;
+  localResourceReplacementTarget = null;
+  preflightLocalResourceFiles(event.dataTransfer?.files || []).catch(reportError);
+});
+els.localResourceDropzone.addEventListener("click", () => openLocalResourcePicker());
+els.localResourceDropzone.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  openLocalResourcePicker();
+});
+els.addLocalResourcesBtn.addEventListener("click", () => commitLocalResourcePreflight().catch(reportError));
 els.saveSettingsBtn.addEventListener("click", () => saveSettings().catch(reportError));
 els.scanBtn.addEventListener("click", () => scanActiveTab().catch(reportError));
 els.crawlBtn.addEventListener("click", () =>
-  crawlSite()
+  crawlSite({ fullReindex: true })
     .catch(reportError)
     .finally(() => {
       if (els.crawlBtn) {

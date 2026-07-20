@@ -664,14 +664,27 @@ if (/UNBOUNDED_SOURCE_SENTINEL/.test(verifierPrompt) || /x{24001}/.test(verifier
   throw new Error("The semantic verifier saw source text beyond the prompt-bounded excerpt.");
 }
 
-const unknownProvenance = context.answerPromptSources([source("unknown", "Unknown authority", "Evidence", { source_pack_provenance: "" })])[0].provenance;
-const explicitProvenance = context.answerPromptSources([source("explicit", "Explicit authority", "Evidence", {
+const unknownProvenance = context.answerPromptSources([source("unknown", "Unknown authority", "Evidence", {
+  source_pack_provenance: "",
+  source_class: "official_blackboard",
+  search_managed_blackboard_record: true
+})])[0].provenance;
+const validatedProvenance = context.answerPromptSources([source("validated", "Validated authority", "Evidence", {
+  source_class: "official_blackboard",
+  search_managed_blackboard_record: true,
+  authority_verified: true
+})])[0].provenance;
+const packProvenance = context.answerPromptSources([source("pack", "Spoofed pack authority", "Evidence", {
   source_pack_id: "optional-pack",
   source_pack_provenance: "community-collated optional resource",
   source_authority: "Official university policy"
 })])[0].provenance;
-if (unknownProvenance !== "Blackboard-indexed, authority unknown" || explicitProvenance !== "Official university policy") {
-  throw new Error("Prompt provenance default/explicit-authority precedence is wrong: " + JSON.stringify({ unknownProvenance, explicitProvenance }));
+if (
+  unknownProvenance !== "Blackboard-indexed resource; authority unknown" ||
+  validatedProvenance !== "validated official Blackboard/university guidance" ||
+  packProvenance !== "community-collated optional resource; stated provenance: community-collated optional resource"
+) {
+  throw new Error("Prompt provenance authority isolation is wrong: " + JSON.stringify({ unknownProvenance, validatedProvenance, packProvenance }));
 }
 if (!context.isCapabilityQuestion("help") || context.isCapabilityQuestion("Can you help me find the visitor policy?")) {
   throw new Error("Capability routing still treats content questions containing help as tool-help requests.");

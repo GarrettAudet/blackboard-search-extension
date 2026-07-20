@@ -269,7 +269,7 @@ context.pdfjsLib = {
         async getPage(pageNumber) {
           return {
             async getTextContent() {
-              return { items: [{ str: "PAGE_" + pageNumber + " " + "largepageword ".repeat(2600) }] };
+              return { items: Array.from({ length: 4 }, (_, itemIndex) => ({ str: "PAGE_" + pageNumber + "_ITEM_" + itemIndex + " " + "largepageword ".repeat(650) })) };
             }
           };
         }
@@ -305,6 +305,124 @@ function evidenceResult(index, text, {
     search_part_index: index,
     search_part_count: 150
   };
+}
+
+// Same-parent fusion must retain a compact passage that independently covers
+// the primary question, even when higher-ranked route-specific passages offer
+// more globally novel terms.
+context.__primaryFacetQuery = "lab booking portal or kiosk which badge opens the blue gate and how many days ahead";
+context.__partialPrimaryPassage = evidenceResult(
+  2100,
+  "Lab booking uses the portal or kiosk. Present the badge at the blue gate. Check the release schedule. " + "overview ".repeat(90),
+  { parent: "facet-completeness-parent", score: 1000 }
+);
+context.__routeDiversePassages = [
+  evidenceResult(2101, "Rail airport schedule baggage allowance arrival terminal shuttle transfer", { parent: "facet-completeness-parent", score: 990 }),
+  evidenceResult(2102, "Subway taxi payments transit card commute station timetable", { parent: "facet-completeness-parent", score: 980 }),
+  evidenceResult(2103, "Visa documents health exam residence permit immigration checklist", { parent: "facet-completeness-parent", score: 970 })
+];
+context.__compactCompletePassage = evidenceResult(
+  2104,
+  "COMPACT_COMPLETE_SENTINEL: For lab booking, use the portal or kiosk, present your badge at the blue gate, and book 15 days ahead.",
+  { parent: "facet-completeness-parent", score: 900 }
+);
+for (const [index, candidate] of [
+  context.__partialPrimaryPassage,
+  ...context.__routeDiversePassages,
+  context.__compactCompletePassage
+].entries()) {
+  candidate.retrieval_route_ranks = [{ routeIndex: index, rankIndex: 0 }];
+  candidate.retrieval_route_queries = [{
+    routeIndex: index,
+    rankIndex: 0,
+    query: index === 0
+      ? context.__primaryFacetQuery
+      : [
+          "rail airport schedule baggage allowance arrival terminal shuttle transfer",
+          "subway taxi payments transit card commute station timetable",
+          "visa documents health exam residence permit immigration checklist",
+          context.__primaryFacetQuery
+        ][index - 1]
+  }];
+}
+context.__facetCompleteSelection = vm.runInContext(
+  "selectDiverseSourcePassages([globalThis.__partialPrimaryPassage, ...globalThis.__routeDiversePassages, globalThis.__compactCompletePassage], globalThis.__primaryFacetQuery, 4, 6000)",
+  context
+);
+assert.ok(
+  context.__facetCompleteSelection.some((candidate) => /COMPACT_COMPLETE_SENTINEL/.test(candidate.text)),
+  "Same-parent passage selection discarded the compact primary-facet-complete passage."
+);
+assert.equal(context.__facetCompleteSelection[0].resource_id, context.__partialPrimaryPassage.resource_id, "Primary fused passage was displaced.");
+assert.ok(context.__facetCompleteSelection.some((candidate) => /Rail airport|Subway taxi|Visa documents/.test(candidate.text)), "Route-diverse evidence was entirely displaced.");
+
+context.__oversizedCompletePassage = evidenceResult(
+  2105,
+  "OVERSIZED_COMPLETE_SENTINEL: For lab booking, use the portal or kiosk, present your badge at the blue gate, and book 15 days ahead. " + "oversized ".repeat(100),
+  { parent: "facet-budget-parent", score: 900 }
+);
+context.__budgetLeadPassage = evidenceResult(
+  2106,
+  "Lab booking uses the portal or kiosk. Present the badge at the blue gate. Requests open 15 days ahead. " + "overview ".repeat(35),
+  { parent: "facet-budget-parent", score: 1000 }
+);
+context.__budgetFallbackPassage = evidenceResult(
+  2107,
+  "Airport schedule transfer details.",
+  { parent: "facet-budget-parent", score: 800 }
+);
+context.__budgetedFacetSelection = vm.runInContext(
+  "selectDiverseSourcePassages([globalThis.__budgetLeadPassage, globalThis.__oversizedCompletePassage, globalThis.__budgetFallbackPassage], globalThis.__primaryFacetQuery, 2, 1000)",
+  context
+);
+assert.doesNotMatch(
+  context.__budgetedFacetSelection.map((candidate) => candidate.text).join(" "),
+  /OVERSIZED_COMPLETE_SENTINEL/,
+  "Primary-facet reservation exceeded the passage character budget."
+);
+assert.ok(context.__budgetedFacetSelection.reduce((sum, candidate) => sum + candidate.text.length, 0) <= 1000, "Primary-facet selection exceeded its character budget.");
+
+// A compact leader that already covers every primary facet must not force a
+// redundant same-route duplicate ahead of three genuinely distinct routes.
+context.__compactFullLeader = evidenceResult(
+  2110,
+  "For lab booking, use the portal or kiosk, present your badge at the blue gate, and book 15 days ahead.",
+  { parent: "facet-nonredundancy-parent", score: 1000 }
+);
+context.__redundantPrimaryDuplicate = evidenceResult(
+  2111,
+  "REDUNDANT_PRIMARY_SENTINEL: For lab booking, use the portal or kiosk, present your badge at the blue gate, and book 15 days ahead. " + "repeated context ".repeat(18),
+  { parent: "facet-nonredundancy-parent", score: 990 }
+);
+context.__distinctRoutePassages = [
+  evidenceResult(2112, "DISTINCT_ROUTE_ONE rail airport baggage terminal shuttle transfer", { parent: "facet-nonredundancy-parent", score: 980 }),
+  evidenceResult(2113, "DISTINCT_ROUTE_TWO subway taxi payments transit commute station", { parent: "facet-nonredundancy-parent", score: 970 }),
+  evidenceResult(2114, "DISTINCT_ROUTE_THREE visa documents health residence immigration checklist", { parent: "facet-nonredundancy-parent", score: 960 })
+];
+for (const candidate of [context.__compactFullLeader, context.__redundantPrimaryDuplicate]) {
+  candidate.retrieval_route_ranks = [{ routeIndex: 0, rankIndex: 0 }];
+  candidate.retrieval_route_queries = [{ routeIndex: 0, rankIndex: 0, query: context.__primaryFacetQuery }];
+}
+for (const [index, candidate] of context.__distinctRoutePassages.entries()) {
+  candidate.retrieval_route_ranks = [{ routeIndex: index + 1, rankIndex: 0 }];
+  candidate.retrieval_route_queries = [{
+    routeIndex: index + 1,
+    rankIndex: 0,
+    query: [
+      "rail airport baggage terminal shuttle transfer",
+      "subway taxi payments transit commute station",
+      "visa documents health residence immigration checklist"
+    ][index]
+  }];
+}
+context.__nonredundantFacetSelection = vm.runInContext(
+  "selectDiverseSourcePassages([globalThis.__compactFullLeader, globalThis.__redundantPrimaryDuplicate, ...globalThis.__distinctRoutePassages], globalThis.__primaryFacetQuery, 4, 6000)",
+  context
+);
+const nonredundantText = context.__nonredundantFacetSelection.map((candidate) => candidate.text).join(" ");
+assert.doesNotMatch(nonredundantText, /REDUNDANT_PRIMARY_SENTINEL/, "Compact complete leader still forced a redundant primary passage.");
+for (const marker of ["DISTINCT_ROUTE_ONE", "DISTINCT_ROUTE_TWO", "DISTINCT_ROUTE_THREE"]) {
+  assert.match(nonredundantText, new RegExp(marker), `Primary-facet reservation displaced ${marker}.`);
 }
 
 // Route balancing must admit facet/planner evidence before a saturated raw route
@@ -435,6 +553,7 @@ context.__officialCandidate = {
     title: "Indexed Hospital Guidance"
   })
 };
+context.__officialCandidate.result.search_managed_blackboard_record = true;
 context.__communityCandidate = {
   id: "E003",
   parentId: "P003",
@@ -535,7 +654,7 @@ assert.deepEqual(
 // Side-panel migration detection and /reindex sequencing.
 context.__legacyStore = { legacy: "l".repeat(20000) };
 context.__legacyIds = vm.runInContext(
-  "legacyTruncationRiskIds({ last_updated: 'legacy' }, globalThis.__legacyStore)",
+  "legacyTruncationRiskIds({ last_updated: 'legacy' }, globalThis.__legacyStore, [{ id: 'legacy', search_managed_blackboard_record: true }])",
   context
 );
 assert.ok(context.__legacyIds.has("legacy"), "Legacy 20k body was not flagged for reindex.");
@@ -554,17 +673,17 @@ vm.runInContext(
   "globalThis.__commandCalls = []; " +
   "sendMessage = async (type, payload) => { globalThis.__commandCalls.push({ type, payload }); return { ok: true }; }; " +
   "refreshAll = async () => { globalThis.__commandCalls.push({ type: 'REFRESH' }); }; " +
-  "crawlSite = async () => { globalThis.__commandCalls.push({ type: 'CRAWL' }); return { ok: true, started: true }; }; " +
+  "crawlSite = async (options = {}) => { globalThis.__commandCalls.push({ type: options.fullReindex ? 'REINDEX' : 'CRAWL', options }); return { ok: true, started: true }; }; " +
   "appendMessage = () => ({}); updateMessage = () => {};",
   context
 );
 await vm.runInContext("handleIndexCommand('/reindex')", context);
 assert.deepEqual(
   Array.from(context.__commandCalls, (call) => call.type),
-  ["CLEAR_INDEX", "REFRESH", "CRAWL"],
-  "/reindex did not reset, refresh, and crawl in order."
+  ["REINDEX"],
+  "/reindex did not route directly to the transactional reindex path."
 );
-assert.equal(context.__commandCalls[0].payload.preserve_resource_packs, true, "/reindex did not request pack preservation.");
+assert.equal(context.__commandCalls[0].options.fullReindex, true, "/reindex did not request a full transactional reindex.");
 context.__commandCalls.length = 0;
 await vm.runInContext("handleIndexCommand('/index')", context);
 assert.deepEqual(
@@ -651,9 +770,11 @@ const clearStorage = storageContext({
   assistant_settings: { provider: "openrouter", apiKey: "unchanged" }
 });
 const clearContext = {
+  Map,
   chrome: { storage: { local: clearStorage.storage } },
   CONTENT_SCHEMA_VERSION: 2,
   MAX_INDEXED_BODY_CHARS: 500000,
+  LEGACY_INDEXED_BODY_CHARS: 20000,
   RESOURCE_KEY: "resource_index",
   TRANSCRIPT_KEY: "transcript_store",
   CONTENT_KEY: "content_store",
@@ -665,11 +786,21 @@ const clearContext = {
     return Object.entries(contentStore || {})
       .filter(([, text]) => /indexed text truncated/i.test(String(text || "")))
       .map(([id]) => id);
+  },
+  pruneContentStore(contentStore) { return contentStore; },
+  isVideoResource() { return false; },
+  stableResourceContentFingerprint() { return ""; },
+  uniqueStrings(values) { return [...new Set(values || [])]; },
+  async sha256Hex(value) {
+    const lengthHex = String(String(value || "").length.toString(16));
+    return lengthHex.padStart(64, "0").slice(-64);
   }
 };
 vm.createContext(clearContext);
 vm.runInContext(
-  sourceBetween(serviceWorkerSource, "async function clearIndex", "async function installResourcePack"),
+  sourceBetween(serviceWorkerSource, "function reconcileIndexTranscriptGraph", "function resolveResourceIdRemap") + "\n" +
+    sourceBetween(serviceWorkerSource, "async function saveIndex", "function pruneContentStore") + "\n" +
+    sourceBetween(serviceWorkerSource, "async function clearIndex", "async function installResourcePack"),
   clearContext
 );
 const clearResult = await clearContext.clearIndex({ preserve_resource_packs: true });
@@ -692,6 +823,7 @@ const saveStorage = storageContext({
   index_meta: { last_updated: "legacy-build" }
 });
 const saveContext = {
+  Map,
   chrome: { storage: { local: saveStorage.storage } },
   CONTENT_SCHEMA_VERSION: 2,
   MAX_INDEXED_BODY_CHARS: 500000,
@@ -702,11 +834,18 @@ const saveContext = {
   TRANSCRIPT_KEY: "transcript_store",
   pruneContentStore(contentStore) { return contentStore; },
   boundedContentTruncationIds() { return []; },
-  isVideoResource() { return false; }
+  isVideoResource() { return false; },
+  stableResourceContentFingerprint() { return ""; },
+  uniqueStrings(values) { return [...new Set(values || [])]; },
+  async sha256Hex(value) {
+    const lengthHex = String(String(value || "").length.toString(16));
+    return lengthHex.padStart(64, "0").slice(-64);
+  }
 };
 vm.createContext(saveContext);
 vm.runInContext(
-  sourceBetween(serviceWorkerSource, "async function saveIndex", "function pruneContentStore"),
+  sourceBetween(serviceWorkerSource, "function reconcileIndexTranscriptGraph", "function resolveResourceIdRemap") + "\n" +
+    sourceBetween(serviceWorkerSource, "async function saveIndex", "function pruneContentStore"),
   saveContext
 );
 await saveContext.saveIndex([{ id: "legacy" }], [], saveStorage.store.content_store);
@@ -743,5 +882,5 @@ assert.match(serviceWorkerSource, /bounded_content_truncation_count/);
 
 console.log(
   "retrieval-hardening-check passed " +
-  "(tail retrieval, bounded full-PDF extraction, route balance, ranked deep read, selector sanity, migration, pack-preserving reindex)"
+  "(tail retrieval, bounded full-PDF extraction, primary-facet passage retention, route balance, ranked deep read, selector sanity, migration, pack-preserving reindex)"
 );

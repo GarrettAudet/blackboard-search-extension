@@ -690,6 +690,8 @@ const railOfficialResult = {
     routeIndex: 0,
     routeQuery: genericRailTimingQuery
   }),
+  search_managed_blackboard_record: true,
+  authority_verified: true,
   source_pack_id: "",
   source_pack_document_id: "",
   source_pack_document_title: "",

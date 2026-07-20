@@ -36,6 +36,7 @@ resources.push(
     url: "https://lms.sc.tsinghua.edu.cn/official-x1-visa.pdf",
     page_title: "Resources - Class of 2026-2027 Pre-program",
     section: "Class of 2026-2027 Pre-program Resources",
+    authority_verified: true,
     context: "Official Blackboard X1 visa guidance"
   },
   {
@@ -45,6 +46,7 @@ resources.push(
     url: "https://lms.sc.tsinghua.edu.cn/official-packing-list.pdf",
     page_title: "Resources - Class of 2026-2027 Pre-program",
     section: "Class of 2026-2027 Pre-program Resources",
+    authority_verified: true,
     context: "Official Blackboard packing list"
   },
   {
@@ -54,6 +56,7 @@ resources.push(
     url: "https://lms.sc.tsinghua.edu.cn/chinese-language-resources",
     page_title: "Chinese Language Learning Resources",
     section: "Chinese Language Learning Resources Announcements",
+    authority_verified: true,
     context: "Mandarin placement and study materials"
   }
 );

@@ -80,7 +80,8 @@
             <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Stored locally in Chrome" />
 
             <p class="setup-note">
-              API answering sends your question and the top matched Blackboard snippets to the selected provider.
+              API answering sends your question and bounded matched excerpts from your indexed sources—including My resources—to the selected provider.
+              Raw files, file blobs, and local paths are never sent.
               For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.
             </p>
 
@@ -99,6 +100,55 @@
             </div>
             <pre id="ragAuditOutput" class="audit-output developer-maintenance" hidden>Run Audit RAG to inspect searchable body text, unread files, and extraction failures.</pre>
           </div>
+        </section>
+
+        <section id="localResourcesPanel" class="panel local-resources-panel" aria-labelledby="localResourcesHeading" aria-busy="false">
+          <div class="panel-heading">
+            <h2 id="localResourcesHeading">My resources</h2>
+            <span id="localResourceCount">0 files</span>
+          </div>
+          <p id="localResourcesDisclosure" class="setup-note">
+            Extracted text and filenames are indexed in this browser. When you ask an API-powered question, bounded relevant excerpts and their filenames may be sent to your selected provider.
+            Raw files, local paths, and file blobs are never stored or sent.
+          </p>
+          <p id="localResourcesFormats" class="setup-note">
+            Supported: PDF, DOCX, PPTX, XLSX, TXT, Markdown, and CSV.
+          </p>
+          <div class="local-resource-picker-row">
+            <input
+              id="localResourceFileInput"
+              class="visually-hidden"
+              type="file"
+              tabindex="-1"
+              aria-label="Choose local resource files"
+              multiple
+              accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.markdown,.csv"
+              aria-describedby="localResourcesFormats localResourcesDisclosure"
+            />
+            <button id="localResourcePickerBtn" class="secondary" type="button">Choose files</button>
+          </div>
+          <div
+            id="localResourceDropzone"
+            class="local-resource-dropzone"
+            role="button"
+            tabindex="0"
+            aria-controls="localResourceFileInput"
+            aria-describedby="localResourcesFormats localResourcesDisclosure"
+          >
+            Drop files here, or press Enter or Space to choose files.
+          </div>
+          <p id="localResourceStatus" class="local-resource-status" role="status" aria-live="polite" aria-atomic="true">No files waiting to be added.</p>
+          <section class="local-resource-section" aria-labelledby="localResourcePreflightHeading">
+            <div class="local-resource-section-heading">
+              <h3 id="localResourcePreflightHeading">Preflight</h3>
+              <button id="addLocalResourcesBtn" type="button" disabled>Add ready files</button>
+            </div>
+            <ul id="localResourcePreflightList" class="local-resource-list" aria-label="Files waiting to be added"></ul>
+          </section>
+          <section class="local-resource-section" aria-labelledby="localResourceLibraryHeading">
+            <h3 id="localResourceLibraryHeading">Indexed local files</h3>
+            <ul id="localResourceList" class="local-resource-list" aria-label="Indexed local files"></ul>
+          </section>
         </section>
 
       </section>

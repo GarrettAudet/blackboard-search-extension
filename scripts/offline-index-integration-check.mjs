@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -80,6 +81,9 @@ const workerContext = {
   Map,
   Promise,
   AbortController,
+  TextEncoder,
+  Uint8Array,
+  crypto: crypto.webcrypto,
   setTimeout,
   clearTimeout,
   structuredClone,
@@ -219,7 +223,7 @@ assert.equal(installResult.ok, true, "Production resource-pack installation fail
 assert.equal(installResult.prepared_count, packManifest.resources.length, "Not every manifest resource was prepared.");
 assert.equal(installResult.added_or_updated, packManifest.resources.length, "Not every prepared resource reached storage.");
 assert.equal(installResult.extracted_count, packManifest.resources.length, "Prepared searchable text was missing.");
-assert.equal(mockedSessionFetches, 1, "Resource-pack installation did not perform exactly one mocked session check.");
+assert.equal(mockedSessionFetches, 2, "Resource-pack installation did not revalidate the Blackboard session immediately before commit.");
 assert.ok(extensionFetches.includes("resource-packs/schwarzman-c11/pack.json"), "The production pack manifest was not fetched.");
 assert.ok(
   extensionFetches.some((item) => item.startsWith("resource-packs/schwarzman-c11/texts/")),
@@ -376,8 +380,8 @@ assert.ok(authorityContract.officialEvidence >= 11 && authorityContract.packEvid
 assert.ok(authorityContract.officialComparable >= Math.max(24, authorityContract.packComparable - 3), "Official evidence was not comparable to the pack answer.");
 assert.equal(authorityContract.officialAccepted, true, "Production selector sanity rejected the relevant official source.");
 assert.equal(authorityContract.packOnlyAccepted, false, "Production selector sanity allowed pack-only selection over comparable official evidence.");
-assert.equal(authorityContract.officialProvenance, "Blackboard-indexed, authority unknown", "Official prompt provenance was mislabeled.");
-assert.equal(authorityContract.packProvenance, packAuthorityHit.source_pack_provenance, "Pack prompt provenance was not preserved.");
+assert.equal(authorityContract.officialProvenance, "Blackboard-indexed resource; authority unknown", "Unverified Blackboard prompt provenance was mislabeled.");
+assert.equal(authorityContract.packProvenance, `community-collated optional resource; stated provenance: ${packAuthorityHit.source_pack_provenance}`, "Pack prompt provenance was not preserved inside the explicit non-authority label.");
 assert.equal(forbiddenNetworkAttempts, 0, "The offline integration check attempted external network access.");
 
 console.log(
