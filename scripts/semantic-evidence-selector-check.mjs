@@ -344,6 +344,29 @@ if (
   );
 }
 
+const archiveFollowUpQuery = "What do I need to do before collection?";
+const archiveHistory = [{
+  user: "Where can I collect the adapter from Alder Archive?",
+  assistant: "You can collect it from the service counter."
+}];
+const archivePlan = {
+  ...plan,
+  rewritten_question: "What steps are required before adapter collection?",
+  retrieval_query: "adapter collection steps",
+  search_queries: ["adapter collection steps"],
+  source_preferences: []
+};
+context.__archiveFollowUpQuery = archiveFollowUpQuery;
+context.__archiveHistory = archiveHistory;
+context.__archivePlan = archivePlan;
+const archiveResolved = vm.runInContext(
+  "resolvedQuestionForRag(globalThis.__archiveFollowUpQuery, globalThis.__archivePlan, globalThis.__archiveHistory)",
+  context
+);
+if (!/Alder Archive/.test(archiveResolved) || /Blue Archive/.test(archiveResolved)) {
+  throw new Error("A named follow-up subject was not retained in the resolved question: " + archiveResolved);
+}
+
 const standaloneDiningQuery = "Compare halal and kosher dining options.";
 const unrelatedHistory = [
   { user: "What documents do I need for the X1 visa?", assistant: "The prior answer mentioned an Orchid Ferry example." }

@@ -382,8 +382,17 @@ await check("MULTI_PARENT_DEEP_READ", async () => {
     `, context);
   }
   const text = run.selection.sources.map((source) => source.text).join("\n");
-  return !initialDetailVisible && deepParents.size >= 2 &&
+  const passed = !initialDetailVisible && deepParents.size >= 2 &&
     /ALPHA_DETAIL/.test(text) && /BETA_DETAIL/.test(text);
+  if (!passed) throw new Error("Multi-parent deep-read diagnostics " + JSON.stringify({
+    initialDetailVisible,
+    deepParents: [...deepParents],
+    stages: run.requests.map(stageFor),
+    mode: run.selection.mode,
+    reason: run.selection.reason,
+    text
+  }));
+  return true;
 });
 
 await check("COMPOUND_ADJACENT_FRAGMENT_SELECTION", async () => {

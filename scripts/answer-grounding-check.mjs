@@ -1023,6 +1023,27 @@ const orderingGuard = validation(
 if (!orderingGuard.ok || orderingGuard.diagnostics?.polarity_conflict_detected !== true) {
   throw new Error("A scoped before/after reversal escaped the polarity diagnostic: " + JSON.stringify(orderingGuard));
 }
+const collectionTimingSource = source(
+  "collection-timing",
+  "Archive adapter collection",
+  "Before collection, print the QR label and attach it to the adapter envelope."
+);
+const collectionTimingGuard = validation(
+  "When should I print the QR label?",
+  "At collection, print the QR label and attach it to the adapter envelope [1].",
+  [collectionTimingSource]
+);
+if (!collectionTimingGuard.ok || collectionTimingGuard.diagnostics?.polarity_conflict_detected !== true) {
+  throw new Error("A before-versus-at event boundary escaped the polarity diagnostic: " + JSON.stringify(collectionTimingGuard));
+}
+const faithfulCollectionTiming = validation(
+  "When should I print the QR label?",
+  "Before collection, print the QR label and attach it to the adapter envelope [1].",
+  [collectionTimingSource]
+);
+if (!faithfulCollectionTiming.ok || faithfulCollectionTiming.diagnostics?.polarity_conflict_detected === true) {
+  throw new Error("A faithful before-event answer tripped the polarity diagnostic: " + JSON.stringify(faithfulCollectionTiming));
+}
 const railTimingSource = source(
   "rail-timing",
   "Rail request timing",
