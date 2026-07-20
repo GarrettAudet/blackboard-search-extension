@@ -286,16 +286,17 @@ if (legacyContradictionAccepted !== true) {
   throw new Error("The legacy lexical validator contradiction false-positive reproduction no longer reproduces.");
 }
 const contradictionGuard = validation(visitorQuery, polarityContradiction, [visitorSource]);
-if (contradictionGuard.ok || !contradictionGuard.reasons.some((reason) => /reverses an explicit negation/i.test(reason))) {
-  throw new Error("The deterministic polarity veto did not reject a central contradiction: " + JSON.stringify(contradictionGuard));
+if (!contradictionGuard.ok || contradictionGuard.diagnostics?.polarity_conflict_detected !== true) {
+  throw new Error("The clause-level polarity diagnostic did not flag a central contradiction: " + JSON.stringify(contradictionGuard));
 }
 const contradictionRun = await runLadder(visitorQuery, [visitorSource], [
   polarityContradiction,
+  unsupportedVerdict,
   JSON.stringify({ answer: correctedVisitorAnswer }),
   supportedVerdict
 ]);
 if (
-  contradictionRun.stages.join(",") !== "answer,reviewer,final-verifier" ||
+  contradictionRun.stages.join(",") !== "answer,verifier,reviewer,final-verifier" ||
   contradictionRun.answer.text !== correctedVisitorAnswer
 ) {
   throw new Error("A polarity contradiction did not route through independently verified repair: " + JSON.stringify(contradictionRun));
@@ -318,10 +319,10 @@ const reversedCourierPermission = validation(
 );
 if (
   !faithfulCourierProhibition.ok ||
-  reversedCourierPermission.ok ||
-  !reversedCourierPermission.reasons.some((reason) => /reverses an explicit negation/i.test(reason))
+  !reversedCourierPermission.ok ||
+  reversedCourierPermission.diagnostics?.polarity_conflict_detected !== true
 ) {
-  throw new Error("Modal prohibition normalization did not distinguish a faithful paraphrase from its inverse: " + JSON.stringify({ faithfulCourierProhibition, reversedCourierPermission }));
+  throw new Error("Modal prohibition normalization did not preserve a faithful paraphrase and diagnostically flag its inverse: " + JSON.stringify({ faithfulCourierProhibition, reversedCourierPermission }));
 }
 
 const optionalWorkshopSource = source(
@@ -603,7 +604,7 @@ const failClosedAfterMalformedFinals = await runLadder(visitorQuery, [visitorSou
   JSON.stringify({ answerable: true, supported: true, complete: true, contradiction: false, extra: true })
 ]);
 if (
-  failClosedAfterMalformedFinals.stages.join(",") !== "answer,reviewer,final-verifier,recovery,final-verifier" ||
+  failClosedAfterMalformedFinals.stages.join(",") !== "answer,verifier,reviewer,recovery,final-verifier" ||
   !/could not produce a reliable cited answer/i.test(failClosedAfterMalformedFinals.answer.text) ||
   failClosedAfterMalformedFinals.answer.sources.length !== 0
 ) {
@@ -937,8 +938,8 @@ if (!diningMixedGuard.ok) {
 }
 const kosherReversal = "Kosher meals are available in the dining hall [1].";
 const kosherReversalGuard = validation("Are kosher meals available?", kosherReversal, [diningMixedSource]);
-if (kosherReversalGuard.ok || !kosherReversalGuard.reasons.some((reason) => /availability/i.test(reason))) {
-  throw new Error("The kosher availability reversal escaped the clause-level polarity veto: " + JSON.stringify(kosherReversalGuard));
+if (!kosherReversalGuard.ok || kosherReversalGuard.diagnostics?.polarity_conflict_detected !== true) {
+  throw new Error("The kosher availability reversal escaped the clause-level polarity diagnostic: " + JSON.stringify(kosherReversalGuard));
 }
 
 const mixedVisitorPolicy = source(
@@ -952,6 +953,50 @@ if (!mixedVisitorGuard.ok) {
   throw new Error("A supported exception in a mixed-polarity parent tripped an ambiguous hard veto: " + JSON.stringify(mixedVisitorGuard));
 }
 
+const recoveredR13PolarityCases = [
+  {
+    query: "May I connect one power strip to another or use a cube tap in residence, and what is the compliant setup instead?",
+    answer: "No. Do not connect one power strip to another or use cube taps. Use a single nationally certified surge-protected strip directly from the wall instead [1].",
+    sources: [source(
+      "mixed-electrical-instruction",
+      "Residence electrical safety notice",
+      "Do not connect one power strip to another or use cube taps in residence rooms. Use a single nationally certified surge-protected strip directly from the wall. Portable heating appliances may never run unattended."
+    )]
+  },
+  {
+    query: "Who may run for Student Council, which nomination items are required, where are they submitted, and what is the deadline?",
+    answer: "An enrolled student may run. Submit twenty-five current-student signatures and the signed conduct declaration by 12:00 on 7 November under Blackboard > Student Council > Nominations [1].",
+    sources: [source(
+      "mixed-council-obligations",
+      "Student Council nomination and campaign rules",
+      "An enrolled student may seek a Student Council seat by collecting twenty-five current-student signatures and signing the conduct declaration. Submit both by 12:00 on 7 November in Blackboard under Student Council > Nominations. Campaigning may begin only after the approved candidate list appears."
+    )]
+  },
+  {
+    query: "Resolve the saved observatory weather note against the revised WindSafe rule.",
+    answer: "Follow the revised rule: the roof closes when sustained wind reaches 12 metres per second or any lightning alert is active, and only a facilities officer may reopen it. The saved 15 m/s and user-reopen guidance is obsolete [1] [2].",
+    sources: [
+      source(
+        "current-observatory-rule",
+        "Meridian Observatory access and weather notice",
+        "The revised WindSafe rule closes the roof when sustained wind reaches 12 metres per second or any lightning alert is active; only a facilities officer may reopen it.",
+        { authority_validated: true }
+      ),
+      source(
+        "stale-observatory-note",
+        "My saved observatory weather note",
+        "The saved note says the roof can remain open below 15 metres per second and users may reopen it after a lightning alert clears. It predates the revised WindSafe notice.",
+        { source_class: "user_import" }
+      )
+    ]
+  }
+];
+for (const fixture of recoveredR13PolarityCases) {
+  const result = validation(fixture.query, fixture.answer, fixture.sources);
+  if (!result.ok) {
+    throw new Error("A known-correct mixed-polarity or authority-resolution answer was hard-rejected before semantic verification: " + JSON.stringify(result));
+  }
+}
 const ordinaryNegationSource = source(
   "ordinary-negation",
   "Guest pass issuance",
@@ -962,8 +1007,8 @@ const ordinaryNegationGuard = validation(
   "The housing office issues guest passes during orientation [1].",
   [ordinaryNegationSource]
 );
-if (ordinaryNegationGuard.ok || !ordinaryNegationGuard.reasons.some((reason) => /negation/i.test(reason))) {
-  throw new Error("A scoped ordinary-negation reversal escaped the polarity veto: " + JSON.stringify(ordinaryNegationGuard));
+if (!ordinaryNegationGuard.ok || ordinaryNegationGuard.diagnostics?.polarity_conflict_detected !== true) {
+  throw new Error("A scoped ordinary-negation reversal escaped the polarity diagnostic: " + JSON.stringify(ordinaryNegationGuard));
 }
 const orderingSource = source(
   "ordering-axis",
@@ -975,8 +1020,8 @@ const orderingGuard = validation(
   "The Atlas application must be submitted after orientation [1].",
   [orderingSource]
 );
-if (orderingGuard.ok || !orderingGuard.reasons.some((reason) => /negation, permission, obligation, or availability/i.test(reason))) {
-  throw new Error("A scoped before/after reversal escaped the polarity veto: " + JSON.stringify(orderingGuard));
+if (!orderingGuard.ok || orderingGuard.diagnostics?.polarity_conflict_detected !== true) {
+  throw new Error("A scoped before/after reversal escaped the polarity diagnostic: " + JSON.stringify(orderingGuard));
 }
 const railTimingSource = source(
   "rail-timing",
@@ -999,10 +1044,10 @@ const reversedRailTiming = validation(
   [railTimingSource]
 );
 if (
-  reversedRailTiming.ok ||
-  !reversedRailTiming.reasons.some((reason) => /negation, permission, obligation, or availability/i.test(reason))
+  !reversedRailTiming.ok ||
+  reversedRailTiming.diagnostics?.polarity_conflict_detected !== true
 ) {
-  throw new Error("A true rail deadline before/after reversal escaped the polarity guard: " + JSON.stringify(reversedRailTiming));
+  throw new Error("A true rail deadline before/after reversal escaped the polarity diagnostic: " + JSON.stringify(reversedRailTiming));
 }
 if (
   context.claimSourcePolarityContradiction(

@@ -6739,6 +6739,7 @@ function citedAnswerValidation(
   const text = String(value.text || "").trim();
   const sourceList = (Array.isArray(value.sources) && value.sources.length ? value.sources : fallbackSources || []).slice(0, 8);
   const reasons = [];
+  let polarityConflictDetected = false;
   const cleanAbstention = isCleanNotFoundAnswer(text);
 
   if (!text) reasons.push("The answer was empty.");
@@ -6767,7 +6768,17 @@ function citedAnswerValidation(
     }
     const staleEvidenceReason = staleOnlyCurrentEvidenceReason(query, text, sourceList, citationNumbers);
     if (staleEvidenceReason) reasons.push(staleEvidenceReason);
-    reasons.push(...deterministicClaimVetoReasons(text, sourceList, userProvidedText));
+    const deterministicVetoReasons = deterministicClaimVetoReasons(text, sourceList, userProvidedText);
+    polarityConflictDetected = deterministicVetoReasons.some((reason) =>
+      /reverses an explicit negation, permission, obligation, or availability condition/i.test(reason)
+    );
+    // Clause-level polarity matching is intentionally diagnostic-only. It is
+    // useful for routing and observability, but mixed instructions, exceptions,
+    // and authority-conflict resolutions produce unavoidable lexical false
+    // positives. The semantic grounding verifier makes the final polarity call.
+    reasons.push(...deterministicVetoReasons.filter((reason) =>
+      !/reverses an explicit negation, permission, obligation, or availability condition/i.test(reason)
+    ));
   } else if (citationNumbers.length) {
     reasons.push("A clean not-found answer must not cite sources.");
   }
@@ -6790,6 +6801,7 @@ function citedAnswerValidation(
       lexical_claim_overlap: text && sourceList.length && citationNumbers.length
         ? answerClaimsSupportedByCitedSources(text, sourceList)
         : null,
+      polarity_conflict_detected: polarityConflictDetected,
       ...lexicalSourceDiagnostics
     }
   };
