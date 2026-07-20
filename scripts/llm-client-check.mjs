@@ -77,6 +77,17 @@ if (requestBody.max_tokens !== 321 || requestBody.temperature !== 0.1) {
 if (!requests.at(-1).options.signal) throw new Error("Provider request is missing an abort signal.");
 if (requests.at(-1).options.headers.Authorization !== "Bearer test-key") throw new Error("Provider authorization header changed.");
 
+fetchImplementation = async () => success("{\"ok\":true}");
+const jsonModeStart = requests.length;
+await call({ provider: "openrouter", messages: [{ role: "system", content: "Return exactly one JSON object." }, { role: "user", content: "Test" }] });
+const jsonModeBody = JSON.parse(requests.at(-1).options.body);
+if (requests.length - jsonModeStart !== 1 || jsonModeBody.response_format?.type !== "json_object") {
+  throw new Error("JSON-only prompts did not request provider JSON-object mode: " + JSON.stringify(jsonModeBody));
+}
+if (requests.at(-1).url !== "https://openrouter.ai/api/v1/chat/completions") {
+  throw new Error("JSON-object mode regression did not exercise the OpenRouter request path.");
+}
+
 const formatted = context.formatSourcesForPrompt([
   {
     id: 1,
@@ -257,4 +268,4 @@ if (malformedError !== "Provider returned malformed answer content." || requests
   throw new Error("Non-string completion content was retried or accepted: " + JSON.stringify({ malformedError, calls: requests.length - malformedStart }));
 }
 
-console.log("llm-client-check passed (bounded transient retries, Retry-After/backoff, auth/client no-retry, timeout/network exhaustion, truncation recovery/failure, fail-closed finish reasons, malformed output, source escaping)");
+console.log("llm-client-check passed (bounded transient retries, Retry-After/backoff, auth/client no-retry, timeout/network exhaustion, truncation recovery/failure, fail-closed finish reasons, malformed output, JSON-object mode, source escaping)");
