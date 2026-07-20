@@ -7252,6 +7252,7 @@ function groundedAnswerPolicyInstruction() {
     "Source metadata can mark a body as stale_last_known_extracted with body_revalidation_required=true. Prefer comparable fresh verified evidence. " +
     "For current or time-sensitive questions, never present stale last-known extraction as current; if it is the only useful evidence, explicitly qualify the answer as last-known information pending revalidation. " +
     "When useful sources conflict, state the conflict, identify which guidance controls, and do not invent a compromise or reconciliation that no source states. " +
+    "Never add an unstated purpose, rationale, causal explanation, assurance, or consequence merely because it seems plausible; omit it unless a cited excerpt explicitly states it. " +
     "When sources do not conflict, combine complementary facts without implying that community material is official. "
   );
 }

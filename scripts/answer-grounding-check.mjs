@@ -70,6 +70,9 @@ const moduleSource = [
   "../lib/search-index.js"
 ].map((file) => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n\n");
 const sidepanelSource = fs.readFileSync(new URL("../sidepanel/sidepanel.js", import.meta.url), "utf8");
+if (!/Never add an unstated purpose, rationale, causal explanation, assurance, or consequence/.test(sidepanelSource)) {
+  throw new Error("The shared grounded-answer policy does not forbid plausible but unsupported rationales.");
+}
 const runtimeStart = sidepanelSource.indexOf("chrome.runtime.onMessage.addListener");
 
 function mockElement() {
