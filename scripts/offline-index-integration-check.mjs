@@ -402,6 +402,46 @@ assert.match(
   "The source UI did not distinguish targeted chunk use from total indexed transcript coverage."
 );
 
+const transportationContextContract = clone(vm.runInContext(`(() => {
+  const query = "How should I navigate transportation in Beijing?";
+  const retrievalQuery = enhanceRetrievalQueryForIntent(query, query, defaultRagPlan(query, query));
+  const results = searchIndex(retrievalQuery, 24);
+  const hit = results.find((result) =>
+    result.source_pack_id === "schwarzman-c11" &&
+    result.source_pack_document_id === "beijing-transportation-workshop"
+  );
+  if (!hit) return { found: false };
+  const resources = state.resources.filter((resource) =>
+    resource.source_pack_id === "schwarzman-c11" &&
+    resource.source_pack_document_id === "beijing-transportation-workshop"
+  );
+  const bodies = resources.map((resource) => cleanIndexedText(state.contentStore[resource.id] || ""));
+  const expanded = expandAnswerSourcesForSynthesis(query, [hit], [], defaultRagPlan(query, retrievalQuery));
+  const prompt = answerPromptSources(expanded, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
+  const facets = semanticEvidenceFacets(query, defaultRagPlan(query, retrievalQuery)).map((facet) => facet.text);
+  return {
+    found: true,
+    resourceCount: resources.length,
+    coverage: prompt.document_coverage,
+    complete: prompt.document_coverage_complete,
+    hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
+    hasFourWays: /four ways to get around in Beijing/i.test(prompt.text),
+    facets
+  };
+})()`, sidepanelContext));
+assert.equal(transportationContextContract.found, true, "The exact manual transportation question did not retrieve the workshop.");
+assert.equal(transportationContextContract.resourceCount, 3, "The transportation workshop did not retain all transcript chunks.");
+assert.equal(transportationContextContract.coverage, "full_indexed_document", "The broad transportation question did not receive full workshop context.");
+assert.equal(transportationContextContract.complete, true, "The broad transportation context was not marked complete.");
+assert.equal(transportationContextContract.hasEveryBody, true, "The broad transportation prompt omitted an indexed workshop chunk.");
+assert.equal(transportationContextContract.hasFourWays, true, "The synthesis prompt omitted the workshop's four-mode overview.");
+for (const expectedFacet of ["subway", "ride hailing", "shared bikes", "bus"]) {
+  assert.ok(
+    transportationContextContract.facets.some((facet) => facet.toLowerCase().includes(expectedFacet)),
+    `The broad transportation selector omitted its ${expectedFacet} coverage facet.`
+  );
+}
+
 const authorityQuery = "official X1 visa JW202 admission notice residence permit within 30 days";
 sidepanelContext.__authorityQuery = authorityQuery;
 sidepanelContext.__authorityResults = vm.runInContext(

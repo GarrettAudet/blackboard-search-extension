@@ -130,6 +130,13 @@
       "expected_documents": ["survival-guide"],
       "evidence_groups": [{"document_id": "survival-guide", "patterns_all": ["Reliability is a moving target", "keep two VPNs", "ask a current cohort"]}],
       "answer_key": {"required_behavior": "abstain_or_qualify", "patterns_all": ["not guaranteed", "two VPNs", "current cohort"], "forbidden_patterns": ["ExpressVPN is guaranteed", "Astrill is guaranteed", "guaranteed for (?:the )?(?:full|entire) (?:academic )?(?:year|program)"]}
+    },
+    {
+      "id": "h19", "kind": "answerable",
+      "variants": ["How should I navigate transportation in Beijing?", "How should I travel around Beijing day to day?", "Give me a practical overview of the main ways to get around Beijing."],
+      "expected_documents": ["beijing-transportation-workshop"],
+      "evidence_groups": [{"document_id": "beijing-transportation-workshop", "patterns_all": ["four ways to get around in Beijing", "first one is subway", "second one is ride hailing", "third one is shared bike", "we also have like buses"]}],
+      "answer_key": {"patterns_all": ["subway", "ride hailing", "shared bike", "bus"], "forbidden_patterns": ["the only way to get around", "Beijing has no (?:buses|shared bikes|ride hailing)", "only use Alipay"]}
     }
   ]
 }

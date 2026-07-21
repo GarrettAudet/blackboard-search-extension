@@ -29,10 +29,14 @@ Evaluation options:
   --repeats N             Seeded variant rotations, 1-6 (default: 1)
   --case IDS              Comma-separated opaque holdout IDs
   --case-limit N          Randomized cases per repeat (default: all)
+  --variant-index N       Use one fixed 1-based variant for every selected case
   --judge                 Add a separate answer-key-aware judge call after generation
   --judge-provider NAME   Optional different provider for the judge
   --judge-model NAME      Optional different model for the judge
   --judge-api-key-env VAR Optional different key environment variable for the judge
+  --max-p95-ms N          Optional production-pipeline p95 latency gate
+  --max-provider-calls N  Optional per-answer p95 production-call gate
+  --max-logical-completions N Hard ceiling across generation and judge calls
   --delay-ms N            Delay between executions, 0-60000 (default: 0)
   --details               Print per-execution failures and final answers
   --json                  Emit a machine-readable report
@@ -53,6 +57,14 @@ const repeats = selfTest ? 1 : numberAfter("--repeats", 1, 1, 6);
 const delayMs = selfTest ? 0 : numberAfter("--delay-ms", 0, 0, 60000);
 const caseLimitArgument = valueAfter("--case-limit", "");
 const caseLimit = caseLimitArgument ? numberAfter("--case-limit", 18, 1, 1000) : Number.POSITIVE_INFINITY;
+const fixedVariantArgument = valueAfter("--variant-index", "");
+const fixedVariantIndex = fixedVariantArgument ? numberAfter("--variant-index", 1, 1, 1000) - 1 : null;
+const maxP95MsArgument = valueAfter("--max-p95-ms", "");
+const maxP95Ms = maxP95MsArgument ? numberAfter("--max-p95-ms", 30000, 1000, 600000) : null;
+const maxProviderCallsArgument = valueAfter("--max-provider-calls", "");
+const maxProviderCalls = maxProviderCallsArgument ? numberAfter("--max-provider-calls", 6, 1, 50) : null;
+const logicalCompletionArgument = valueAfter("--max-logical-completions", "");
+const maxLogicalCompletions = logicalCompletionArgument ? numberAfter("--max-logical-completions", 12, 1, 10000) : null;
 const requestedCaseIds = new Set(
   valueAfter("--case", "")
     .split(",")
@@ -341,7 +353,9 @@ const context = {
   liveContentStore: contentStore,
   liveSettings: { provider, model, apiKey, hasApiKey: true },
   liveJudgeSettings: { provider: judgeProvider, model: judgeModel, apiKey: judgeApiKey },
-  liveMockMode: selfTest
+  liveMockMode: selfTest,
+  liveLogicalCallBudget: maxLogicalCompletions,
+  liveLogicalCallCount: 0
 };
 
 vm.createContext(context);
@@ -448,6 +462,10 @@ vm.runInContext(`
   }
 
   callChatCompletion = async (request) => {
+    if (!liveMockMode && liveLogicalCallBudget !== null && globalThis.liveLogicalCallCount >= liveLogicalCallBudget) {
+      throw new Error("Logical completion ceiling reached before provider dispatch (" + liveLogicalCallBudget + ").");
+    }
+    globalThis.liveLogicalCallCount += 1;
     const stage = __liveProviderStage(request);
     const promptText = (request?.messages || []).map((message) => String(message?.content || "")).join("\\n");
     const answerKeyMarkerPresent = promptText.includes("<ANSWER_KEY_EVALUATION_ONLY>");
@@ -916,8 +934,12 @@ for (let repeat = 0; repeat < repeats; repeat += 1) {
   const random = mulberry32(seedNumber(`${seed}|repeat|${repeat}`));
   const selected = shuffled(eligibleCases, random).slice(0, Math.min(caseLimit, eligibleCases.length));
   for (const testCase of selected) {
-    const offset = seedNumber(`${seed}|variant|${testCase.id}`) % testCase.variants.length;
-    const variantIndex = (offset + repeat) % testCase.variants.length;
+    if (fixedVariantIndex !== null && fixedVariantIndex >= testCase.variants.length) {
+      throw new Error(`Case ${testCase.id} does not have variant ${fixedVariantIndex + 1}.`);
+    }
+    const variantIndex = fixedVariantIndex !== null
+      ? fixedVariantIndex
+      : (seedNumber(`${seed}|variant|${testCase.id}`) % testCase.variants.length + repeat) % testCase.variants.length;
     schedule.push({ repeat, testCase, variantIndex, query: testCase.variants[variantIndex] });
   }
 }
@@ -945,14 +967,24 @@ for (let index = 0; index < schedule.length; index += 1) {
   let deterministicScore = null;
   let judge = null;
   let error = "";
+  let pipelineElapsedMs = 0;
+  let judgeElapsedMs = 0;
+  const pipelineStarted = performance.now();
   try {
     // Deliberate security boundary: production receives only the user question. The answer key is first read by scoring below.
     pipelineResult = await runProductionPipeline(item.query);
+    pipelineElapsedMs = performance.now() - pipelineStarted;
     deterministicScore = scoreAnswer(item.testCase, pipelineResult);
-    if (useJudge) judge = await runJudge(item.query, pipelineResult.answer.text, item.testCase.answer_key);
+    if (useJudge) {
+      const judgeStarted = performance.now();
+      judge = await runJudge(item.query, pipelineResult.answer.text, item.testCase.answer_key);
+      judgeElapsedMs = performance.now() - judgeStarted;
+    }
   } catch (caught) {
+    if (!pipelineElapsedMs) pipelineElapsedMs = performance.now() - pipelineStarted;
     error = redact(caught).slice(0, 1000);
   }
+  const providerStages = (pipelineResult?.providerTrace || []).map((entry) => entry.stage);
   const markerLeak = (pipelineResult?.providerTrace || []).some((entry) => entry.answerKeyMarkerPresent);
   const answerPassed = Boolean(evaluatedAnswerPassed(deterministicScore, judge, useJudge) && !markerLeak && !error);
   const passed = Boolean(answerPassed && deterministicScore?.groundingPassed);
@@ -964,11 +996,14 @@ for (let index = 0; index < schedule.length; index += 1) {
     answerPassed,
     passed,
     elapsedMs: performance.now() - rowStarted,
+    pipelineElapsedMs,
+    judgeElapsedMs,
     error,
     markerLeak,
     score: deterministicScore,
     judge,
-    providerStages: (pipelineResult?.providerTrace || []).map((entry) => entry.stage),
+    providerStages,
+    providerCalls: providerStages.length,
     sourceDocumentIds: (pipelineResult?.sources || []).slice(0, 5).map((source) => source.documentId),
     answer: pipelineResult?.answer?.text || ""
   });
@@ -987,12 +1022,27 @@ const caseSummaries = eligibleCases.map((testCase) => {
   };
 }).filter((item) => item.attempts > 0);
 const rate = (predicate) => rows.filter(predicate).length / Math.max(1, rows.length);
+const percentile = (values, fraction) => {
+  const ordered = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!ordered.length) return null;
+  const index = Math.max(0, Math.min(ordered.length - 1, Math.ceil(ordered.length * fraction) - 1));
+  return ordered[index];
+};
+const average = (values) => {
+  const finite = values.filter(Number.isFinite);
+  return finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null;
+};
 const report = {
   suite,
   suite_id: fixture.suite_id,
   seed,
   repeats,
+  fixed_variant_index: fixedVariantIndex === null ? null : fixedVariantIndex + 1,
   scheduled_executions: schedule.length,
+  latency_gate_ms: maxP95Ms,
+  provider_call_gate: maxProviderCalls,
+  logical_completion_ceiling: maxLogicalCompletions,
+  logical_completions_used: context.liveLogicalCallCount,
   resource_order_shuffles: repeats,
   corpus: {
     pack_id: manifest.id,
@@ -1027,7 +1077,11 @@ const report = {
     judge_accuracy: useJudge ? rate((row) => row.judge?.correct) : null,
     consistent_case_rate: repeats > 1
       ? caseSummaries.filter((item) => item.passes === item.attempts).length / Math.max(1, caseSummaries.length)
-      : null
+      : null,
+    production_pipeline_latency_p50_ms: percentile(rows.map((row) => row.pipelineElapsedMs), 0.50),
+    production_pipeline_latency_p95_ms: percentile(rows.map((row) => row.pipelineElapsedMs), 0.95),
+    production_provider_calls_average: average(rows.map((row) => row.providerCalls)),
+    production_provider_calls_p95: percentile(rows.map((row) => row.providerCalls), 0.95)
   },
   zero_pass_case_ids: caseSummaries.filter((item) => item.passes === 0).map((item) => item.id),
   inconsistent_case_ids: repeats > 1
@@ -1061,6 +1115,9 @@ const report = {
     variant_index: row.variantIndex,
     passed: row.passed,
     elapsed_ms: row.elapsedMs,
+    production_pipeline_elapsed_ms: row.pipelineElapsedMs,
+    judge_elapsed_ms: row.judgeElapsedMs,
+    production_provider_calls: row.providerCalls,
     error: row.error,
     failure_codes: [
       row.score && !row.score.productionValidationPassed ? "production_validation" : "",
@@ -1080,19 +1137,26 @@ const report = {
 };
 
 const gateFailures = [];
+const minimumAccuracy = 0.95;
 if (report.metrics.pipeline_completion_rate < 0.98) gateFailures.push("pipeline completion below 98%");
-if (report.metrics.production_validation_rate < 0.90) gateFailures.push("production validation below 90%");
-if (report.metrics.generated_answer_accuracy < 0.90) gateFailures.push("generated-answer accuracy below 90%");
-if (report.metrics.grounding_pass_rate < 0.90) gateFailures.push("grounding pass rate below 90%");
-if (report.metrics.end_to_end_accuracy < 0.90) gateFailures.push("end-to-end accuracy below 90%");
+if (report.metrics.production_validation_rate < minimumAccuracy) gateFailures.push("production validation below 95%");
+if (report.metrics.generated_answer_accuracy < minimumAccuracy) gateFailures.push("generated-answer accuracy below 95%");
+if (report.metrics.grounding_pass_rate < minimumAccuracy) gateFailures.push("grounding pass rate below 95%");
+if (report.metrics.end_to_end_accuracy < minimumAccuracy) gateFailures.push("end-to-end accuracy below 95%");
 if (report.metrics.contradiction_rate > 0) gateFailures.push("at least one forbidden contradiction was generated");
-if (useJudge && report.metrics.judge_accuracy < 0.90) gateFailures.push("judge accuracy below 90%");
-const minimumConsistency = suite === "v2" ? 0.95 : 0.85;
+if (useJudge && report.metrics.judge_accuracy < minimumAccuracy) gateFailures.push("judge accuracy below 95%");
+const minimumConsistency = 0.95;
 if (repeats >= 3 && report.metrics.consistent_case_rate < minimumConsistency) {
   gateFailures.push(`consistent-case rate below ${Math.round(minimumConsistency * 100)}%`);
 }
 if (report.zero_pass_case_ids.length) gateFailures.push("at least one logical case had no passing execution");
 if (report.failure_categories.answer_key_marker_leak > 0) gateFailures.push("answer-key marker reached a production prompt");
+if (maxP95Ms !== null && report.metrics.production_pipeline_latency_p95_ms > maxP95Ms) {
+  gateFailures.push(`production pipeline p95 latency exceeded ${maxP95Ms} ms`);
+}
+if (maxProviderCalls !== null && report.metrics.production_provider_calls_p95 > maxProviderCalls) {
+  gateFailures.push(`production provider-call p95 exceeded ${maxProviderCalls}`);
+}
 report.gate = { passed: gateFailures.length === 0, failures: gateFailures };
 
 if (jsonOnly) {
@@ -1103,7 +1167,9 @@ if (jsonOnly) {
     `live-holdout-eval ${report.gate.passed ? "passed" : "failed"}: ` +
     `answer ${percent(report.metrics.generated_answer_accuracy)}, grounding ${percent(report.metrics.grounding_pass_rate)}, ` +
     `end-to-end ${percent(report.metrics.end_to_end_accuracy)}, contradictions ${percent(report.metrics.contradiction_rate)}, ` +
-    `consistent ${percent(report.metrics.consistent_case_rate)}`
+    `consistent ${percent(report.metrics.consistent_case_rate)}, ` +
+    `pipeline p50/p95 ${Math.round(report.metrics.production_pipeline_latency_p50_ms || 0)}/${Math.round(report.metrics.production_pipeline_latency_p95_ms || 0)} ms, ` +
+    `provider calls avg/p95 ${(report.metrics.production_provider_calls_average || 0).toFixed(1)}/${report.metrics.production_provider_calls_p95 || 0}`
   );
   if (gateFailures.length) console.log(`Gate failures: ${gateFailures.join("; ")}`);
   if (report.zero_pass_case_ids.length) console.log(`Opaque zero-pass IDs: ${report.zero_pass_case_ids.join(", ")}`);
