@@ -623,6 +623,124 @@ assert.ok(context.__hydrationCalls.every((call) => call.request.entries.every((e
   entry.extracted_text_sha256.length === 64 &&
   entry.expected_hydration_token.startsWith("token-")
 )));
+
+// On-demand hydration is concurrency-bounded even when a caller requests a higher limit.
+context.__concurrentHydrationResources = Array.from({ length: 5 }, (_, index) => ({
+  id: "concurrent-hydrate-" + index,
+  url: "https://blackboard.example/concurrent-" + index + ".pdf",
+  type: "pdf",
+  title: "Concurrent hydration file " + index,
+  body_verified: false,
+  needs_body_hydration: true,
+  hydration_token: "concurrent-token-" + index
+}));
+context.__concurrentHydrationPromise = createPromise(context, `(() => {
+  state.contentStore = {};
+  state.hydrationDiagnostics = {};
+  globalThis.__activeHydrations = 0;
+  globalThis.__maximumActiveHydrations = 0;
+  extractSearchableResourceContent = async (resource) => {
+    globalThis.__activeHydrations += 1;
+    globalThis.__maximumActiveHydrations = Math.max(
+      globalThis.__maximumActiveHydrations,
+      globalThis.__activeHydrations
+    );
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    globalThis.__activeHydrations -= 1;
+    return {
+      content: "Fresh verified searchable body for " + resource.id + " with detailed indexed evidence.",
+      content_fingerprint: "5".repeat(64),
+      extracted_text_sha256: "6".repeat(64)
+    };
+  };
+  sendMessage = async (_type, request) => ({
+    ok: true,
+    stored: request.entries.map((entry) => ({
+      resource_id: entry.resource_id,
+      status: "stored",
+      content_length: entry.content.length,
+      content_fingerprint: entry.content_fingerprint,
+      extracted_text_sha256: entry.extracted_text_sha256,
+      expected_hydration_token: entry.expected_hydration_token,
+      consumed_hydration_token: entry.expected_hydration_token
+    }))
+  });
+  return hydrateResourceContentBatch(globalThis.__concurrentHydrationResources, "", { concurrency: 99 });
+})()`);
+const concurrentHydration = await context.__concurrentHydrationPromise;
+assert.equal(concurrentHydration.hydrated, 5);
+assert.equal(concurrentHydration.attempted, 5);
+assert.equal(context.__maximumActiveHydrations, 2, "File extraction exceeded the two-request concurrency ceiling.");
+
+// A failed extraction is not retried by every subsequent question.
+context.__cooldownHydrationResource = {
+  id: "cooldown-hydrate",
+  url: "https://blackboard.example/cooldown.pdf",
+  type: "pdf",
+  title: "Cooldown hydration file",
+  body_verified: false,
+  needs_body_hydration: true,
+  hydration_token: "cooldown-token"
+};
+context.__cooldownHydrationPromise = createPromise(context, `(() => {
+  const resource = globalThis.__cooldownHydrationResource;
+  state.contentStore = {};
+  extractSearchableResourceContent = async () => { throw new Error("temporary extraction failure"); };
+  return hydrateResourceContentBatch([resource]).then((result) => ({
+    result,
+    retryEligible: shouldHydrateResourceContent(resource, true)
+  }));
+})()`);
+const cooldownHydration = await context.__cooldownHydrationPromise;
+assert.equal(cooldownHydration.result.failed, 1);
+assert.equal(cooldownHydration.retryEligible, false, "A failed file bypassed the hydration retry cooldown.");
+
+// A broad question with strong readable evidence answers immediately and moves unread files to background work.
+context.__transportHydrationResources = Array.from({ length: 6 }, (_, index) => ({
+  id: "transport-unread-" + index,
+  url: "https://blackboard.example/transport-" + index + ".pdf",
+  type: "pdf",
+  title: "Beijing transportation reference " + index,
+  context: "Beijing transportation subway ride hailing shared bikes and trains",
+  body_verified: false,
+  needs_body_hydration: true,
+  hydration_token: "transport-token-" + index
+}));
+context.__readableTransportResult = {
+  id: "transport-readable",
+  resource_id: "transport-readable",
+  kind: "document",
+  title: "Public Transportation in Beijing",
+  source: "Schwarzman C11 community resources",
+  url: "https://community.example/transport",
+  text: "Beijing transportation includes the subway, ride hailing, shared bikes, high speed trains, and the 12306 railway service. This indexed guide explains practical navigation and payment details.",
+  has_body: true,
+  score: 500
+};
+context.__transportPlan = vm.runInContext(`(() => {
+  state.resources = globalThis.__transportHydrationResources;
+  state.contentStore = {};
+  return targetedHydrationPlan(
+    "How should I navigate transportation in Beijing?",
+    "Beijing transportation subway ride hailing shared bike high speed train 12306",
+    [globalThis.__readableTransportResult],
+    defaultRagPlan("How should I navigate transportation in Beijing?")
+  );
+})()`, context);
+assert.equal(context.__transportPlan.canAnswerImmediately, true);
+assert.equal(context.__transportPlan.blockingCandidates.length, 0);
+assert.equal(context.__transportPlan.backgroundCandidates.length, 6);
+
+context.__transportBlockingPlan = vm.runInContext(`targetedHydrationPlan(
+  "How should I navigate transportation in Beijing?",
+  "Beijing transportation subway ride hailing shared bike high speed train 12306",
+  [{ ...globalThis.__readableTransportResult, has_body: false, text: "Blackboard file listing" }],
+  defaultRagPlan("How should I navigate transportation in Beijing?")
+)`, context);
+assert.equal(context.__transportBlockingPlan.canAnswerImmediately, false);
+assert.equal(context.__transportBlockingPlan.blockingCandidates.length, 2);
+assert.equal(context.__transportBlockingPlan.backgroundCandidates.length, 4);
+
 context.__hydrationRefreshes = 0;
 context.__hydrationUnconfirmedPromise = createPromise(context, `(() => {
   const resource = { ...globalThis.__hydrationResources[0],

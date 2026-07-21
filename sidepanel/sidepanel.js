@@ -58,6 +58,10 @@ const LEGACY_INDEXED_BODY_CHARS = 20000;
 const INDEXED_TEXT_TRUNCATION_PREFIX = "[Blackboard Search: indexed text truncated";
 const MAX_QUERY_CHARS = 2000;
 const TARGETED_CONTENT_HYDRATION_LIMIT = 6;
+const BLOCKING_CONTENT_HYDRATION_LIMIT = 2;
+const BLOCKING_CONTENT_HYDRATION_BUDGET_MS = 12000;
+const CONTENT_HYDRATION_CONCURRENCY = 2;
+const HYDRATION_FAILURE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 const CONTENT_HYDRATION_BATCH_MAX_ENTRIES = 6;
 const CONTENT_HYDRATION_BATCH_MAX_CHARS = 2 * 1000 * 1000;
 const MAX_MEMORY_TURNS = 6;
@@ -263,7 +267,11 @@ function setIndexStatusSummary() {
   const boundedText = boundedCount
     ? "; " + boundedCount + " bod" + (boundedCount === 1 ? "y" : "ies") + " hit the " + MAX_CONTENT_CHARS.toLocaleString() + "-character limit"
     : "";
-  setStatus(state.resources.length + " resources indexed; " + contentCount + " searchable bodies" + packText + legacyText + boundedText);
+  const backgroundCount = backgroundHydrationPendingCount();
+  const backgroundText = backgroundCount
+    ? "; refreshing " + backgroundCount + " file" + (backgroundCount === 1 ? "" : "s") + " in background"
+    : "";
+  setStatus(state.resources.length + " resources indexed; " + contentCount + " searchable bodies" + packText + legacyText + boundedText + backgroundText);
 }
 
 function sanitizeLoadedContentStore(contentStore) {
@@ -3019,6 +3027,13 @@ function formatDuration(ms) {
 
 let hydrationPromise = null;
 const hydrationFailures = new Set();
+const hydrationFailureTimes = new Map();
+const hydrationInFlight = new Set();
+const backgroundHydrationResourceIds = new Set();
+
+function backgroundHydrationPendingCount() {
+  return backgroundHydrationResourceIds.size;
+}
 
 async function hydrateMissingSearchableContent() {
   if (hydrationPromise) return hydrationPromise;
@@ -3041,18 +3056,122 @@ async function hydrateMissingSearchableContentInner() {
   }
 }
 
-async function hydrateLikelyResourceContentForQuery(query, currentResults = []) {
-  const candidates = findHydrationCandidatesForQuery(query, currentResults).slice(0, TARGETED_CONTENT_HYDRATION_LIMIT);
-  if (!candidates.length) return { hydrated: 0, failed: 0, candidates: [] };
+function sourceHasImmediateReadableEvidence(source) {
+  if (!source) return false;
+  if (source.has_body) return true;
+  if (isDocumentOrFileLikeResource({
+    type: source.kind,
+    title: source.title,
+    url: source.url
+  })) return false;
+  return answerEvidenceTextForSource(source).length >= 350 && !sourceLooksLikeDocumentListing(source);
+}
 
-  const label = candidates.length === 1 ? `"${cleanSourceTitle(candidates[0])}"` : `${candidates.length} likely file(s)`;
-  const { hydrated, failed } = await hydrateResourceContentBatch(candidates, `Reading ${label} before answering...`);
-  if (hydrated) {
-    setStatus(`${hydrated} matching file(s) made searchable.`);
-  } else if (failed) {
-    console.info(`${failed} matching file hydration attempt(s) skipped.`);
+function hasSufficientReadableEvidenceForImmediateAnswer(
+  query,
+  retrievalQuery,
+  answerSources = [],
+  hydrationCandidates = [],
+  queryPlan = null
+) {
+  const readableSources = (answerSources || []).filter(sourceHasImmediateReadableEvidence);
+  if (!hasStrongSourceEvidence(query, readableSources, retrievalQuery)) return false;
+
+  const explicitlyNamedUnread = (hydrationCandidates || []).filter((resource) =>
+    documentTitleMatchesQuestion(query, resource)
+  );
+  if (!explicitlyNamedUnread.length) return true;
+  if (!isDocumentBodyQuestion(query, queryPlan)) return true;
+  return explicitlyNamedUnread.every((resource) =>
+    readableSources.some((source) => sourceMatchesDocumentCandidateContext(source, [resource]))
+  );
+}
+
+function targetedHydrationPlan(query, retrievalQuery, currentResults = [], queryPlan = null) {
+  const candidates = findHydrationCandidatesForQuery(retrievalQuery || query, currentResults)
+    .slice(0, TARGETED_CONTENT_HYDRATION_LIMIT);
+  const answerSources = prepareAnswerSources(currentResults, retrievalQuery || query);
+  const canAnswerImmediately = hasSufficientReadableEvidenceForImmediateAnswer(
+    query,
+    retrievalQuery || query,
+    answerSources,
+    candidates,
+    queryPlan
+  );
+  const blockingCandidates = canAnswerImmediately
+    ? []
+    : candidates.slice(0, BLOCKING_CONTENT_HYDRATION_LIMIT);
+  const blockingIds = new Set(blockingCandidates.map((resource) => resource.id));
+  return {
+    candidates,
+    canAnswerImmediately,
+    blockingCandidates,
+    backgroundCandidates: candidates.filter((resource) => !blockingIds.has(resource.id))
+  };
+}
+
+function scheduleBackgroundResourceHydration(candidates = []) {
+  const pending = [];
+  for (const resource of candidates) {
+    if (!resource?.id || backgroundHydrationResourceIds.has(resource.id) || hydrationInFlight.has(resource.id)) continue;
+    if (!shouldHydrateResourceContent(resource, true)) continue;
+    backgroundHydrationResourceIds.add(resource.id);
+    pending.push(resource);
   }
-  return { hydrated, failed, candidates };
+  if (!pending.length) return;
+
+  hydrateResourceContentBatch(pending, "", { concurrency: CONTENT_HYDRATION_CONCURRENCY })
+    .then(({ hydrated, failed }) => {
+      if (hydrated) console.info(`${hydrated} background file(s) made searchable.`);
+      if (failed) console.info(`${failed} background file hydration attempt(s) skipped.`);
+    })
+    .catch((error) => console.warn("Background file hydration failed", error))
+    .finally(() => {
+      for (const resource of pending) backgroundHydrationResourceIds.delete(resource.id);
+      if (!els.searchBtn?.disabled) setIndexStatusSummary();
+    });
+}
+
+async function hydrateLikelyResourceContentForQuery(
+  query,
+  currentResults = [],
+  { retrievalQuery = query, queryPlan = null } = {}
+) {
+  const plan = targetedHydrationPlan(query, retrievalQuery, currentResults, queryPlan);
+  if (!plan.candidates.length) {
+    return { hydrated: 0, failed: 0, attempted: 0, candidates: [], background: 0, bypassed: false };
+  }
+
+  if (plan.canAnswerImmediately) {
+    scheduleBackgroundResourceHydration(plan.backgroundCandidates);
+    return {
+      hydrated: 0,
+      failed: 0,
+      attempted: 0,
+      candidates: plan.candidates,
+      background: plan.backgroundCandidates.length,
+      bypassed: true
+    };
+  }
+
+  const label = plan.blockingCandidates.length === 1
+    ? `"${cleanSourceTitle(plan.blockingCandidates[0])}"`
+    : `${plan.blockingCandidates.length} essential files`;
+  const result = await hydrateResourceContentBatch(
+    plan.blockingCandidates,
+    `Downloading ${label} before answering (${Math.round(BLOCKING_CONTENT_HYDRATION_BUDGET_MS / 1000)}s max)...`,
+    {
+      concurrency: CONTENT_HYDRATION_CONCURRENCY,
+      maxDurationMs: BLOCKING_CONTENT_HYDRATION_BUDGET_MS
+    }
+  );
+  scheduleBackgroundResourceHydration(plan.backgroundCandidates);
+  return {
+    ...result,
+    candidates: plan.candidates,
+    background: plan.backgroundCandidates.length,
+    bypassed: false
+  };
 }
 
 function findHydrationCandidatesForQuery(query, currentResults = []) {
@@ -3356,128 +3475,171 @@ function contentStorageAckMatches(entry, acknowledgement) {
   );
 }
 
-async function hydrateResourceContentBatch(candidates, statusMessage = "") {
+async function mapWithConcurrency(items, concurrency, worker) {
+  const values = Array.from(items || []);
+  if (!values.length) return [];
+  const results = new Array(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(values.length, Math.floor(Number(concurrency) || 1)));
+  const runners = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(values[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function recordHydrationFailure(resource, error) {
+  const failedAt = Date.now();
+  state.hydrationDiagnostics[resource.id] = {
+    ok: false,
+    error: readableErrorMessage(error),
+    at: new Date(failedAt).toISOString()
+  };
+  hydrationFailures.add(resource.id);
+  hydrationFailureTimes.set(resource.id, failedAt);
+}
+
+async function hydrateResourceContentBatch(candidates, statusMessage = "", options = {}) {
   if (statusMessage) setStatus(statusMessage);
   let hydrated = 0;
   let failed = 0;
-  const prepared = [];
-
+  const concurrency = Math.max(
+    1,
+    Math.min(CONTENT_HYDRATION_CONCURRENCY, Number(options.concurrency) || CONTENT_HYDRATION_CONCURRENCY)
+  );
+  const maxDurationMs = Math.max(0, Number(options.maxDurationMs) || 0);
+  const deadline = maxDurationMs ? Date.now() + maxDurationMs : Number.POSITIVE_INFINITY;
+  const uniqueCandidates = [];
+  const seenIds = new Set();
   for (const resource of candidates || []) {
-    try {
-      const readable = Boolean(state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id]));
-      if (readable && !isPendingBodyRevalidation(resource)) continue;
-      const extracted = await extractSearchableResourceContent(resource);
-      const fileLike = isFileLikeSearchResource(resource);
-      const verifiedResource = fileLike
-        ? { ...resource, body_verified: true, indexed_body_source: "extracted", body_revalidation_required: false }
-        : resource;
-      if (!resourceHasReadableBody(verifiedResource, extracted.content)) {
-        throw new Error("Extracted text did not look like readable document body text.");
-      }
-      prepared.push({
-        resource,
-        entry: {
-          resource_id: String(resource.id),
-          content: extracted.content,
-          content_fingerprint: extracted.content_fingerprint,
-          extracted_text_sha256: extracted.extracted_text_sha256,
-          expected_hydration_token: String(resource.hydration_token || "")
-        }
-      });
-    } catch (error) {
-      failed += 1;
-      state.hydrationDiagnostics[resource.id] = {
-        ok: false,
-        error: readableErrorMessage(error),
-        at: new Date().toISOString()
-      };
-      hydrationFailures.add(resource.id);
-      console.warn("Could not extract searchable content", resource.title, error);
-    }
+    if (!resource?.id || seenIds.has(resource.id) || hydrationInFlight.has(resource.id)) continue;
+    seenIds.add(resource.id);
+    hydrationInFlight.add(resource.id);
+    uniqueCandidates.push(resource);
   }
 
-  for (const batch of partitionHydrationPayloads(prepared)) {
-    let response = null;
-    try {
-      response = await sendMessage("STORE_CONTENT_BATCH", {
-        entries: batch.map((item) => item.entry)
-      });
-      if (!response?.ok) throw new Error(response?.error || "Content batch write failed");
-    } catch (error) {
-      failed += batch.length;
-      for (const item of batch) {
-        state.hydrationDiagnostics[item.resource.id] = {
-          ok: false,
-          error: readableErrorMessage(error),
-          at: new Date().toISOString()
-        };
-        hydrationFailures.add(item.resource.id);
-      }
-      console.warn("Could not store searchable content batch", error);
+  try {
+    const extractedItems = await mapWithConcurrency(uniqueCandidates, concurrency, async (resource) => {
       try {
-        await refreshAll();
-      } catch (refreshError) {
-        console.warn("Could not refresh after an unconfirmed content-storage outcome", refreshError);
-      }
-      continue;
-    }
-
-    const storedById = new Map((Array.isArray(response?.stored) ? response.stored : [])
-      .map((item) => [String(item?.resource_id || ""), item]));
-    let hasUnconfirmedReceipt = false;
-    for (const item of batch) {
-      const { resource, entry } = item;
-      if (!contentStorageAckMatches(entry, storedById.get(entry.resource_id))) {
-        failed += 1;
-        hasUnconfirmedReceipt = true;
-        state.hydrationDiagnostics[resource.id] = {
-          ok: false,
-          error: "Content-storage outcome unconfirmed: the worker did not return the complete resource identity receipt. Refresh before retrying.",
-          at: new Date().toISOString()
+        if (Date.now() >= deadline) throw new Error("Targeted file-reading time budget expired.");
+        const readable = Boolean(state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id]));
+        if (readable && !isPendingBodyRevalidation(resource)) return null;
+        const extracted = await extractSearchableResourceContent(resource, { deadline });
+        if (Date.now() > deadline) throw new Error("Targeted file-reading time budget expired.");
+        const fileLike = isFileLikeSearchResource(resource);
+        const verifiedResource = fileLike
+          ? { ...resource, body_verified: true, indexed_body_source: "extracted", body_revalidation_required: false }
+          : resource;
+        if (!resourceHasReadableBody(verifiedResource, extracted.content)) {
+          throw new Error("Extracted text did not look like readable document body text.");
+        }
+        return {
+          resource,
+          entry: {
+            resource_id: String(resource.id),
+            content: extracted.content,
+            content_fingerprint: extracted.content_fingerprint,
+            extracted_text_sha256: extracted.extracted_text_sha256,
+            expected_hydration_token: String(resource.hydration_token || "")
+          }
         };
-        hydrationFailures.add(resource.id);
+      } catch (error) {
+        failed += 1;
+        recordHydrationFailure(resource, error);
+        console.warn("Could not extract searchable content", resource.title, error);
+        return null;
+      }
+    });
+    const prepared = extractedItems.filter(Boolean);
+
+    for (const batch of partitionHydrationPayloads(prepared)) {
+      let response = null;
+      try {
+        response = await sendMessage("STORE_CONTENT_BATCH", {
+          entries: batch.map((item) => item.entry)
+        });
+        if (!response?.ok) throw new Error(response?.error || "Content batch write failed");
+      } catch (error) {
+        failed += batch.length;
+        for (const item of batch) recordHydrationFailure(item.resource, error);
+        console.warn("Could not store searchable content batch", error);
+        try {
+          await refreshAll();
+        } catch (refreshError) {
+          console.warn("Could not refresh after an unconfirmed content-storage outcome", refreshError);
+        }
         continue;
       }
-      if (!state.contentStore) state.contentStore = {};
-      state.contentStore[resource.id] = entry.content;
-      if (isFileLikeSearchResource(resource)) {
-        Object.assign(resource, {
-          body_verified: true,
-          indexed_body_source: "extracted",
-          content_origin: "extracted_attachment",
-          content_fingerprint: entry.content_fingerprint,
-          last_verified_content_fingerprint: entry.content_fingerprint,
-          extracted_text_sha256: entry.extracted_text_sha256
-        });
-        delete resource.needs_body_hydration;
-        delete resource.body_revalidation_required;
-        delete resource.hydration_token;
-      }
-      state.hydrationDiagnostics[resource.id] = {
-        ok: true,
-        chars: entry.content.length,
-        truncated: hasIndexedTextTruncationMarker(entry.content),
-        at: new Date().toISOString()
-      };
-      hydrationFailures.delete(resource.id);
-      hydrated += 1;
-    }
-    if (hasUnconfirmedReceipt) {
-      try {
-        await refreshAll();
-      } catch (refreshError) {
-        console.warn("Could not refresh after an unconfirmed content-storage receipt", refreshError);
-      }
-    }
-  }
 
-  if (hydrated) invalidateSearchIndexCache();
-  return { hydrated, failed };
+      const storedById = new Map((Array.isArray(response?.stored) ? response.stored : [])
+        .map((item) => [String(item?.resource_id || ""), item]));
+      let hasUnconfirmedReceipt = false;
+      for (const item of batch) {
+        const { resource, entry } = item;
+        if (!contentStorageAckMatches(entry, storedById.get(entry.resource_id))) {
+          failed += 1;
+          hasUnconfirmedReceipt = true;
+          recordHydrationFailure(
+            resource,
+            "Content-storage outcome unconfirmed: the worker did not return the complete resource identity receipt. Refresh before retrying."
+          );
+          continue;
+        }
+        if (!state.contentStore) state.contentStore = {};
+        state.contentStore[resource.id] = entry.content;
+        if (isFileLikeSearchResource(resource)) {
+          Object.assign(resource, {
+            body_verified: true,
+            indexed_body_source: "extracted",
+            content_origin: "extracted_attachment",
+            content_fingerprint: entry.content_fingerprint,
+            last_verified_content_fingerprint: entry.content_fingerprint,
+            extracted_text_sha256: entry.extracted_text_sha256
+          });
+          delete resource.needs_body_hydration;
+          delete resource.body_revalidation_required;
+          delete resource.hydration_token;
+        }
+        state.hydrationDiagnostics[resource.id] = {
+          ok: true,
+          chars: entry.content.length,
+          truncated: hasIndexedTextTruncationMarker(entry.content),
+          at: new Date().toISOString()
+        };
+        hydrationFailures.delete(resource.id);
+        hydrationFailureTimes.delete(resource.id);
+        hydrated += 1;
+      }
+      if (hasUnconfirmedReceipt) {
+        try {
+          await refreshAll();
+        } catch (refreshError) {
+          console.warn("Could not refresh after an unconfirmed content-storage receipt", refreshError);
+        }
+      }
+    }
+
+    if (hydrated) invalidateSearchIndexCache();
+    return { hydrated, failed, attempted: uniqueCandidates.length };
+  } finally {
+    for (const resource of uniqueCandidates) hydrationInFlight.delete(resource.id);
+  }
 }
 
 function shouldHydrateResourceContent(resource, retryFailure = false) {
   if (!resource || !resource.id || !resource.url) return false;
-  if (!retryFailure && hydrationFailures.has(resource.id)) return false;
+  if (hydrationInFlight.has(resource.id) || backgroundHydrationResourceIds.has(resource.id)) return false;
+  if (hydrationFailures.has(resource.id)) {
+    const failedAt = Number(hydrationFailureTimes.get(resource.id) || 0);
+    const coolingDown = !failedAt || Date.now() - failedAt < HYDRATION_FAILURE_RETRY_COOLDOWN_MS;
+    if (!retryFailure || coolingDown) return false;
+    hydrationFailures.delete(resource.id);
+    hydrationFailureTimes.delete(resource.id);
+  }
   const mustRevalidate = isPendingBodyRevalidation(resource);
   if (!mustRevalidate && state.contentStore && resourceHasReadableBody(resource, state.contentStore[resource.id])) return false;
   const type = String(resource.type || "").toLowerCase();
@@ -3488,16 +3650,22 @@ function shouldHydrateResourceContent(resource, retryFailure = false) {
   return ["pdf", "document", "slides", "spreadsheet"].includes(type) || /\.(pdf|docx|pptx|xlsx)(?:[?#]|$|\s)/i.test(fileHint);
 }
 
-async function extractSearchableResourceContent(resource) {
-  const { buffer, contentType } = await fetchResourceArrayBuffer(resource.url);
+async function extractSearchableResourceContent(resource, { deadline = Number.POSITIVE_INFINITY } = {}) {
+  const remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : MEDIA_RESOLVE_TIMEOUT_MS;
+  if (remainingMs <= 0) throw new Error("Targeted file-reading time budget expired.");
+  const { buffer, contentType } = await fetchResourceArrayBuffer(
+    resource.url,
+    Math.min(MEDIA_RESOLVE_TIMEOUT_MS, remainingMs)
+  );
   const contentFingerprint = await sha256Hex(buffer);
   const type = String(resource.type || "").toLowerCase();
   const fileHint = `${resourceFileHint(resource)} ${contentType}`.toLowerCase();
   let extracted = "";
-  if (type === "pdf" || /(?:application\/pdf|\.pdf(?:[?#]|$|\s))/.test(fileHint)) extracted = await extractPdfText(buffer);
+  if (type === "pdf" || /(?:application\/pdf|\.pdf(?:[?#]|$|\s))/.test(fileHint)) extracted = await extractPdfText(buffer, deadline);
   else if (type === "document" || /\.(?:docx)(?:[?#]|$|\s)/i.test(fileHint)) extracted = await extractDocxText(buffer);
   else if (type === "slides" || /\.(?:pptx)(?:[?#]|$|\s)/i.test(fileHint)) extracted = await extractPptxText(buffer);
   else if (type === "spreadsheet" || /\.(?:xlsx)(?:[?#]|$|\s)/i.test(fileHint)) extracted = await extractXlsxText(buffer);
+  if (Date.now() > deadline) throw new Error("Targeted file-reading time budget expired.");
   const content = normalizeExtractedContent(extracted);
   return {
     content,
@@ -3511,14 +3679,14 @@ async function extractSearchableResourceText(resource) {
   return extracted.content;
 }
 
-async function fetchResourceArrayBuffer(url) {
+async function fetchResourceArrayBuffer(url, timeoutMs = MEDIA_RESOLVE_TIMEOUT_MS) {
   const response = await fetchWithTimeout(
     url,
     {
       credentials: "include",
       cache: "no-store"
     },
-    MEDIA_RESOLVE_TIMEOUT_MS,
+    Math.max(1, Math.min(MEDIA_RESOLVE_TIMEOUT_MS, Number(timeoutMs) || MEDIA_RESOLVE_TIMEOUT_MS)),
     "Timed out fetching this resource."
   );
   if (!response.ok) throw new Error(`Could not fetch resource: HTTP ${response.status}`);
@@ -4490,7 +4658,7 @@ async function handleAsk(event) {
   let queryPlan = defaultRagPlan(query, baseRetrievalQuery);
 
   if (canUseApiPipeline) {
-    setStatus("Planning search with the selected API...");
+    setStatus("Generating answer: planning the search...");
     try {
       queryPlan = await buildQueryPlan(query, contextMemory, baseRetrievalQuery);
       retrievalQuery = plannedRetrievalQuery(queryPlan, query, baseRetrievalQuery, hasConversationMemory);
@@ -4510,7 +4678,10 @@ async function handleAsk(event) {
   );
   let results = searchAcrossRetrievalQueries(retrievalQueries);
 
-  const hydrationResult = await hydrateLikelyResourceContentForQuery(retrievalQuery, results);
+  const hydrationResult = await hydrateLikelyResourceContentForQuery(query, results, {
+    retrievalQuery,
+    queryPlan
+  });
   if (hydrationResult.hydrated) {
     results = searchAcrossRetrievalQueries(retrievalQueries);
   }
@@ -4549,7 +4720,10 @@ async function handleAsk(event) {
 
   let answerSources = deterministicAnswerSources;
   if (canUseApiPipeline) {
-    setStatus("Selecting the strongest evidence with the selected API...");
+    const backgroundText = backgroundHydrationPendingCount()
+      ? `; ${backgroundHydrationPendingCount()} additional file(s) refreshing in background`
+      : "";
+    setStatus(`Generating answer: selecting the strongest indexed evidence${backgroundText}...`);
     const evidenceSelection = await selectSemanticEvidenceForApi(
       query,
       results,
@@ -4588,7 +4762,7 @@ async function handleAsk(event) {
 
   els.searchBtn.disabled = true;
   els.searchBtn.classList.add("is-loading");
-  const pending = appendMessage("assistant", "Planning the query, reading local matches, and reviewing the answer...");
+  const pending = appendMessage("assistant", "Generating and verifying the answer from indexed evidence...");
   try {
     const finalAnswer = await generateVerifiedApiAnswer(query, answerSources, contextMemory, retrievalQuery, queryPlan);
     updateMessage(pending, finalAnswer.text, finalAnswer.sources);
