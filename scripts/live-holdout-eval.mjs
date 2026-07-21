@@ -34,6 +34,7 @@ Evaluation options:
   --judge-provider NAME   Optional different provider for the judge
   --judge-model NAME      Optional different model for the judge
   --judge-api-key-env VAR Optional different key environment variable for the judge
+  --max-p50-ms N          Optional production-pipeline median latency gate
   --max-p95-ms N          Optional production-pipeline p95 latency gate
   --max-provider-calls N  Optional per-answer p95 production-call gate
   --max-logical-completions N Hard ceiling across generation and judge calls
@@ -59,6 +60,8 @@ const caseLimitArgument = valueAfter("--case-limit", "");
 const caseLimit = caseLimitArgument ? numberAfter("--case-limit", 18, 1, 1000) : Number.POSITIVE_INFINITY;
 const fixedVariantArgument = valueAfter("--variant-index", "");
 const fixedVariantIndex = fixedVariantArgument ? numberAfter("--variant-index", 1, 1, 1000) - 1 : null;
+const maxP50MsArgument = valueAfter("--max-p50-ms", "");
+const maxP50Ms = maxP50MsArgument ? numberAfter("--max-p50-ms", 30000, 1000, 600000) : null;
 const maxP95MsArgument = valueAfter("--max-p95-ms", "");
 const maxP95Ms = maxP95MsArgument ? numberAfter("--max-p95-ms", 30000, 1000, 600000) : null;
 const maxProviderCallsArgument = valueAfter("--max-provider-calls", "");
@@ -577,7 +580,7 @@ vm.runInContext(`
             content:
               "You are a strict holdout evaluator, not a user-facing assistant. Return JSON only with fields correct, score, missing_facts, contradictions, and reason. " +
               "Judge the candidate against the answer key. Accept faithful paraphrases and equivalent numeric formats. Mark any forbidden contradiction incorrect. " +
-              "For abstain_or_qualify cases, require both a clear limitation and the useful supported guidance. Do not improve or rewrite the answer."
+              "For abstain_or_qualify cases, require both a clear limitation and the useful supported guidance. Exact rubric values and named channels are mandatory: vague timing is not equivalent to a stated exact time, and a generic communication platform is not equivalent to a specifically named website or service. Do not improve or rewrite the answer."
           },
           {
             role: "user",
@@ -1070,6 +1073,7 @@ const report = {
   repeats,
   fixed_variant_index: fixedVariantIndex === null ? null : fixedVariantIndex + 1,
   scheduled_executions: schedule.length,
+  latency_gate_p50_ms: maxP50Ms,
   latency_gate_ms: maxP95Ms,
   provider_call_gate: maxProviderCalls,
   logical_completion_ceiling: maxLogicalCompletions,
@@ -1206,6 +1210,9 @@ if (repeats >= 3 && report.metrics.consistent_case_rate < minimumConsistency) {
 }
 if (report.zero_pass_case_ids.length) gateFailures.push("at least one logical case had no passing execution");
 if (report.failure_categories.answer_key_marker_leak > 0) gateFailures.push("answer-key marker reached a production prompt");
+if (maxP50Ms !== null && report.metrics.production_pipeline_latency_p50_ms > maxP50Ms) {
+  gateFailures.push(`production pipeline p50 latency exceeded ${maxP50Ms} ms`);
+}
 if (maxP95Ms !== null && report.metrics.production_pipeline_latency_p95_ms > maxP95Ms) {
   gateFailures.push(`production pipeline p95 latency exceeded ${maxP95Ms} ms`);
 }

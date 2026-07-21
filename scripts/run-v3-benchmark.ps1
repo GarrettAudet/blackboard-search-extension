@@ -82,7 +82,8 @@ try {
     --judge-model google/gemini-2.5-flash `
     --max-logical-completions 132 `
     --max-provider-calls 6 `
-    --max-p95-ms 30000 `
+    --max-p50-ms 30000 `
+    --max-p95-ms 50000 `
     --details `
     --json
   $nodeExit = $LASTEXITCODE

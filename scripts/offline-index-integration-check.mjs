@@ -402,6 +402,53 @@ assert.match(
   "The source UI did not distinguish targeted chunk use from total indexed transcript coverage."
 );
 
+const multiFacetContextContract = clone(vm.runInContext(`(() => {
+  const cases = [
+    {
+      query: "Describe the standard bedroom setup, the online tour location, and the tap-in/tap-out building rule.",
+      documentId: "student-life-webinar",
+      checks: [
+        /single.room private bathroom/i,
+        /virtual tours of your rooms on the Schwarzman College website/i,
+        /tap in and out of the building every time/i
+      ]
+    },
+    {
+      query: "For a family transfer into my BOC account, what four pieces of information does the guide specify?",
+      documentId: "survival-guide",
+      checks: [
+        /BKCHCNBJ110/i,
+        /full name exactly as on the account/i,
+        /19-digit card number/i,
+        /living expenses/i
+      ]
+    }
+  ];
+  return cases.map((item) => {
+    const plan = defaultRagPlan(item.query, item.query);
+    const retrievalQuery = enhanceRetrievalQueryForIntent(item.query, item.query, plan);
+    const hit = searchIndex(retrievalQuery, 30).find((result) =>
+      result.source_pack_id === "schwarzman-c11" &&
+      result.source_pack_document_id === item.documentId
+    );
+    if (!hit) return { documentId: item.documentId, found: false };
+    const expanded = expandAnswerSourcesForSynthesis(item.query, [hit], [], plan);
+    const prompt = answerPromptSources(expanded, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
+    return {
+      documentId: item.documentId,
+      found: true,
+      coverage: prompt.document_coverage,
+      complete: prompt.document_coverage_complete,
+      checks: item.checks.map((pattern) => pattern.test(prompt.text))
+    };
+  });
+})()`, sidepanelContext));
+for (const item of multiFacetContextContract) {
+  assert.equal(item.found, true, `The multi-facet query did not retrieve ${item.documentId}.`);
+  assert.equal(item.coverage, "full_indexed_document", `The multi-facet query did not fully expand ${item.documentId}.`);
+  assert.equal(item.complete, true, `The multi-facet context for ${item.documentId} was incomplete.`);
+  assert.ok(item.checks.every(Boolean), `The multi-facet prompt omitted a required fact from ${item.documentId}.`);
+}
 const transportationContextContract = clone(vm.runInContext(`(() => {
   const query = "How should I navigate transportation in Beijing?";
   const retrievalQuery = enhanceRetrievalQueryForIntent(query, query, defaultRagPlan(query, query));

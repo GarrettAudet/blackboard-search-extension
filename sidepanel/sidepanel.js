@@ -6328,6 +6328,35 @@ function parentDocumentContextForResult(result) {
   };
 }
 
+function isMultiFacetSynthesisQuery(query, queryPlan = null) {
+  return [query, queryPlan?.rewritten_question].some((value) => {
+    const question = String(value || "");
+    const facetCount = questionFacetRetrievalQueries(question, 4).length;
+    const explicitCount = /\b(?:what|which)\s+(?:(?:two|three|four|five|six|seven|eight|nine|ten)|\d+)\s+(?:pieces?\s+of\s+information|details?|items?|facts?|requirements?|steps?|things?)\b/i.test(question);
+    const explicitSecondRequest =
+      /\b(?:and|plus)\s+(?:what|which|who|where|when|why|how|can|could|should|must|does|do|is|are|will|would)\b/i.test(question) ||
+      /[?!]\s*(?:explain|state|list|describe|clarify|give|what|which|how|when|where|why|can|could|should|must|does|do|is|are)\b/i.test(question);
+    return explicitCount || facetCount >= 3 || (facetCount >= 2 && explicitSecondRequest);
+  });
+}
+
+function completeParentDocumentsFitAnswerContext(sources) {
+  const visible = Array.isArray(sources) ? sources.slice(0, 5) : [];
+  if (!visible.length) return false;
+  const seenParents = new Set();
+  let totalChars = 0;
+  for (const source of visible) {
+    const parentKey = sourceDedupeKey(source);
+    if (parentKey && seenParents.has(parentKey)) continue;
+    if (parentKey) seenParents.add(parentKey);
+    const parent = parentDocumentContextForResult(source);
+    if (!parent.complete || !parent.text || parent.text.length > MAX_ANSWER_SOURCE_TEXT_CHARS) return false;
+    totalChars += parent.text.length;
+    if (totalChars > MAX_ANSWER_CONTEXT_TEXT_CHARS) return false;
+  }
+  return seenParents.size > 0 || visible.length > 0;
+}
+
 function isDocumentWideSynthesisQuery(query, memory = [], queryPlan = null) {
   if ([query, queryPlan?.rewritten_question].some((value) =>
     isBroadBeijingTransportationQuery(String(value || ""))
@@ -6363,7 +6392,8 @@ function shouldExpandParentForDocumentWideQuery(query, source, queryPlan = null)
 
 function expandAnswerSourcesForSynthesis(query, sources, memory = [], queryPlan = null) {
   const input = Array.isArray(sources) ? sources : [];
-  if (!input.length || !isDocumentWideSynthesisQuery(query, memory, queryPlan)) return input;
+  if (!input.length || (!isDocumentWideSynthesisQuery(query, memory, queryPlan) &&
+      !isMultiFacetSynthesisQuery(query, queryPlan))) return input;
 
   const visible = input.slice(0, 5);
   let totalChars = visible.reduce((sum, source) => sum + cleanIndexedText(source?.text || "").length, 0);
@@ -7707,6 +7737,8 @@ function groundedAnswerPolicyInstruction() {
     "For current or time-sensitive questions, never present stale last-known extraction as current; if it is the only useful evidence, explicitly qualify the answer as last-known information pending revalidation. " +
     "When useful sources conflict, state the conflict, identify which guidance controls, and do not invent a compromise or reconciliation that no source states. " +
     "Preserve timing, ordering, conditions, quantities, and named subjects exactly as stated by the controlling excerpt. Source wording controls: never turn before or after an event into at or during that event, or otherwise soften a sequence boundary. " +
+    "When the user requests practical guidance and the excerpt gives an exact time, duration, quantity, contact, identifier, or named location, state that exact value rather than replacing it with a vague approximation. " +
+    "When the user requests an exact current value but the excerpts only say where to obtain it, explicitly state that the indexed sources do not list the value, then identify the source-provided route for obtaining it. " +
     "Never add an unstated purpose, rationale, causal explanation, assurance, or consequence merely because it seems plausible; omit it unless a cited excerpt explicitly states it. " +
     "When sources do not conflict, combine complementary facts without implying that community material is official. " +
     "Use each source's document_coverage field literally. For full_indexed_document, the entire indexed parent document was supplied; broad summaries must cover its distinct substantive topics. " +
@@ -8871,7 +8903,10 @@ async function selectSemanticEvidenceForApi(
     const selectionProviderCallLimit = selection.insufficient && selectedParentCount > 1
       ? SEMANTIC_EVIDENCE_LIMITS.maxSelectionProviderCalls
       : SEMANTIC_EVIDENCE_LIMITS.maxNormalSelectionProviderCalls;
-    const documentWideSynthesis = isDocumentWideSynthesisQuery(resolvedQuestion, memory, queryPlan);
+    const multiFacetFullContext = isMultiFacetSynthesisQuery(resolvedQuestion, queryPlan) &&
+      completeParentDocumentsFitAnswerContext(selectedCandidates.map((candidate) => candidate.result));
+    const documentWideSynthesis = isDocumentWideSynthesisQuery(resolvedQuestion, memory, queryPlan) ||
+      multiFacetFullContext;
     const unresolvedParentKeys = new Set(unresolvedCoverageAnchors.map((candidate) => sourceDedupeKey(candidate.result)).filter(Boolean));
     const deepSelectedChunkKeys = new Set(selectedChunkKeys);
     let deepParentsRead = 0;
@@ -9411,6 +9446,7 @@ async function verifyApiAnswerGrounding(
         groundedAnswerPolicyInstruction() +
         "Lexical similarity is neither proof nor disproof. Accept faithful paraphrases and logically necessary restatements even when wording differs. Reject unsupported additions, changed numbers or named entities, omitted qualifications, polarity reversals, changed permissions or obligations, and before/after or available/unavailable contradictions. " +
         "answerable means the excerpts contain a useful answer to at least one requested facet. supported means every factual candidate claim is entailed by the source IDs cited in that same paragraph or checklist item. complete means the candidate covers every explicitly requested facet that these excerpts can answer; for a broad how-to or overview, it must also cover each major relevant option explicitly enumerated in the cited excerpts rather than only one incidental detail. Do not demand facts or categories absent from the excerpts. contradiction means any central candidate claim conflicts with a cited excerpt. " +
+        "If a requested facet's cited excerpt states an exact time, duration, quantity, contact, identifier, or named location, set complete=false when the candidate replaces it with vague wording or a different channel. " +
         "For the exact clean not-found candidate, supported and complete mean the abstention itself is justified; set answerable false only when no excerpt supports any useful answer. " +
         "Return exactly one JSON object with exactly four Boolean fields in this order: answerable, supported, complete, contradiction. Do not return an answer, reason, score, markdown, or any other key."
     },
