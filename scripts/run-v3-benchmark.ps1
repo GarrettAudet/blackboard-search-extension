@@ -90,11 +90,13 @@ try {
   $report = ($jsonLines -join "`n") | ConvertFrom-Json
 
   Write-Host ""
-  Write-Host ("Answerable end-to-end: {0:P1} ({1} executions)" -f `
+  Write-Host ("Answerable end-to-end: {0:P1} ({1}/{2} completed)" -f `
     [double]$report.metrics.answerable_cases.end_to_end_accuracy, `
+    [int]$report.metrics.answerable_cases.completed_executions, `
     [int]$report.metrics.answerable_cases.executions)
-  Write-Host ("Unanswerable controls: {0:P1} ({1} executions)" -f `
+  Write-Host ("Unanswerable controls: {0:P1} ({1}/{2} completed)" -f `
     [double]$report.metrics.unanswerable_controls.correct_abstention_rate, `
+    [int]$report.metrics.unanswerable_controls.completed_executions, `
     [int]$report.metrics.unanswerable_controls.executions)
   Write-Host ("Grounding: {0:P1}; contradictions: {1:P1}" -f `
     [double]$report.metrics.answerable_cases.grounding_pass_rate, `

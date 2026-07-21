@@ -707,10 +707,12 @@ function scoreAnswer(testCase, pipelineResult) {
   const missingNumbers = requiredNumbers.filter((number) => !answerNumbers.has(number));
   const behaviorPassed = testCase.answer_key.required_behavior !== "abstain_or_qualify" || hasQualification(answerText);
   const citationNumbers = Array.from(answerText.matchAll(/\[(\d+)\]/g), (match) => Number(match[1]));
-  const citationsPassed =
+  const cleanNotFound = Boolean(pipelineResult?.validation?.cleanNotFound);
+  const citationsPassed = cleanNotFound || (
     citationNumbers.length > 0 &&
     Number(pipelineResult?.answer?.sourceCount || 0) > 0 &&
-    citationNumbers.every((number) => number >= 1 && number <= pipelineResult.answer.sourceCount);
+    citationNumbers.every((number) => number >= 1 && number <= pipelineResult.answer.sourceCount)
+  );
   const expectedDocuments = testCase.expected_documents || [];
   const retrievedDocumentIds = pipelineResult.sources.slice(0, 5).map((source) => source.documentId);
   const missingDocuments = expectedDocuments.filter((id) => !retrievedDocumentIds.includes(id));
@@ -819,9 +821,9 @@ async function runSelfTest() {
   const normalDeepStageCount = normalStages.filter((stage) => stage === "deep_selector").length;
   const normalMiddleStages = normalStages.slice(2, -2);
   if (
-    pipelineResult.evidenceSelection?.mode !== "semantic_deep_read" ||
-    pipelineResult.evidenceSelection?.deepReadCalls < 1 ||
-    pipelineResult.evidenceSelection?.deepReadCalls > 9 ||
+    !new Set(["semantic", "semantic_deep_read"]).has(pipelineResult.evidenceSelection?.mode) ||
+    pipelineResult.evidenceSelection?.deepReadCalls < 0 ||
+    pipelineResult.evidenceSelection?.deepReadCalls > 1 ||
     normalDeepStageCount !== pipelineResult.evidenceSelection?.deepReadCalls ||
     normalStages[0] !== "planner" ||
     normalStages[1] !== "selector" ||
@@ -848,7 +850,7 @@ async function runSelfTest() {
   }
   if (
     policyPipelineResult.evidenceSelection?.deepReadCalls < 1 ||
-    policyPipelineResult.evidenceSelection?.deepReadCalls > 9 ||
+    policyPipelineResult.evidenceSelection?.deepReadCalls > 1 ||
     policyPipelineResult.sources.some((source) => source.text.length > 24000) ||
     policyPipelineResult.providerTrace.some((entry) => finalPromptStages.has(entry.stage) && entry.opaqueCandidateIdPresent)
   ) {
@@ -915,6 +917,16 @@ async function runSelfTest() {
     validation: { ok: true, reasons: [] }
   };
   if (scoreAnswer(unanswerable, unsafeGuarantee).passed) throw new Error("Scorer accepted an unsafe guarantee in an unanswerable case.");
+  const cleanAbstention = {
+    ...pipelineResult,
+    answer: { text: "I could not find that in the indexed resources.", sourceCount: 0 },
+    validation: { ok: true, reasons: [], cleanNotFound: true },
+    sources: []
+  };
+  const cleanAbstentionScore = scoreAnswer(unanswerable, cleanAbstention);
+  if (!cleanAbstentionScore.passed || !cleanAbstentionScore.citationsPassed) {
+    throw new Error("A clean unanswerable abstention was incorrectly required to cite a nonexistent answer.");
+  }
   const productionTrace = context.__liveProviderTrace.filter((entry) => entry.phase === "production");
   const evaluationTrace = context.__liveProviderTrace.filter((entry) => entry.phase === "evaluation");
   if (!acceptingJudge?.correct || forbiddenNetworkCalls !== 0) throw new Error("Mock judge failed or the self-test attempted network access.");
@@ -933,7 +945,7 @@ async function runSelfTest() {
   if (productionTrace.some((entry) => entry.credentialMarkerPresent)) {
     throw new Error("Provider credentials leaked into a production prompt.");
   }
-  console.log(`live-holdout-eval ${suite} self-test passed (no network; planner -> semantic selector/deep-read -> adaptive full-document synthesis -> grounding verifier with bounded reviewer/recovery; high context safety ceilings; answer-key/judge separation)`);
+  console.log(`live-holdout-eval ${suite} self-test passed (no network; planner -> semantic selector/deep-read -> adaptive full-document synthesis -> grounding verifier with bounded fresh repair/recovery; high context safety ceilings; answer-key/judge separation)`);
 }
 
 if (selfTest) {
@@ -1033,11 +1045,14 @@ const caseSummaries = eligibleCases.map((testCase) => {
     passes: caseRows.filter((row) => row.passed).length
   };
 }).filter((item) => item.attempts > 0);
+const completedRows = rows.filter((row) => !row.error);
 const answerableRows = rows.filter((row) => row.kind !== "unanswerable");
+const answerableCompletedRows = answerableRows.filter((row) => !row.error);
 const unanswerableRows = rows.filter((row) => row.kind === "unanswerable");
+const unanswerableCompletedRows = unanswerableRows.filter((row) => !row.error);
 const rateFor = (selectedRows, predicate) =>
   selectedRows.length ? selectedRows.filter(predicate).length / selectedRows.length : null;
-const rate = (predicate) => rateFor(rows, predicate);
+const rate = (predicate) => rateFor(completedRows, predicate);
 const percentile = (values, fraction) => {
   const ordered = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!ordered.length) return null;
@@ -1082,7 +1097,7 @@ const report = {
   },
   judge: useJudge ? { enabled: true, provider: judgeProvider, model: judgeModel } : { enabled: false },
   metrics: {
-    pipeline_completion_rate: rate((row) => !row.error),
+    pipeline_completion_rate: rateFor(rows, (row) => !row.error),
     production_validation_rate: rate((row) => row.score?.productionValidationPassed),
     generated_answer_accuracy: rate((row) => row.answerPassed),
     deterministic_required_fact_rate: rate((row) => row.score?.requiredFactsPassed),
@@ -1093,26 +1108,30 @@ const report = {
     judge_accuracy: useJudge ? rate((row) => row.judge?.correct) : null,
     answerable_cases: {
       executions: answerableRows.length,
-      production_validation_rate: rateFor(answerableRows, (row) => row.score?.productionValidationPassed),
-      generated_answer_accuracy: rateFor(answerableRows, (row) => row.answerPassed),
-      grounding_pass_rate: rateFor(answerableRows, (row) => row.score?.groundingPassed),
-      end_to_end_accuracy: rateFor(answerableRows, (row) => row.passed),
-      judge_accuracy: useJudge ? rateFor(answerableRows, (row) => row.judge?.correct) : null
+      completed_executions: answerableCompletedRows.length,
+      completion_rate: rateFor(answerableRows, (row) => !row.error),
+      production_validation_rate: rateFor(answerableCompletedRows, (row) => row.score?.productionValidationPassed),
+      generated_answer_accuracy: rateFor(answerableCompletedRows, (row) => row.answerPassed),
+      grounding_pass_rate: rateFor(answerableCompletedRows, (row) => row.score?.groundingPassed),
+      end_to_end_accuracy: rateFor(answerableCompletedRows, (row) => row.passed),
+      judge_accuracy: useJudge ? rateFor(answerableCompletedRows, (row) => row.judge?.correct) : null
     },
     unanswerable_controls: {
       executions: unanswerableRows.length,
-      correct_abstention_rate: rateFor(unanswerableRows, (row) => row.passed),
-      behavior_pass_rate: rateFor(unanswerableRows, (row) => row.score?.behaviorPassed),
-      grounding_pass_rate: rateFor(unanswerableRows, (row) => row.score?.groundingPassed),
-      judge_accuracy: useJudge ? rateFor(unanswerableRows, (row) => row.judge?.correct) : null
+      completed_executions: unanswerableCompletedRows.length,
+      completion_rate: rateFor(unanswerableRows, (row) => !row.error),
+      correct_abstention_rate: rateFor(unanswerableCompletedRows, (row) => row.passed),
+      behavior_pass_rate: rateFor(unanswerableCompletedRows, (row) => row.score?.behaviorPassed),
+      grounding_pass_rate: rateFor(unanswerableCompletedRows, (row) => row.score?.groundingPassed),
+      judge_accuracy: useJudge ? rateFor(unanswerableCompletedRows, (row) => row.judge?.correct) : null
     },
     consistent_case_rate: repeats > 1
       ? caseSummaries.filter((item) => item.passes === item.attempts).length / Math.max(1, caseSummaries.length)
       : null,
-    production_pipeline_latency_p50_ms: percentile(rows.map((row) => row.pipelineElapsedMs), 0.50),
-    production_pipeline_latency_p95_ms: percentile(rows.map((row) => row.pipelineElapsedMs), 0.95),
-    production_provider_calls_average: average(rows.map((row) => row.providerCalls)),
-    production_provider_calls_p95: percentile(rows.map((row) => row.providerCalls), 0.95)
+    production_pipeline_latency_p50_ms: percentile(completedRows.map((row) => row.pipelineElapsedMs), 0.50),
+    production_pipeline_latency_p95_ms: percentile(completedRows.map((row) => row.pipelineElapsedMs), 0.95),
+    production_provider_calls_average: average(completedRows.map((row) => row.providerCalls)),
+    production_provider_calls_p95: percentile(completedRows.map((row) => row.providerCalls), 0.95)
   },
   zero_pass_case_ids: caseSummaries.filter((item) => item.passes === 0).map((item) => item.id),
   inconsistent_case_ids: repeats > 1
@@ -1133,7 +1152,7 @@ const report = {
     behavior: rows.filter((row) => row.score && !row.score.behaviorPassed).length,
     citation: rows.filter((row) => row.score && !row.score.citationsPassed).length,
     retrieval_or_evidence: rows.filter((row) => row.score && !row.score.groundingPassed).length,
-    judge: useJudge ? rows.filter((row) => !row.judge?.correct).length : 0,
+    judge: useJudge ? completedRows.filter((row) => !row.judge?.correct).length : 0,
     answer_key_marker_leak: rows.filter((row) => row.markerLeak).length
   },
   elapsed_ms: performance.now() - started,
