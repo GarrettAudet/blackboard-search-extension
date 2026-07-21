@@ -99,6 +99,14 @@ for (const testCase of cases) {
 
 const serviceWorkerSource = fs.readFileSync(new URL("../background/service-worker.js", import.meta.url), "utf8");
 const sidepanelSource = fs.readFileSync(new URL("../sidepanel/sidepanel.js", import.meta.url), "utf8");
+
+const sessionFunctionStart = serviceWorkerSource.indexOf("async function checkBlackboardSession");
+const sessionFunctionEnd = serviceWorkerSource.indexOf("async function dismissMediaCandidate", sessionFunctionStart);
+const sessionFunctionSource = serviceWorkerSource.slice(sessionFunctionStart, sessionFunctionEnd);
+if (!/fetchWithTimeout\([\s\S]*BLACKBOARD_SESSION_TIMEOUT_MS\s*,\s*async\s*\(response\)[\s\S]*await\s+readResponseTextPrefix\(response\)/.test(sessionFunctionSource)) {
+  throw new Error("Blackboard session verification must keep its timeout active through the response body.");
+}
+
 if (!/case\s+["']CHECK_BLACKBOARD_SESSION["']/.test(serviceWorkerSource)) {
   throw new Error("Service worker does not expose CHECK_BLACKBOARD_SESSION.");
 }

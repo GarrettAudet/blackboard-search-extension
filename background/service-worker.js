@@ -20,6 +20,7 @@ const DEFAULT_CRAWL_PAGE_TIMEOUT_MS = 20000;
 const CRAWL_HEARTBEAT_MS = 5000;
 const CRAWL_CHECKPOINT_TIMEOUT_MS = 60000;
 const BLACKBOARD_SESSION_TIMEOUT_MS = 15000;
+const BLACKBOARD_SESSION_BODY_CHARS = 128 * 1024;
 const REINDEX_MIN_RESOURCE_RETENTION_RATIO = 0.65;
 const REINDEX_MIN_PAGE_RETENTION_RATIO = 0.6;
 const REINDEX_MIN_RESOURCE_IDENTITY_OVERLAP_RATIO = 0.65;
@@ -517,19 +518,51 @@ async function handleMessage(message) {
   }
 }
 
+
+async function readResponseTextPrefix(response, maxChars = BLACKBOARD_SESSION_BODY_CHARS) {
+  const limit = Math.max(1, Number(maxChars) || BLACKBOARD_SESSION_BODY_CHARS);
+  if (!response?.body?.getReader || typeof TextDecoder === "undefined") {
+    return String(await response.text()).slice(0, limit);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let finished = false;
+  try {
+    while (text.length < limit) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        finished = true;
+        break;
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    if (finished) text += decoder.decode();
+    return text.slice(0, limit);
+  } finally {
+    if (!finished) {
+      try { await reader.cancel(); } catch (_error) {}
+    }
+    try { reader.releaseLock(); } catch (_error) {}
+  }
+}
+
 async function checkBlackboardSession(payload = {}) {
   const requestedUrl = normalizeUrlFrom(
     payload.url || payload.seed_url || payload.seedUrl || DEFAULT_CRAWL_SEED_URL,
     DEFAULT_CRAWL_SEED_URL
   );
   try {
-    const response = await fetchWithTimeout(requestedUrl, {
+    const { response, body } = await fetchWithTimeout(requestedUrl, {
       credentials: "include",
       redirect: "follow",
       cache: "no-store"
-    }, BLACKBOARD_SESSION_TIMEOUT_MS);
+    }, BLACKBOARD_SESSION_TIMEOUT_MS, async (response) => {
+      const contentType = response.headers.get("content-type") || "";
+      const body = /text\/html|application\/xhtml\+xml/i.test(contentType) ? await readResponseTextPrefix(response) : "";
+      return { response, body };
+    });
     const contentType = response.headers.get("content-type") || "";
-    const body = /text\/html|application\/xhtml\+xml/i.test(contentType) ? await response.text() : "";
     const accessFailureReason = blackboardCrawlAccessFailureReason(body);
     if (accessFailureReason) {
       return {
@@ -549,12 +582,13 @@ async function checkBlackboardSession(payload = {}) {
         body
       })
     };
-  } catch (_error) {
+  } catch (error) {
+    const timedOut = error?.code === "request_timeout";
     return {
       ok: false,
       authenticated: false,
-      reason: "request_failed",
-      error: "Could not verify the Blackboard session."
+      reason: timedOut ? "request_timeout" : "request_failed",
+      error: timedOut ? "Blackboard session verification timed out after 15 seconds." : "Could not verify the Blackboard session."
     };
   }
 }
@@ -2698,7 +2732,7 @@ async function crawlSite(payload) {
   return response;
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_CRAWL_PAGE_TIMEOUT_MS) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_CRAWL_PAGE_TIMEOUT_MS, consumeResponse = null) {
   const durationMs = Math.max(1, Number(timeoutMs) || DEFAULT_CRAWL_PAGE_TIMEOUT_MS);
   const controller = new AbortController();
   let timeoutId = 0;
@@ -2713,7 +2747,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_CRAWL_PAG
   });
 
   try {
-    const request = Promise.resolve().then(() => fetch(url, { ...options, signal: controller.signal }));
+    const request = Promise.resolve()
+      .then(() => fetch(url, { ...options, signal: controller.signal }))
+      .then((response) => typeof consumeResponse === "function" ? consumeResponse(response) : response);
     return await Promise.race([request, timeout]);
   } finally {
     clearTimeout(timeoutId);
@@ -2721,11 +2757,16 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_CRAWL_PAG
 }
 
 async function fetchCrawlPage(url, timeoutMs = DEFAULT_CRAWL_PAGE_TIMEOUT_MS) {
-  const response = await fetchWithTimeout(url, {
+  const { response, html } = await fetchWithTimeout(url, {
     credentials: "include",
     redirect: "follow",
     cache: "no-store"
-  }, timeoutMs);
+  }, timeoutMs, async (response) => {
+    if (!response.ok) return { response, html: "" };
+    const responseContentType = response.headers.get("content-type") || "";
+    const html = /text\/html|application\/xhtml\+xml/i.test(responseContentType) ? await response.text() : "";
+    return { response, html };
+  });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
   const finalUrl = normalizeUrlFrom(response.url || url, url);
@@ -2748,7 +2789,6 @@ async function fetchCrawlPage(url, timeoutMs = DEFAULT_CRAWL_PAGE_TIMEOUT_MS) {
     };
   }
 
-  const html = await response.text();
   const accessFailureReason = blackboardCrawlAccessFailureReason(html);
   if (accessFailureReason) {
     const error = new Error(`Blackboard returned an access or session error page while fetching ${url}.`);

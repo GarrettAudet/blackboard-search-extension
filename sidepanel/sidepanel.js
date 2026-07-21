@@ -18,6 +18,12 @@ const OPTIONAL_RESOURCE_PACKS = [
   }
 ];
 const MAX_CONTENT_CHARS = 500000;
+// GPT-4.1 mini can accept substantially more context than this. These are
+// application safety ceilings, not retrieval targets: ordinary selected
+// documents should be supplied in full whenever they fit below them.
+const MAX_ANSWER_SOURCE_TEXT_CHARS = 1500000;
+const MAX_ANSWER_CONTEXT_TEXT_CHARS = 2500000;
+const MAX_PROMPT_SAFETY_SCAN_CHARS = MAX_ANSWER_SOURCE_TEXT_CHARS;
 const LOCAL_RESOURCE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 const LOCAL_RESOURCE_MAX_PREFLIGHT_FILES = 24;
 const LOCAL_RESOURCE_MAX_PREFLIGHT_RAW_BYTES = 100 * 1024 * 1024;
@@ -5051,7 +5057,8 @@ async function evaluateGroundedAnswerCandidate(
 
 async function generateVerifiedApiAnswer(query, answerSources, memory = [], retrievalQuery = query, queryPlan = null) {
   const pipelineDiagnostics = [];
-  answerSources = safeAnswerSourceResults(answerSources, 5, 24000);
+  answerSources = expandAnswerSourcesForSynthesis(query, answerSources, memory, queryPlan);
+  answerSources = safeAnswerSourceResults(answerSources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
   if (!answerSources.length) {
     pipelineDiagnostics.push({
       phase: "source_filter",
@@ -6077,6 +6084,139 @@ function fullTextForResult(result) {
   );
 }
 
+function parentDocumentResourcesForResult(result) {
+  if (!result) return [];
+  const resources = Array.isArray(state.resources) ? state.resources : [];
+  if (result.source_pack_id && result.source_pack_document_id) {
+    return resources.filter((resource) =>
+      resource.source_pack_id === result.source_pack_id &&
+      resource.source_pack_document_id === result.source_pack_document_id
+    );
+  }
+
+  const relatedIds = new Set([result.resource_id, ...(result.matched_resource_ids || [])].filter(Boolean));
+  const related = resources.filter((resource) => relatedIds.has(resource.id));
+  const knownIds = new Set(related.map((resource) => resource.id));
+  for (const id of relatedIds) {
+    if (!knownIds.has(id)) related.push({ id });
+  }
+  return related;
+}
+
+function parentDocumentContextForResult(result) {
+  const resources = parentDocumentResourcesForResult(result);
+  const seenBodies = new Set();
+  const resourceIds = [];
+  const pageRanges = [];
+  const parts = [];
+  let missingBodyCount = 0;
+
+  for (const resource of resources) {
+    const resourceId = String(resource?.id || "");
+    if (resourceId && !resourceIds.includes(resourceId)) resourceIds.push(resourceId);
+    const body = cleanIndexedText(state.contentStore?.[resourceId] || "");
+    if (!body) {
+      missingBodyCount += 1;
+      continue;
+    }
+    const bodyKey = normalizeText(body);
+    if (seenBodies.has(bodyKey)) continue;
+    seenBodies.add(bodyKey);
+
+    const pageRange = clampText(
+      String(resource.source_pack_page_range || resource.page_range || ""),
+      120
+    );
+    if (pageRange && !pageRanges.includes(pageRange)) pageRanges.push(pageRange);
+    const label = pageRange && !/^chunk\s+\d+$/i.test(pageRange)
+      ? (/^\d{1,2}:\d{2}/.test(pageRange) ? "Timestamp " : "Pages ") + pageRange
+      : "";
+    parts.push(label ? label + "\n" + body : body);
+  }
+
+  if (!parts.length) {
+    const fallback = cleanIndexedText(result?.text || "");
+    return {
+      text: fallback,
+      complete: false,
+      missingBodyCount: Math.max(1, missingBodyCount),
+      resourceIds: Array.from(new Set([result?.resource_id, ...(result?.matched_resource_ids || [])].filter(Boolean))),
+      pageRanges: String(result?.source_pack_page_range || "").split(",").map((item) => item.trim()).filter(Boolean)
+    };
+  }
+
+  return {
+    text: parts.join("\n\n"),
+    complete: resources.length > 0 && missingBodyCount === 0,
+    missingBodyCount,
+    resourceIds,
+    pageRanges
+  };
+}
+
+function isDocumentWideSynthesisQuery(query, memory = [], queryPlan = null) {
+  if (isEllipticalFollowUpQuestion(query) || (hasConversationHistory(memory) && requiresConversationResolution(query))) {
+    return true;
+  }
+  const values = [
+    String(query || ""),
+    String(queryPlan?.rewritten_question || ""),
+    String(queryPlan?.intent || "")
+  ];
+  return values.some((value) => {
+    const normalized = normalizeText(value);
+    return (
+      /\b(?:summari[sz]e|summary|overview|recap|synopsis|entire|whole|everything|all topics?|key topics?|main topics?)\b/.test(normalized) ||
+      /\bwhat\b.{0,120}\b(?:cover|covered|discuss|discussed|address|addressed|include|included)\b/.test(normalized)
+    );
+  });
+}
+
+function expandAnswerSourcesForSynthesis(query, sources, memory = [], queryPlan = null) {
+  const input = Array.isArray(sources) ? sources : [];
+  if (!input.length || !isDocumentWideSynthesisQuery(query, memory, queryPlan)) return input;
+
+  const visible = input.slice(0, 5);
+  let totalChars = visible.reduce((sum, source) => sum + cleanIndexedText(source?.text || "").length, 0);
+  return input.map((source, index) => {
+    if (index >= 5) return source;
+    const parent = parentDocumentContextForResult(source);
+    const selectedText = cleanIndexedText(source?.text || "");
+    const fullText = parent.text;
+    const additionalChars = Math.max(0, fullText.length - selectedText.length);
+    const fitsSource = fullText.length <= MAX_ANSWER_SOURCE_TEXT_CHARS;
+    const fitsRequest = totalChars + additionalChars <= MAX_ANSWER_CONTEXT_TEXT_CHARS;
+
+    if (!fullText || !fitsSource || !fitsRequest) {
+      return {
+        ...source,
+        document_context_requested: true,
+        document_context_scope: "selected_excerpts",
+        document_context_complete: false,
+        document_context_char_count: selectedText.length,
+        document_context_available_chars: fullText.length,
+        document_context_limit_reason: !fitsSource ? "per_source_safety_ceiling" : "total_request_safety_ceiling"
+      };
+    }
+
+    totalChars += additionalChars;
+    return {
+      ...source,
+      text: fullText,
+      selected_excerpt_text: selectedText,
+      matched_resource_ids: parent.resourceIds.length ? parent.resourceIds : source.matched_resource_ids,
+      source_pack_page_range: parent.pageRanges.join(", ") || source.source_pack_page_range || "",
+      matched_chunk_count: Math.max(Number(source.matched_chunk_count) || 1, parent.resourceIds.length || 1),
+      document_context_requested: true,
+      document_context_scope: parent.complete ? "full_indexed_document" : "available_indexed_document",
+      document_context_complete: parent.complete,
+      document_context_char_count: fullText.length,
+      document_context_available_chars: fullText.length,
+      document_context_missing_body_count: parent.missingBodyCount
+    };
+  });
+}
+
 function answerEvidenceTextForSource(source) {
   const retrievedText = cleanIndexedText(source?.text || "");
   return retrievedText || fullTextForResult(source);
@@ -6946,7 +7086,7 @@ function promptSourceProvenance(result) {
     : "Blackboard-indexed resource; authority unknown";
 }
 
-function answerPromptSource(result, index, textLimit) {
+function answerPromptSource(result, index, textLimit = MAX_ANSWER_SOURCE_TEXT_CHARS) {
   const sourceClass = sourceClassForResult(result);
   return {
     id: index + 1,
@@ -6968,6 +7108,12 @@ function answerPromptSource(result, index, textLimit) {
     page_range: clampText(String(result.source_pack_page_range || ""), 120),
     timestamp: clampText(String(result.timestamp || ""), 80),
     url: clampText(String(result.url || ""), 600),
+    document_coverage: clampText(String(result.document_context_scope || "selected_excerpts"), 60),
+    document_coverage_complete: Boolean(result.document_context_complete),
+    document_context_chars: Math.max(0, Number(result.document_context_char_count) || cleanIndexedText(result.text).length),
+    document_context_available_chars: Math.max(0, Number(result.document_context_available_chars) || cleanIndexedText(result.text).length),
+    document_context_missing_bodies: Math.max(0, Number(result.document_context_missing_body_count) || 0),
+    document_context_limit_reason: clampText(String(result.document_context_limit_reason || ""), 80),
     text: clampText(cleanIndexedText(result.text), textLimit)
   };
 }
@@ -6988,14 +7134,14 @@ function answerPromptSourceHasInstructionInjection(source) {
   });
 }
 
-function safeAnswerSourceResults(results, limit = 5, textLimit = 24000) {
+function safeAnswerSourceResults(results, limit = 5, textLimit = MAX_ANSWER_SOURCE_TEXT_CHARS) {
   const inputSources = Array.isArray(results) ? results.slice(0, limit) : [];
   return filterSemanticInstructionInjectedSources(inputSources).filter((result) =>
     !answerPromptSourceHasInstructionInjection(answerPromptSource(result, 0, textLimit))
   );
 }
 
-function answerPromptSources(results, limit = 5, textLimit = 24000) {
+function answerPromptSources(results, limit = 5, textLimit = MAX_ANSWER_SOURCE_TEXT_CHARS) {
   const inputSources = Array.isArray(results) ? results.slice(0, limit) : [];
   const safeSources = safeAnswerSourceResults(inputSources, limit, textLimit);
   if (inputSources.length && !safeSources.length) {
@@ -7017,7 +7163,7 @@ const SEMANTIC_EVIDENCE_LIMITS = Object.freeze({
   maxCombinedPerParent: 5,
   maxCombinedParents: 5,
   maxCombinedChunks: 15,
-  maxParentTextChars: 32000,
+  maxParentTextChars: MAX_ANSWER_SOURCE_TEXT_CHARS,
   maxDeepParents: 3,
   maxDeepBatches: 3,
   // Planner + semantic selection + answer + verifier must fit inside the
@@ -7301,7 +7447,9 @@ function groundedAnswerPolicyInstruction() {
     "When useful sources conflict, state the conflict, identify which guidance controls, and do not invent a compromise or reconciliation that no source states. " +
     "Preserve timing, ordering, conditions, quantities, and named subjects exactly as stated by the controlling excerpt. Source wording controls: never turn before or after an event into at or during that event, or otherwise soften a sequence boundary. " +
     "Never add an unstated purpose, rationale, causal explanation, assurance, or consequence merely because it seems plausible; omit it unless a cited excerpt explicitly states it. " +
-    "When sources do not conflict, combine complementary facts without implying that community material is official. "
+    "When sources do not conflict, combine complementary facts without implying that community material is official. " +
+    "Use each source's document_coverage field literally. For full_indexed_document, the entire indexed parent document was supplied; broad summaries must cover its distinct substantive topics. " +
+    "For selected_excerpts or available_indexed_document, answer supported details but never imply the response exhaustively covers the parent document. "
   );
 }
 
@@ -7537,7 +7685,7 @@ const SEMANTIC_PROMPT_DECODE_MAX_PASSES = 4;
 const SEMANTIC_PROMPT_DECODE_EXHAUSTED_MARKER = "[[semantic-prompt-decode-exhausted]]";
 
 function canonicalSemanticPromptSurface(value) {
-  const maximum = SEMANTIC_EVIDENCE_LIMITS.maxParentTextChars;
+  const maximum = MAX_PROMPT_SAFETY_SCAN_CHARS;
   let decoded = normalizeSemanticPromptSurfaceLayer(value, maximum);
   let stabilized = false;
   for (let pass = 0; pass < SEMANTIC_PROMPT_DECODE_MAX_PASSES; pass += 1) {
@@ -8561,7 +8709,7 @@ async function selectSemanticEvidenceForApi(
 }
 
 async function buildApiAnswer(query, results, memory = [], retrievalQuery = query, queryPlan = null) {
-  const context = answerPromptSources(results, 5, 24000);
+  const context = answerPromptSources(results, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
   const memoryText = formatConversationMemory(memory);
@@ -8981,7 +9129,7 @@ async function verifyApiAnswerGrounding(
 ) {
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
-  const sourceList = answerPromptSources(sources, 5, 24000);
+  const sourceList = answerPromptSources(sources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
   const finalPhase = phase === "recovery" || phase === "reviewer";
   const messages = [
     {
@@ -9035,7 +9183,7 @@ async function reviewApiAnswer(
 ) {
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
-  const sourceList = answerPromptSources(sources, 5, 24000);
+  const sourceList = answerPromptSources(sources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
   const messages = [
     {
       role: "system",
@@ -9081,7 +9229,7 @@ async function reviewApiAnswer(
 async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery = query, queryPlan = null, validationFeedback = "") {
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
-  const sourceList = answerPromptSources(sources, 5, 24000);
+  const sourceList = answerPromptSources(sources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
   const messages = [
     {
       role: "system",
@@ -9313,9 +9461,26 @@ function dedupeSourcesPreservingOrder(sources) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(source);
   }
-  return Array.from(groups.values()).map((group) =>
-    typeof mergeSourceCandidateGroup === "function" ? mergeSourceCandidateGroup(group, "") : group[0]
-  );
+  return Array.from(groups.values()).map((group) => {
+    if (group.length === 1 || group.some((source) => source.document_context_requested)) return group[0];
+    return typeof mergeSourceCandidateGroup === "function" ? mergeSourceCandidateGroup(group, "") : group[0];
+  });
+}
+
+function sourceDocumentCoverageLabel(result) {
+  const scope = String(result?.document_context_scope || "");
+  const charCount = Math.max(0, Number(result?.document_context_char_count) || 0);
+  if (scope === "full_indexed_document") {
+    return `Full indexed document supplied to the answer model${charCount ? ` (${charCount.toLocaleString()} characters)` : ""}`;
+  }
+  if (scope === "available_indexed_document") {
+    const missing = Math.max(0, Number(result?.document_context_missing_body_count) || 0);
+    return `All available indexed sections supplied${missing ? `; ${missing} section${missing === 1 ? "" : "s"} lacked searchable text` : ""}`;
+  }
+  if (result?.document_context_requested && result?.document_context_limit_reason) {
+    return "Selected excerpts supplied because the full document exceeded the request safety ceiling";
+  }
+  return "";
 }
 
 function renderSourceCard(result, query, citationNumber = 0) {
@@ -9326,8 +9491,11 @@ function renderSourceCard(result, query, citationNumber = 0) {
   node.querySelector("h3").textContent = result.timestamp
     ? `${cleanSourceTitle(result)} (${result.timestamp})`
     : cleanSourceTitle(result);
-  node.querySelector(".snippet").textContent = snippetFor(result.text, query);
-  node.querySelector(".source").textContent = compactSourceTrail(result);
+  node.querySelector(".snippet").textContent = snippetFor(result.selected_excerpt_text || result.text, query);
+  node.querySelector(".source").textContent = [
+    compactSourceTrail(result),
+    sourceDocumentCoverageLabel(result)
+  ].filter(Boolean).join(" | ");
   const link = node.querySelector(".open-link");
   if (result.url) {
     link.href = result.url;

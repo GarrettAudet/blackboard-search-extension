@@ -50,6 +50,13 @@ const semanticSelectionProviderCallCap = vm.runInContext(
 if (semanticSelectionProviderCallCap !== 3) {
   throw new Error("Semantic selection must reserve production call capacity for answer verification.");
 }
+const semanticParentTextCap = vm.runInContext(
+  "SEMANTIC_EVIDENCE_LIMITS.maxParentTextChars",
+  context
+);
+if (semanticParentTextCap !== 1500000) {
+  throw new Error("Semantic parent assembly regressed to a premature document truncation ceiling.");
+}
 vm.runInContext(`
   state.resources = [];
   state.contentStore = {};
@@ -1620,7 +1627,10 @@ if (
   !mergeContracts.prompt.ok ||
   !/SELECTED_PROMPT_CLAMPED_TEXT/.test(mergeContracts.prompt.sources[0]?.text || "") ||
   /RAW_RESULT_TEXT_MUST_NOT_REPLACE/.test(mergeContracts.prompt.sources[0]?.text || "") ||
-  mergeContracts.textBudget.ok || mergeContracts.textBudget.reason !== "parent_text_limit_exceeded" ||
+  !mergeContracts.textBudget.ok ||
+  mergeContracts.textBudget.sources[0]?.matched_chunk_count !== 5 ||
+  mergeContracts.textBudget.sources[0]?.text.length <= 32000 ||
+  mergeContracts.textBudget.sources[0]?.text.length > semanticParentTextCap ||
   !mergeContracts.validCombined.ok ||
   mergeContracts.validCombined.sources[0]?.matched_chunk_count !== 5 ||
   mergeContracts.validCombined.sources[0]?.text.length > 24000 ||
@@ -1858,7 +1868,7 @@ const overflowResults = Array.from({ length: 50 }, (_, index) => result({
   title: "Event Funding Approval and Reimbursement Records",
   text:
     "Student event funding approval documents and reimbursement records evidence " +
-    index + " " + "z".repeat(4500),
+    index + " " + "z".repeat(7500),
   score: 4000 - index,
   routeIndex: index % 3,
   routeQuery: retrievalQueries[index % 3]
@@ -1900,10 +1910,10 @@ if (
   overflowRun.selection.reason !== "" ||
   overflowRun.selection.sources.length !== 1 ||
   overflowRun.selection.sources[0]?.matched_chunk_count !== 5 ||
-  overflowRun.selection.sources[0]?.text.length > 32000 ||
+  overflowRun.selection.sources[0]?.text.length > semanticParentTextCap ||
   overflowRun.selection.selector_calls !== 2
 ) {
-  throw new Error("The two-main-plus-three-deep same-parent contract did not remain synthesizable under 32k: " + JSON.stringify({ selection: overflowRun.selection, stages: overflowRun.captured.map(stageFor) }));
+  throw new Error("The two-main-plus-three-deep same-parent contract did not preserve all selected evidence under the expanded parent-document ceiling: " + JSON.stringify({ selection: overflowRun.selection, stages: overflowRun.captured.map(stageFor) }));
 }
 const rankPreservationResults = Array.from({ length: 5 }, (_, index) => result({
   index: 200 + index,

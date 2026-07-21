@@ -318,6 +318,77 @@ assert.ok(packHit, "Combined production search could not retrieve prepared /Schw
 assert.equal(packHit.source_pack_document_id, "survival-guide", "Pack parent-document provenance was lost during search.");
 assert.ok(packHit.source_pack_provenance, "Pack search result lost its source provenance.");
 
+const webinarContextContract = clone(vm.runInContext(`(() => {
+  const query = "What did the Student Life Webinar overview?";
+  const results = searchIndex(query, 24);
+  const hit = results.find((result) =>
+    result.source_pack_id === "schwarzman-c11" &&
+    result.source_pack_document_id === "student-life-webinar"
+  );
+  if (!hit) return { found: false };
+  const resources = state.resources.filter((resource) =>
+    resource.source_pack_id === "schwarzman-c11" &&
+    resource.source_pack_document_id === "student-life-webinar"
+  );
+  const bodies = resources.map((resource) => cleanIndexedText(state.contentStore[resource.id] || ""));
+  const broad = expandAnswerSourcesForSynthesis(query, [hit], [], defaultRagPlan(query, query));
+  const broadPrompt = answerPromptSources(broad, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
+  const memory = [{
+    user: query,
+    assistant: "It covered travel, student life, and visa and registration support."
+  }];
+  const followQuery = "What visa and registration support did it cover?";
+  const followRetrieval = buildRetrievalQuery(followQuery, memory);
+  const followHit = searchIndex(followRetrieval, 24).find((result) =>
+    result.source_pack_id === "schwarzman-c11" &&
+    result.source_pack_document_id === "student-life-webinar"
+  );
+  const follow = expandAnswerSourcesForSynthesis(
+    followQuery,
+    [followHit || hit],
+    memory,
+    defaultRagPlan(followQuery, followRetrieval)
+  );
+  const followPrompt = answerPromptSources(follow, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
+  const targeted = expandAnswerSourcesForSynthesis(
+    "According to the official X1 policy, when is the residence permit deadline?",
+    [hit],
+    memory,
+    defaultRagPlan("According to the official X1 policy, when is the residence permit deadline?", "official X1 residence permit deadline")
+  );
+  return {
+    found: true,
+    resourceCount: resources.length,
+    bodyChars: bodies.reduce((sum, body) => sum + body.length, 0),
+    broadPromptChars: broadPrompt.text.length,
+    broadCoverage: broadPrompt.document_coverage,
+    broadComplete: broadPrompt.document_coverage_complete,
+    broadHasEveryBody: bodies.every((body) => body && broadPrompt.text.includes(body)),
+    broadPageRange: broad[0].source_pack_page_range,
+    followRetrievedParent: Boolean(followHit),
+    followCoverage: followPrompt.document_coverage,
+    followComplete: followPrompt.document_coverage_complete,
+    followHasEveryBody: bodies.every((body) => body && followPrompt.text.includes(body)),
+    targetedExpanded: Boolean(targeted[0].document_context_requested),
+    coverageLabel: sourceDocumentCoverageLabel(broad[0])
+  };
+})()`, sidepanelContext));
+assert.equal(webinarContextContract.found, true, "The Student Life webinar parent was not retrievable from the installed pack.");
+assert.equal(webinarContextContract.resourceCount, 2, "The Student Life webinar parent did not retain both packaged transcript sections.");
+assert.ok(webinarContextContract.bodyChars > 24000, "The real webinar fixture no longer exercises the former 24k prompt truncation.");
+assert.ok(webinarContextContract.broadPromptChars > 24000, "Document-wide synthesis still truncated the real webinar at 24k.");
+assert.equal(webinarContextContract.broadCoverage, "full_indexed_document", "The broad webinar query did not receive full parent-document context.");
+assert.equal(webinarContextContract.broadComplete, true, "The broad webinar context was not marked complete.");
+assert.equal(webinarContextContract.broadHasEveryBody, true, "The broad webinar prompt omitted at least one indexed transcript section.");
+assert.match(webinarContextContract.broadPageRange, /00:00-15:12/, "The broad webinar source lost its first indexed time range.");
+assert.match(webinarContextContract.broadPageRange, /17:42-29:35/, "The broad webinar source lost its second indexed time range.");
+assert.equal(webinarContextContract.followRetrievedParent, true, "The elliptical webinar follow-up did not retrieve its conversation parent.");
+assert.equal(webinarContextContract.followCoverage, "full_indexed_document", "The elliptical webinar follow-up did not receive full parent-document context.");
+assert.equal(webinarContextContract.followComplete, true, "The elliptical webinar follow-up context was not marked complete.");
+assert.equal(webinarContextContract.followHasEveryBody, true, "The elliptical webinar follow-up omitted at least one indexed transcript section.");
+assert.equal(webinarContextContract.targetedExpanded, false, "A standalone targeted question unnecessarily expanded an unrelated full document.");
+assert.match(webinarContextContract.coverageLabel, /Full indexed document supplied/, "The source UI no longer exposes full-document prompt coverage.");
+
 const authorityQuery = "official X1 visa JW202 admission notice residence permit within 30 days";
 sidepanelContext.__authorityQuery = authorityQuery;
 sidepanelContext.__authorityResults = vm.runInContext(

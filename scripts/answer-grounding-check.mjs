@@ -655,17 +655,27 @@ if (
   throw new Error("Reserved source delimiters were not safely escaped: " + formattedInjection);
 }
 
-const oversizedSource = source(
-  "oversized",
-  "Bounded source",
-  "capstone group individual " + "x".repeat(25000) + "UNBOUNDED_SOURCE_SENTINEL"
+const formerlyTruncatedSource = source(
+  "formerly-truncated",
+  "Expanded source",
+  "capstone group individual " + "x".repeat(25000) + "FORMER_24K_TAIL_SENTINEL"
 );
-const boundedPromptRun = await runLadder(capstoneQuery, [oversizedSource], [correctedCapstone, supportedVerdict]);
-const verifierPrompt = boundedPromptRun.requests
+const expandedPromptRun = await runLadder(capstoneQuery, [formerlyTruncatedSource], [correctedCapstone, supportedVerdict]);
+const verifierPrompt = expandedPromptRun.requests
   .find((request) => /semantic grounding verifier/i.test(String(request.messages?.[0]?.content || "")))
   ?.messages?.find((message) => message.role === "user")?.content || "";
-if (/UNBOUNDED_SOURCE_SENTINEL/.test(verifierPrompt) || /x{24001}/.test(verifierPrompt)) {
-  throw new Error("The semantic verifier saw source text beyond the prompt-bounded excerpt.");
+if (!/FORMER_24K_TAIL_SENTINEL/.test(verifierPrompt) || !/x{24001}/.test(verifierPrompt)) {
+  throw new Error("The semantic verifier still lost source text beyond the former 24k prompt clamp.");
+}
+
+const safetyBoundedSource = source(
+  "safety-bounded",
+  "Safety-bounded source",
+  "x".repeat(1500100) + "HARD_SAFETY_CEILING_SENTINEL"
+);
+const safetyBoundedPrompt = context.answerPromptSources([safetyBoundedSource])[0].text;
+if (safetyBoundedPrompt.length !== 1500000 || /HARD_SAFETY_CEILING_SENTINEL/.test(safetyBoundedPrompt)) {
+  throw new Error("The expanded answer context exceeded its high hard safety ceiling.");
 }
 
 const unknownProvenance = context.answerPromptSources([source("unknown", "Unknown authority", "Evidence", {

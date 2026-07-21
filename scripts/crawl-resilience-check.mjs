@@ -41,6 +41,34 @@ await assert.rejects(
   fetchContext.fetchWithTimeout("https://example.edu/stuck", {}, 25),
   (error) => error && error.code === "request_timeout" && /did not respond/i.test(error.message)
 );
+
+let bodyAborted = false;
+fetchContext.fetch = async (_url, options) => ({
+  ok: true,
+  status: 200,
+  text() {
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        bodyAborted = true;
+        const error = new Error("body aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    });
+  }
+});
+const bodyTimeoutStarted = performance.now();
+await assert.rejects(
+  fetchContext.fetchWithTimeout(
+    "https://example.edu/stalled-body",
+    {},
+    25,
+    (response) => response.text()
+  ),
+  (error) => error && error.code === "request_timeout" && /did not respond/i.test(error.message)
+);
+assert.ok(bodyAborted, "Timed-out response body was not aborted.");
+assert.ok(performance.now() - bodyTimeoutStarted < 500, "Response-body timeout did not settle promptly.");
 assert.ok(aborted, "Timed-out fetch was not aborted.");
 assert.ok(performance.now() - timeoutStarted < 500, "Fetch timeout did not settle promptly.");
 

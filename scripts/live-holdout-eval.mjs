@@ -500,21 +500,22 @@ vm.runInContext(`
         plan
       );
       const sources = evidenceSelection.sources.slice(0, 8);
-      const promptSources = answerPromptSources(sources, 5, 24000);
-      const answer = await generateVerifiedApiAnswer(query, sources, [], retrievalQuery, plan);
+      const synthesisSources = expandAnswerSourcesForSynthesis(query, sources, [], plan);
+      const promptSources = answerPromptSources(synthesisSources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
+      const answer = await generateVerifiedApiAnswer(query, synthesisSources, [], retrievalQuery, plan);
       const cleanNotFound = isCleanNotFoundAnswer(answer?.text || "");
       const validation = cleanNotFound
         ? { ok: true, reasons: [], cleanNotFound: true }
-        : citedAnswerValidation(query, answer, sources, retrievalQuery);
+        : citedAnswerValidation(query, answer, synthesisSources, retrievalQuery);
       return {
         plan,
         retrievalQuery,
         retrievalQueries,
         sources: promptSources.map((promptSource, index) => ({
-          documentId: sources[index]?.source_pack_document_id || sources[index]?.resource_id || sourceDedupeKey(sources[index]),
+          documentId: synthesisSources[index]?.source_pack_document_id || synthesisSources[index]?.resource_id || sourceDedupeKey(synthesisSources[index]),
           title: promptSource.title,
           text: String(promptSource.text || ""),
-          score: Number(sources[index]?.score) || 0,
+          score: Number(synthesisSources[index]?.score) || 0,
           promptSourceId: promptSource.id
         })),
         answer: { text: String(answer?.text || ""), sourceCount: Array.isArray(answer?.sources) ? answer.sources.length : 0 },
@@ -779,9 +780,10 @@ async function runSelfTest() {
   }
   if (
     pipelineResult.sources.length > 5 ||
-    pipelineResult.sources.some((source, index) => source.promptSourceId !== index + 1 || source.text.length > 24000)
+    pipelineResult.sources.some((source, index) => source.promptSourceId !== index + 1 || source.text.length > 1500000) ||
+    pipelineResult.sources.reduce((sum, source) => sum + source.text.length, 0) > 2500000
   ) {
-    throw new Error("Self-test scoring did not receive the exact five-source/24,000-character production prompt clamp.");
+    throw new Error("Self-test scoring exceeded the five-source high document-context safety ceilings.");
   }
   const normalStages = pipelineResult.providerTrace.map((entry) => entry.stage);
   const normalDeepStageCount = normalStages.filter((stage) => stage === "deep_selector").length;
@@ -901,7 +903,7 @@ async function runSelfTest() {
   if (productionTrace.some((entry) => entry.credentialMarkerPresent)) {
     throw new Error("Provider credentials leaked into a production prompt.");
   }
-  console.log(`live-holdout-eval ${suite} self-test passed (no network; planner -> semantic selector/deep-read -> draft -> grounding verifier with bounded reviewer/recovery; 24k prompt-clamped evidence scoring; answer-key/judge separation)`);
+  console.log(`live-holdout-eval ${suite} self-test passed (no network; planner -> semantic selector/deep-read -> adaptive full-document synthesis -> grounding verifier with bounded reviewer/recovery; high context safety ceilings; answer-key/judge separation)`);
 }
 
 if (selfTest) {
