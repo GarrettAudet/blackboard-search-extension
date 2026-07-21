@@ -668,6 +668,80 @@ if (!/FORMER_24K_TAIL_SENTINEL/.test(verifierPrompt) || !/x{24001}/.test(verifie
   throw new Error("The semantic verifier still lost source text beyond the former 24k prompt clamp.");
 }
 
+const exactRouteQuery = "What is the current 24-hour Beijing United Family Hospital phone number?";
+const exactRouteSource = source(
+  "ufh-current-number",
+  "Hospital contact guidance",
+  "Beijing United Family Hospital maintains a 24-hour bilingual line. The current telephone number is provided in the insurance manual or the UFH mini-program."
+);
+const vagueRouteAnswer = "The current telephone number is available through the insurance manual or the UFH mini-program [1].";
+const explicitRouteAnswer = "The indexed sources do not list the exact current telephone number; obtain it from the insurance manual or the UFH mini-program [1].";
+const exactRouteRun = await runLadder(exactRouteQuery, [exactRouteSource], [
+  vagueRouteAnswer,
+  unsupportedVerdict,
+  JSON.stringify({ answer: explicitRouteAnswer }),
+  supportedVerdict
+]);
+if (
+  exactRouteRun.stages.join(",") !== "answer,verifier,reviewer,final-verifier" ||
+  exactRouteRun.answer.text !== explicitRouteAnswer
+) {
+  throw new Error("An implicit exact-value deferral was not repaired into an explicit indexed-source limitation: " + JSON.stringify(exactRouteRun));
+}
+const exactRouteVerifierSystem = exactRouteRun.requests
+  .find((request) => /semantic grounding verifier/i.test(String(request.messages?.[0]?.content || "")))
+  ?.messages?.find((message) => message.role === "system")?.content || "";
+const exactRouteRepairSystem = exactRouteRun.requests
+  .find((request) => /grounding repair (?:reviewer|writer)/i.test(String(request.messages?.[0]?.content || "")))
+  ?.messages?.find((message) => message.role === "system")?.content || "";
+if (
+  !/explicitly says the indexed sources do not list the exact value/i.test(exactRouteVerifierSystem) ||
+  !/indexed sources do not list the value/i.test(exactRouteRepairSystem)
+) {
+  throw new Error("Exact-current-value limitation requirements were absent from verifier or repair prompts.");
+}
+
+const exactTimeQuery = "When should I visit the Temple of Heaven to see the morning park activities?";
+const exactTimeSource = source(
+  "temple-time",
+  "Discovering Beijing webinar",
+  "If you go at 6.30 a.m., you can see local seniors practicing Tai Chi, calligraphy, and square dancing in the Temple of Heaven park."
+);
+const vagueTimeAnswer = "Visit the Temple of Heaven early in the morning to see the park activities [1].";
+const exactTimeAnswer = "Visit the Temple of Heaven at 6:30 a.m. to see the morning park activities [1].";
+const exactTimeRun = await runLadder(exactTimeQuery, [exactTimeSource], [
+  vagueTimeAnswer,
+  unsupportedVerdict,
+  JSON.stringify({ answer: exactTimeAnswer }),
+  supportedVerdict
+]);
+if (
+  exactTimeRun.stages.join(",") !== "answer,verifier,reviewer,final-verifier" ||
+  exactTimeRun.answer.text !== exactTimeAnswer
+) {
+  throw new Error("A vague replacement for an exact source time was not repaired: " + JSON.stringify(exactTimeRun));
+}
+
+const namedChannelQuery = "Where can I take the online tour of the standard scholar rooms?";
+const namedChannelSource = source(
+  "room-tour",
+  "Student Life webinar",
+  "All scholars live in single rooms with private bathrooms. Virtual tours of the rooms are available on the Schwarzman College website."
+);
+const genericChannelAnswer = "Look on Blackboard, email, or WeChat for the online room tour [1].";
+const namedChannelAnswer = "The virtual room tours are on the Schwarzman College website [1].";
+const namedChannelRun = await runLadder(namedChannelQuery, [namedChannelSource], [
+  genericChannelAnswer,
+  JSON.stringify({ answer: namedChannelAnswer }),
+  supportedVerdict
+]);
+if (
+  namedChannelRun.stages.join(",") !== "answer,reviewer,final-verifier" ||
+  namedChannelRun.answer.text !== namedChannelAnswer
+) {
+  throw new Error("A generic communication channel was not repaired to the named source location: " + JSON.stringify(namedChannelRun));
+}
+
 const safetyBoundedSource = source(
   "safety-bounded",
   "Safety-bounded source",

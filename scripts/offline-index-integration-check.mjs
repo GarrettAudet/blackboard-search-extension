@@ -439,6 +439,7 @@ const multiFacetContextContract = clone(vm.runInContext(`(() => {
       found: true,
       coverage: prompt.document_coverage,
       complete: prompt.document_coverage_complete,
+      deepReadCanBeSkipped: isMultiFacetSynthesisQuery(item.query, plan) && completeParentDocumentsFitAnswerContext([hit]),
       checks: item.checks.map((pattern) => pattern.test(prompt.text))
     };
   });
@@ -447,6 +448,7 @@ for (const item of multiFacetContextContract) {
   assert.equal(item.found, true, `The multi-facet query did not retrieve ${item.documentId}.`);
   assert.equal(item.coverage, "full_indexed_document", `The multi-facet query did not fully expand ${item.documentId}.`);
   assert.equal(item.complete, true, `The multi-facet context for ${item.documentId} was incomplete.`);
+  assert.equal(item.deepReadCanBeSkipped, true, `The complete multi-facet parent ${item.documentId} still required a paid deep-read call.`);
   assert.ok(item.checks.every(Boolean), `The multi-facet prompt omitted a required fact from ${item.documentId}.`);
 }
 const transportationContextContract = clone(vm.runInContext(`(() => {
