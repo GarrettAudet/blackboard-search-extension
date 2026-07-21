@@ -9471,7 +9471,10 @@ function sourceDocumentCoverageLabel(result) {
   const scope = String(result?.document_context_scope || "");
   const charCount = Math.max(0, Number(result?.document_context_char_count) || 0);
   if (scope === "full_indexed_document") {
-    return `Full indexed document supplied to the answer model${charCount ? ` (${charCount.toLocaleString()} characters)` : ""}`;
+    const subject = sourceTranscriptUsageLabel(result)
+      ? "All indexed transcript chunks supplied to the answer model"
+      : "Full indexed document supplied to the answer model";
+    return `${subject}${charCount ? ` (${charCount.toLocaleString()} characters)` : ""}`;
   }
   if (scope === "available_indexed_document") {
     const missing = Math.max(0, Number(result?.document_context_missing_body_count) || 0);
@@ -9481,6 +9484,77 @@ function sourceDocumentCoverageLabel(result) {
     return "Selected excerpts supplied because the full document exceeded the request safety ceiling";
   }
   return "";
+}
+
+function parseIndexedTimestamp(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{1,3}:\d{2}(?::\d{2})?$/.test(raw)) return null;
+  const parts = raw.split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return null;
+  if (parts.length === 2) {
+    if (parts[1] >= 60) return null;
+    return {
+      seconds: parts[0] * 60 + parts[1],
+      label: `${String(parts[0]).padStart(2, "0")}:${String(parts[1]).padStart(2, "0")}`
+    };
+  }
+  if (parts[1] >= 60 || parts[2] >= 60) return null;
+  return {
+    seconds: parts[0] * 3600 + parts[1] * 60 + parts[2],
+    label: `${parts[0]}:${String(parts[1]).padStart(2, "0")}:${String(parts[2]).padStart(2, "0")}`
+  };
+}
+
+function indexedTranscriptRange(value) {
+  const match = String(value || "").trim().match(
+    /^\s*(\d{1,3}:\d{2}(?::\d{2})?)\s*[-\u2013\u2014]\s*(\d{1,3}:\d{2}(?::\d{2})?)\s*$/
+  );
+  if (!match) return null;
+  const start = parseIndexedTimestamp(match[1]);
+  const end = parseIndexedTimestamp(match[2]);
+  if (!start || !end || end.seconds < start.seconds) return null;
+  return {
+    startSeconds: start.seconds,
+    endSeconds: end.seconds,
+    startLabel: start.label,
+    endLabel: end.label,
+    label: `${start.label}-${end.label}`
+  };
+}
+
+function sourceDocumentTranscriptChunks(result) {
+  const resources = parentDocumentResourcesForResult(result);
+  const candidates = resources.length ? resources : [result].filter(Boolean);
+  const seen = new Set();
+  return candidates.map((resource, index) => {
+    const pageRange = String(
+      resource?.source_pack_page_range || resource?.page_range || resource?.timestamp || ""
+    ).trim();
+    const range = indexedTranscriptRange(pageRange);
+    if (!range) return null;
+    const resourceId = String(resource?.id || resource?.resource_id || `transcript-chunk-${index + 1}`);
+    const key = `${resourceId}|${range.label}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return { resourceId, pageRange, ...range };
+  }).filter(Boolean).sort((left, right) =>
+    left.startSeconds - right.startSeconds || left.endSeconds - right.endSeconds
+  );
+}
+
+function sourceTranscriptUsageLabel(result) {
+  const chunks = sourceDocumentTranscriptChunks(result);
+  if (!chunks.length) return "";
+  const first = chunks.reduce((best, chunk) => chunk.startSeconds < best.startSeconds ? chunk : best, chunks[0]);
+  const last = chunks.reduce((best, chunk) => chunk.endSeconds > best.endSeconds ? chunk : best, chunks[0]);
+  const usedIds = new Set([result?.resource_id, ...(result?.matched_resource_ids || [])].filter(Boolean).map(String));
+  const fullContext = result?.document_context_scope === "full_indexed_document" && result?.document_context_complete;
+  const used = fullContext ? chunks : chunks.filter((chunk) => usedIds.has(chunk.resourceId));
+  const indexedLabel = `Indexed transcript ${first.startLabel}-${last.endLabel} (${chunks.length} chunk${chunks.length === 1 ? "" : "s"})`;
+  if (!used.length) return indexedLabel;
+  if (used.length === chunks.length) return `${indexedLabel}; answer used all ${chunks.length}`;
+  const ranges = used.map((chunk) => chunk.label).join(", ");
+  return `${indexedLabel}; answer used ${used.length} of ${chunks.length}: ${ranges}`;
 }
 
 function renderSourceCard(result, query, citationNumber = 0) {
@@ -9494,6 +9568,7 @@ function renderSourceCard(result, query, citationNumber = 0) {
   node.querySelector(".snippet").textContent = snippetFor(result.selected_excerpt_text || result.text, query);
   node.querySelector(".source").textContent = [
     compactSourceTrail(result),
+    sourceTranscriptUsageLabel(result),
     sourceDocumentCoverageLabel(result)
   ].filter(Boolean).join(" | ");
   const link = node.querySelector(".open-link");

@@ -370,7 +370,9 @@ const webinarContextContract = clone(vm.runInContext(`(() => {
     followComplete: followPrompt.document_coverage_complete,
     followHasEveryBody: bodies.every((body) => body && followPrompt.text.includes(body)),
     targetedExpanded: Boolean(targeted[0].document_context_requested),
-    coverageLabel: sourceDocumentCoverageLabel(broad[0])
+    coverageLabel: sourceDocumentCoverageLabel(broad[0]),
+    transcriptUsageLabel: sourceTranscriptUsageLabel(broad[0]),
+    targetedTranscriptUsageLabel: sourceTranscriptUsageLabel(hit)
   };
 })()`, sidepanelContext));
 assert.equal(webinarContextContract.found, true, "The Student Life webinar parent was not retrievable from the installed pack.");
@@ -387,7 +389,17 @@ assert.equal(webinarContextContract.followCoverage, "full_indexed_document", "Th
 assert.equal(webinarContextContract.followComplete, true, "The elliptical webinar follow-up context was not marked complete.");
 assert.equal(webinarContextContract.followHasEveryBody, true, "The elliptical webinar follow-up omitted at least one indexed transcript section.");
 assert.equal(webinarContextContract.targetedExpanded, false, "A standalone targeted question unnecessarily expanded an unrelated full document.");
-assert.match(webinarContextContract.coverageLabel, /Full indexed document supplied/, "The source UI no longer exposes full-document prompt coverage.");
+assert.match(webinarContextContract.coverageLabel, /All indexed transcript chunks supplied/, "The source UI no longer exposes complete indexed-transcript prompt coverage.");
+assert.equal(
+  webinarContextContract.transcriptUsageLabel,
+  "Indexed transcript 00:00-29:35 (2 chunks); answer used all 2",
+  "The source UI did not expose the full indexed video range and all chunks used for the broad answer."
+);
+assert.match(
+  webinarContextContract.targetedTranscriptUsageLabel,
+  /^Indexed transcript 00:00-29:35 \(2 chunks\); answer used (?:1 of 2: \d{2}:\d{2}-\d{2}:\d{2}|all 2)$/,
+  "The source UI did not distinguish targeted chunk use from total indexed transcript coverage."
+);
 
 const authorityQuery = "official X1 visa JW202 admission notice residence permit within 30 days";
 sidepanelContext.__authorityQuery = authorityQuery;
