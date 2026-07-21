@@ -442,6 +442,40 @@ for (const expectedFacet of ["subway", "ride hailing", "shared bikes", "bus"]) {
   );
 }
 
+const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
+  const query = "Which three historical attractions did the Discovering Beijing webinar highlight, and what practical planning advice did it give for each?";
+  const retrievalQuery = enhanceRetrievalQueryForIntent(query, query, defaultRagPlan(query, query));
+  const hit = searchIndex(retrievalQuery, 24).find((result) =>
+    result.source_pack_id === "schwarzman-c11" &&
+    result.source_pack_document_id === "discovering-beijing-webinar"
+  );
+  if (!hit) return { found: false };
+  const resources = state.resources.filter((resource) =>
+    resource.source_pack_id === "schwarzman-c11" &&
+    resource.source_pack_document_id === "discovering-beijing-webinar"
+  );
+  const bodies = resources.map((resource) => cleanIndexedText(state.contentStore[resource.id] || ""));
+  const expanded = expandAnswerSourcesForSynthesis(query, [hit], [], defaultRagPlan(query, retrievalQuery));
+  const prompt = answerPromptSources(expanded, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
+  return {
+    found: true,
+    resourceCount: resources.length,
+    coverage: prompt.document_coverage,
+    complete: prompt.document_coverage_complete,
+    hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
+    hasForbiddenCityGuide: /Forbidden City/i.test(prompt.text) && /get an English tour guide/i.test(prompt.text),
+    hasTempleMorning: /Temple of Heaven/i.test(prompt.text) && /If you go at 6\.30 a\.m\./i.test(prompt.text),
+    hasMuseumPlanning: /National Museum China/i.test(prompt.text) && /reserve up to seven days in advance/i.test(prompt.text) && /requires at least four hours/i.test(prompt.text)
+  };
+})()`, sidepanelContext));
+assert.equal(discoveringBeijingContextContract.found, true, "The broad Discovering Beijing question did not retrieve its webinar.");
+assert.equal(discoveringBeijingContextContract.resourceCount, 5, "The Discovering Beijing parent did not retain all transcript chunks.");
+assert.equal(discoveringBeijingContextContract.coverage, "full_indexed_document", "The three-site comparison did not receive full webinar context.");
+assert.equal(discoveringBeijingContextContract.complete, true, "The Discovering Beijing full-document context was not marked complete.");
+assert.equal(discoveringBeijingContextContract.hasEveryBody, true, "The Discovering Beijing prompt omitted an indexed transcript chunk.");
+assert.equal(discoveringBeijingContextContract.hasForbiddenCityGuide, true, "The full synthesis prompt omitted the Forbidden City guide advice.");
+assert.equal(discoveringBeijingContextContract.hasTempleMorning, true, "The full synthesis prompt omitted the Temple of Heaven morning advice.");
+assert.equal(discoveringBeijingContextContract.hasMuseumPlanning, true, "The full synthesis prompt omitted the National Museum planning advice.");
 const authorityQuery = "official X1 visa JW202 admission notice residence permit within 30 days";
 sidepanelContext.__authorityQuery = authorityQuery;
 sidepanelContext.__authorityResults = vm.runInContext(

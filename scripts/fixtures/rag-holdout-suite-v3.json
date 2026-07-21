@@ -1,0 +1,791 @@
+{
+    "schema_version":  2,
+    "suite_id":  "blackboard-schwarzman-fixed-production-benchmark-v3",
+    "pack_id":  "schwarzman-c11",
+    "pack_version":  "2026.07.8",
+    "pack_corpus_digest":  "2503812d2571d5fb23ad4253c204596c869b410dc5a9b33aa3e3959dd7c617bb",
+    "blackboard_corpus_id":  "local-blackboard-representative-v2",
+    "blackboard_corpus_version":  "2026.07.17.1",
+    "blackboard_corpus_digest":  "5dedb8e25342c80c5c1e67d5db2ca813f29df129729823583da822059f8d0b94",
+    "blinding_note":  "Frozen production benchmark: 20 known-answerable cases and two separately scored unanswerable controls. Production code must not read this file.",
+    "cases":  [
+                  {
+                      "id":  "v2q01",
+                      "kind":  "conflict",
+                      "variants":  [
+                                       "The dashboard says nothing is due today, but the task page shows a capstone item. Reconcile those statements and give the actual capstone deadline and whether it is optional.",
+                                       "Why can Home show zero due today while To Do still lists a Capstone survey? State the date, time zone, and participation requirement.",
+                                       "Separate today\u0027s status from the future Capstone obligation shown in Blackboard, including its precise cutoff and who must complete it."
+                                   ],
+                      "expected_documents":  [
+                                                 "official-blackboard-home",
+                                                 "official-blackboard-todo"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "official-blackboard-home",
+                                                  "patterns_all":  [
+                                                                       "Today (0) Nothing Due Today",
+                                                                       "Last Updated: June 19, 2026 6:25 AM"
+                                                                   ]
+                                              },
+                                              {
+                                                  "document_id":  "official-blackboard-todo",
+                                                  "patterns_all":  [
+                                                                       "by 23:59 on Jun 23, 2026 (UTC+8)",
+                                                                       "survey is mandatory for all C11 students"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "nothing due today",
+                                                              "June 23 2026",
+                                                              "23 59 UTC 8",
+                                                              "mandatory for all C11 students"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "capstone (?:survey )?is optional",
+                                                                    "nothing (?:is|was) due (?:at any time|in the future)",
+                                                                    "June 30.*Capstone"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q02",
+                      "kind":  "unanswerable",
+                      "variants":  [
+                                       "Which classroom is assigned to every course in the released calendar?",
+                                       "Give me the room number for each course from the Blackboard Course Calendar.",
+                                       "Does the indexed calendar specify individual classroom assignments? If not, say exactly what scheduling information it does provide."
+                                   ],
+                      "expected_documents":  [
+                                                 "official-blackboard-course-calendar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "official-blackboard-course-calendar",
+                                                  "patterns_all":  [
+                                                                       "list of courses has been released",
+                                                                       "academic calendar, course offerings, modules, and class schedule"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "required_behavior":  "abstain_or_qualify",
+                                         "patterns_all":  [
+                                                              "room assignments not listed",
+                                                              "academic calendar course offerings modules class schedule"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "room\\s+[A-Z]?\\d+",
+                                                                    "all courses (?:meet|are held) in"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q03",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "What exact degree is awarded, what is its discipline code, and what academic hurdle must be passed in addition to completing the requirements?",
+                                       "Name the credential, the S-code used at graduation, and the required defense condition.",
+                                       "For graduation paperwork, identify the professional master\u0027s title, discipline identifier, and capstone requirement."
+                                   ],
+                      "expected_documents":  [
+                                                 "academic-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "academic-webinar",
+                                                  "patterns_all":  [
+                                                                       "degree conferred will be Master of Global Affairs",
+                                                                       "discipline code is S1259",
+                                                                       "pass the capstone defense"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "Master of Global Affairs",
+                                                              "S1259",
+                                                              "pass the capstone defense"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "Master of Public Policy",
+                                                                    "S12[0-48-9][0-9]"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q04",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "For an international scholar\u0027s first-module Chinese placement, how many sub-levels exist and when are the two tests administered?",
+                                       "Explain the Module 1 Chinese requirement, total placement levels, and the timing and format of both placement assessments.",
+                                       "Chinese placement logistics: mandatory for whom, nine levels or fewer, and which test arrives in July versus orientation?"
+                                   ],
+                      "expected_documents":  [
+                                                 "academic-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "academic-webinar",
+                                                  "patterns_all":  [
+                                                                       "Chinese courses are mandatory in Module 1 for all international students",
+                                                                       "altogether nine sub-levels",
+                                                                       "written test that will be sent out via email in early July",
+                                                                       "speaking and reading test",
+                                                                       "during orientation"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "mandatory in module one for international students",
+                                                              "nine sub levels",
+                                                              "written test email early July",
+                                                              "speaking and reading test during orientation"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "Chinese (?:is|courses are) optional in module one",
+                                                                    "(?:seven|eight|ten) sub-levels",
+                                                                    "speaking.*early July.*written.*orientation"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q05",
+                      "kind":  "negative_polarity",
+                      "variants":  [
+                                       "When Chase Travel first emails an itinerary, is the ticket already booked, what should I verify, and how fast must I reply?",
+                                       "Inbound flight workflow: distinguish a proposed itinerary from a booking and list the response window and checks.",
+                                       "Do I treat the reservation agent\u0027s first flight email as final? Explain the airport/timing review and deadline for feedback."
+                                   ],
+                      "expected_documents":  [
+                                                 "student-life-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "student-life-webinar",
+                                                  "patterns_all":  [
+                                                                       "flight itinerary. It\u0027s not the booking yet",
+                                                                       "Make sure that the airport\u0027s correct",
+                                                                       "get to the airport on time",
+                                                                       "within 48 hours"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "not booked yet",
+                                                              "check the airport",
+                                                              "get to the airport on time",
+                                                              "reply within 48 hours"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "first itinerary (?:is|means) (?:the )?(?:final )?booking",
+                                                                    "reply within (?:24|72) hours"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q06",
+                      "kind":  "negative_polarity",
+                      "variants":  [
+                                       "Will the program pay if I choose to arrive early, and what fare class and optional ticket costs does it cover?",
+                                       "Clarify the early-arrival funding rule, the booked cabin, and who pays for add-ons.",
+                                       "If I ignore the set arrival date, is my ticket still covered? Also state the standard ticket level and policy for extras."
+                                   ],
+                      "expected_documents":  [
+                                                 "international-logistics-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "international-logistics-webinar",
+                                                  "patterns_all":  [
+                                                                       "arriving too early",
+                                                                       "ticket will not be covered by Schwartzman scholars",
+                                                                       "basic economy level",
+                                                                       "Any additions to the ticket will be at your own expense"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "early arrival ticket not covered",
+                                                              "basic economy",
+                                                              "additions at your own expense"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "early arrival.*(?:is|will be) covered",
+                                                                    "business class",
+                                                                    "program (?:covers|pays for) (?:all )?(?:upgrades|additions|extras)"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q07",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "How do I request a loaner laptop, and which earlier message contains the setup instructions?",
+                                       "Where is the loaner-computer request submitted after activating the College platform account?",
+                                       "Trace the laptop-loan process from the IT communication to the actual request system."
+                                   ],
+                      "expected_documents":  [
+                                                 "international-logistics-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "international-logistics-webinar",
+                                                  "patterns_all":  [
+                                                                       "email that\u0027s sent by IT in March",
+                                                                       "activate your account for the college platform",
+                                                                       "request your loaner laptop in the OA system"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "IT email in March",
+                                                              "activate College platform account",
+                                                              "request in OA system"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "request (?:it|the laptop) through Blackboard",
+                                                                    "buy the loaner laptop"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q08",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "What room and bathroom arrangement does every scholar get, where can I preview it, and what entry procedure applies every time?",
+                                       "Describe the standard bedroom setup, the online tour location, and the tap-in/tap-out building rule.",
+                                       "Before packing, how can I inspect my private living setup, and what must I do whenever entering or leaving the College?"
+                                   ],
+                      "expected_documents":  [
+                                                 "student-life-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "student-life-webinar",
+                                                  "patterns_all":  [
+                                                                       "all scholars will live in a single-room private bathroom",
+                                                                       "virtual tours of your rooms on the Schwarzman College website",
+                                                                       "must tap in and out of the building every time"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "single room private bathroom",
+                                                              "virtual tour Schwarzman College website",
+                                                              "tap in and out every time"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "shared bedroom",
+                                                                    "shared bathroom",
+                                                                    "tapping (?:in|out) is optional"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q09",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "What does the graduate sports competition coordinator do, when is the first event, and what language level is needed?",
+                                       "Summarize the temporary athletics-coordinator role, September timing, and Mandarin prerequisite.",
+                                       "Could a beginner Mandarin speaker run the first Tsinghua sports competition? Give the role, timing, and stated proficiency threshold."
+                                   ],
+                      "expected_documents":  [
+                                                 "student-life-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "student-life-webinar",
+                                                  "patterns_all":  [
+                                                                       "new graduate student sports competition",
+                                                                       "by the end of September",
+                                                                       "temporary volunteer position",
+                                                                       "high intermediate or advanced Mandarin level is required"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "organize participation",
+                                                              "end of September",
+                                                              "temporary volunteer",
+                                                              "high intermediate or advanced Mandarin"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "no Mandarin (?:is )?required",
+                                                                    "beginner Mandarin is sufficient",
+                                                                    "permanent paid position"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q10",
+                      "kind":  "negative_polarity",
+                      "variants":  [
+                                       "If I create a WeChat group, am I responsible only for my own posts or for everything members post?",
+                                       "State the webinar\u0027s warning about legal responsibility for a WeChat group administrator.",
+                                       "Can an admin avoid accountability by saying another member wrote the message? Explain the indexed rule."
+                                   ],
+                      "expected_documents":  [
+                                                 "student-life-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "student-life-webinar",
+                                                  "patterns_all":  [
+                                                                       "administrator of a WeChat group",
+                                                                       "legally responsible for anything that\u0027s posted in that group",
+                                                                       "if you didn\u0027t post it"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "administrator legally responsible for anything posted",
+                                                              "even if admin did not post it"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "responsible only for (?:their|your|the admin\u0027s) own posts",
+                                                                    "not responsible for members\u0027 posts"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q11",
+                      "kind":  "negative_polarity",
+                      "variants":  [
+                                       "Which major costs and equipment does the program funding include, and can a partner live with me in the College?",
+                                       "Summarize the full-funding package and the housing restriction for partners.",
+                                       "Does fully funded include tuition, housing, travel, devices, insurance and stipend, and does that extend to partner residence?"
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "fully funded (tuition, room and board, travel, study tours, books, a Lenovo laptop and a smartphone, health insurance, and a personal stipend)",
+                                                                       "Partners may come to Beijing but may not live in the College"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "tuition room and board travel study tours books",
+                                                              "Lenovo laptop smartphone health insurance personal stipend",
+                                                              "partner may come to Beijing not live in College"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "partners? may live in the College",
+                                                                    "tuition is not covered",
+                                                                    "health insurance is not covered"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q12",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "Map the capstone from its possible formats through the early proposal, revision cycle, and final assessment.",
+                                       "What can the capstone be, who advises it, and what sequence leads to the late-spring panel?",
+                                       "Give the end-to-end capstone workflow: individual or group format, adviser, drafts and feedback, then final presentation."
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "research paper, case study, or policy analysis (individual or group) with a faculty adviser",
+                                                                       "proposal and presentation earlier in the year",
+                                                                       "drafts, reader comments, revisions",
+                                                                       "final presentation to a faculty panel in late spring"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "research paper case study or policy analysis",
+                                                              "individual or group faculty adviser",
+                                                              "proposal presentation earlier",
+                                                              "drafts reader comments revisions",
+                                                              "faculty panel late spring"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "capstone must be individual",
+                                                                    "no faculty adviser",
+                                                                    "final presentation occurs in the fall"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q13",
+                      "kind":  "negative_polarity",
+                      "variants":  [
+                                       "Is course registration first-come, and how do shopping periods, the Module 4 lock, graded-course cap, and audits work?",
+                                       "Explain the registration mechanism and the different rules for Modules 1-3 versus Module 4, including load limits.",
+                                       "Could I rush registration to win a seat and take six graded classes in a module? State the lottery, shopping, and audit rules."
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "maximum of five graded classes in any one module",
+                                                                       "audit unlimited extra classes",
+                                                                       "Registration is a lottery (not first-come)",
+                                                                       "shopping period in the first week of Modules 1–3",
+                                                                       "Module 4 is locked"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "lottery not first come",
+                                                              "shopping first week Modules 1 3",
+                                                              "Module 4 locked",
+                                                              "maximum five graded classes",
+                                                              "audit unlimited"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "registration is first[- ]come",
+                                                                    "six graded classes",
+                                                                    "Module 4 has a shopping period",
+                                                                    "audits are limited to five"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q14",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "Which news subscriptions have scholars accessed, how far ahead are team rooms booked, and when is the Academic Office closed?",
+                                       "Give the email entitlement, lead time for career/capstone rooms, and office-closure caveat.",
+                                       "For research logistics, identify the two publications, room-booking account and notice, and holiday closures."
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "free Financial Times and Wall Street Journal access",
+                                                                       "sc.tsinghua.edu.cn email",
+                                                                       "book team rooms",
+                                                                       "a working day ahead",
+                                                                       "closes for Chinese holidays and winter break"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "Financial Times and Wall Street Journal",
+                                                              "sc tsinghua email",
+                                                              "team rooms one working day ahead",
+                                                              "closed Chinese holidays and winter break"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "New York Times",
+                                                                    "book team rooms same day",
+                                                                    "Academic Office stays open during winter break"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q15",
+                      "kind":  "negative_polarity",
+                      "variants":  [
+                                       "Am I restricted to speaking only with my assigned mentor, and what should I do before approaching another mentor?",
+                                       "What is the etiquette for contacting someone in the wider mentor pool outside my match?",
+                                       "Can I directly cold-contact any program mentor without coordination? State the guide\u0027s rule."
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "not limited to your own match",
+                                                                       "wider pool of mentors",
+                                                                       "ask the staff for permission first",
+                                                                       "they coordinate these relationships"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "not limited to assigned mentor",
+                                                              "ask staff permission first",
+                                                              "staff coordinate relationships"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "contact any mentor without (?:asking|permission|coordination)",
+                                                                    "restricted only to (?:your )?assigned mentor"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q16",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "Which changes force an international student to re-register residence, and where and when is that handled?",
+                                       "List the residence re-registration triggers plus the building, desk location, and daily service hours.",
+                                       "After a night away or re-entry to China, what registration errand is required and where do I take my passport?"
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "re-register every time your situation changes",
+                                                                       "moving in, changing rooms",
+                                                                       "change/extension to your visa or residence permit",
+                                                                       "re-entering China",
+                                                                       "any night spent away from the College",
+                                                                       "passport to Zijing Building #19",
+                                                                       "open ~8:00–22:45 daily"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "moving in changing rooms visa or permit change",
+                                                              "re entering China night away",
+                                                              "passport Zijing Building 19",
+                                                              "8 00 22 45 daily"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "register only once",
+                                                                    "overnight stays do not require",
+                                                                    "Zijing Building #?1[0-8]"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q17",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "What exact account details should someone at home use to wire money to my Bank of China account?",
+                                       "List the branch SWIFT, name format, card-number length, and suggested transfer note for an inbound wire.",
+                                       "For a family transfer into my BOC account, what four pieces of information does the guide specify?"
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "BOC Beijing branch SWIFT (BKCHCNBJ110)",
+                                                                       "full name exactly as on the account",
+                                                                       "19-digit card number",
+                                                                       "living expenses"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "BKCHCNBJ110",
+                                                              "full name exactly as account",
+                                                              "19 digit card number",
+                                                              "living expenses"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "BKCHCNBJ(?!110)\\d+",
+                                                                    "(?:16|18|20)-digit card number"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q18",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "What mental-health continuity should I arrange before departure, and which College-linked support is named once in Beijing?",
+                                       "Connect the pre-arrival telehealth or medication plan with the on-the-ground support app in the guide.",
+                                       "How should I prepare ongoing mental-health care across time zones and the Firewall, and what service can I use at the College?"
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "set up telehealth that works across time zones and the Firewall, or a medication plan, before you go",
+                                                                       "MySSP / KeepMeSafe app"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "telehealth across time zones and Firewall or medication plan before",
+                                                              "MySSP KeepMeSafe app"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "wait until (?:you are|you\u0027re) in Beijing to arrange",
+                                                                    "no mental-health support"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q19",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "What are the police, ambulance, and fire numbers, and what language-access warning accompanies them?",
+                                       "Give the three Beijing emergency numbers and the practical warning about calling them.",
+                                       "If I need emergency services, which number maps to each service and why should I keep Chinese-language help ready?"
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "police 110 · ambulance 120 · fire 119",
+                                                                       "operators may not speak English",
+                                                                       "keep a Chinese speaker or your address in Chinese ready"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "police 110",
+                                                              "ambulance 120",
+                                                              "fire 119",
+                                                              "operators may not speak English",
+                                                              "Chinese speaker or address in Chinese"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "police 119",
+                                                                    "ambulance 110",
+                                                                    "fire 120",
+                                                                    "operators always speak English"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v2q20",
+                      "kind":  "unanswerable",
+                      "variants":  [
+                                       "What is the current 24-hour phone number for Beijing United Family Hospital?",
+                                       "Give me the exact up-to-date United Family emergency line from the indexed guide.",
+                                       "Does the resource print a current Beijing United Family contact number, or only tell me where to obtain it?"
+                                   ],
+                      "expected_documents":  [
+                                                 "survival-guide"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "survival-guide",
+                                                  "patterns_all":  [
+                                                                       "Beijing United Family / Oasis",
+                                                                       "both run 24-hour lines",
+                                                                       "save the current numbers from your insurance manual and the UFH mini-program"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "required_behavior":  "abstain_or_qualify",
+                                         "patterns_all":  [
+                                                              "exact current number not listed",
+                                                              "insurance manual or UFH mini program"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "(?:United Family|UFH).{0,40}\\+?86[\\s-]*10[\\s-]*\\d{4}[\\s-]*\\d{4}"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v3q21",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "How should I navigate transportation in Beijing?",
+                                       "How should I travel around Beijing day to day?",
+                                       "Give me a practical overview of the main ways to get around Beijing."
+                                   ],
+                      "expected_documents":  [
+                                                 "beijing-transportation-workshop"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "beijing-transportation-workshop",
+                                                  "patterns_all":  [
+                                                                       "four ways to get around in Beijing",
+                                                                       "first one is subway",
+                                                                       "second one is ride hailing",
+                                                                       "third one is shared bike",
+                                                                       "we also have like buses"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "subway",
+                                                              "ride hailing",
+                                                              "shared bike",
+                                                              "bus"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "the only way to get around",
+                                                                    "Beijing has no (?:buses|shared bikes|ride hailing)",
+                                                                    "only use Alipay"
+                                                                ]
+                                     }
+                  },
+                  {
+                      "id":  "v3q22",
+                      "kind":  "answerable",
+                      "variants":  [
+                                       "Which three historical attractions did the Discovering Beijing webinar highlight, and what practical planning advice did it give for each?",
+                                       "Compare the webinar\u0027s visitor advice for the Forbidden City, Temple of Heaven, and National Museum of China.",
+                                       "For the three featured Beijing history sites, summarize the recommended guide, early-morning experience, and museum reservation and time commitment."
+                                   ],
+                      "expected_documents":  [
+                                                 "discovering-beijing-webinar"
+                                             ],
+                      "evidence_groups":  [
+                                              {
+                                                  "document_id":  "discovering-beijing-webinar",
+                                                  "patterns_all":  [
+                                                                       "Forbidden City",
+                                                                       "get an English tour guide",
+                                                                       "Temple of Heaven",
+                                                                       "If you go at 6.30 a.m.",
+                                                                       "National Museum China",
+                                                                       "reserve up to seven days in advance",
+                                                                       "requires at least four hours"
+                                                                   ]
+                                              }
+                                          ],
+                      "answer_key":  {
+                                         "patterns_all":  [
+                                                              "Forbidden City English tour guide",
+                                                              "Temple of Heaven 6 30 a m",
+                                                              "National Museum reserve seven days in advance at least four hours"
+                                                          ],
+                                         "forbidden_patterns":  [
+                                                                    "Forbidden City was built in 1520",
+                                                                    "Temple of Heaven is smaller than the Forbidden City",
+                                                                    "National Museum requires no reservation"
+                                                                ]
+                                     }
+                  }
+              ]
+}

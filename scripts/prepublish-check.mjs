@@ -22,10 +22,12 @@ const checks = [
   ["node", ["scripts/retrieval-hardening-check.mjs"]],
   ["node", ["scripts/corpus-growth-check.mjs"]],
   ["node", ["scripts/semantic-selector-ceiling-v2.mjs"]],
+  ["node", ["scripts/semantic-selector-ceiling-v2.mjs", "--suite", "v3", "--repeats", "1"]],
   ["node", ["scripts/retrieval-quality-check.mjs"]],
   ["node", ["scripts/holdout-eval.mjs", "--seed", "prepublish", "--repeats", "3"]],
   ["node", ["scripts/live-holdout-eval.mjs", "--suite", "v1", "--self-test"]],
   ["node", ["scripts/live-holdout-eval.mjs", "--suite", "v2", "--self-test"]],
+  ["node", ["scripts/live-holdout-eval.mjs", "--suite", "v3", "--self-test"]],
   ["node", ["scripts/resource-pack-check.mjs"]],
   ["node", ["scripts/offline-index-integration-check.mjs"]],
   ["node", ["scripts/regression-check.mjs"]]

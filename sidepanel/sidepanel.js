@@ -6346,7 +6346,9 @@ function isDocumentWideSynthesisQuery(query, memory = [], queryPlan = null) {
     const normalized = normalizeText(value);
     return (
       /\b(?:summari[sz]e|summary|overview|recap|synopsis|entire|whole|everything|all topics?|key topics?|main topics?)\b/.test(normalized) ||
-      /\bwhat\b.{0,120}\b(?:cover|covered|discuss|discussed|address|addressed|include|included)\b/.test(normalized)
+      /\bwhat\b.{0,120}\b(?:cover|covered|discuss|discussed|address|addressed|include|included)\b/.test(normalized) ||
+      /\b(?:which|what)\s+(?:two|three|four|five|several|main|major|key)\b.{0,120}\b(?:highlight|highlighted|feature|featured|recommend|recommended)\b/.test(normalized) ||
+      /\b(?:compare|contrast)\b/.test(normalized)
     );
   });
 }
@@ -7513,6 +7515,67 @@ function semanticEvidenceSearchRoutes(query, retrievalQueries = [], queryPlan = 
   return routes;
 }
 
+function semanticDocumentWideResourceOccurrences(query, occurrences = [], queryPlan = null) {
+  if (!isDocumentWideSynthesisQuery(query, [], queryPlan)) return [];
+  const anchorOccurrence = (occurrences || []).find(({ result }) =>
+    result &&
+    Number(result.score) > 0 &&
+    result.resource_id &&
+    Number.isInteger(Number(result.search_part_index))
+  );
+  const anchor = anchorOccurrence?.result;
+  if (!anchor) return [];
+
+  const resourceParts = (cachedSearchCorpus(query).docs || [])
+    .filter((candidate) =>
+      candidate?.resource_id === anchor.resource_id &&
+      Number.isInteger(Number(candidate.search_part_index))
+    )
+    .sort((left, right) => Number(left.search_part_index) - Number(right.search_part_index));
+  if (!resourceParts.length) return [];
+
+  const maximumParts = SEMANTIC_EVIDENCE_LIMITS.maxCandidatesPerParent;
+  let sampledParts = resourceParts;
+  if (resourceParts.length > maximumParts) {
+    const chosenIndexes = new Set([Number(anchor.search_part_index), 0, resourceParts.length - 1]);
+    const interval = (resourceParts.length - 1) / Math.max(1, maximumParts - 1);
+    for (let index = 0; index < maximumParts && chosenIndexes.size < maximumParts; index += 1) {
+      chosenIndexes.add(Math.round(index * interval));
+    }
+    for (let distance = 1; chosenIndexes.size < maximumParts && distance < resourceParts.length; distance += 1) {
+      for (const candidateIndex of [Number(anchor.search_part_index) - distance, Number(anchor.search_part_index) + distance]) {
+        if (candidateIndex >= 0 && candidateIndex < resourceParts.length) chosenIndexes.add(candidateIndex);
+        if (chosenIndexes.size >= maximumParts) break;
+      }
+    }
+    sampledParts = Array.from(chosenIndexes)
+      .sort((left, right) => left - right)
+      .slice(0, maximumParts)
+      .map((index) => resourceParts[index])
+      .filter(Boolean);
+  }
+
+  sampledParts = [...sampledParts].sort((left, right) => {
+    const relevanceDifference =
+      sourceEvidenceScore(query, right, query) - sourceEvidenceScore(query, left, query);
+    if (relevanceDifference) return relevanceDifference;
+    const anchorIndex = Number(anchor.search_part_index);
+    const distanceDifference =
+      Math.abs(Number(left.search_part_index) - anchorIndex) -
+      Math.abs(Number(right.search_part_index) - anchorIndex);
+    return distanceDifference || Number(left.search_part_index) - Number(right.search_part_index);
+  });
+
+  const anchorScore = Number(anchor.score) || 1;
+  return sampledParts.map((result) => ({
+    result: {
+      ...result,
+      score: Math.max(1, anchorScore * 0.55),
+      semantic_document_wide_neighbor: true
+    },
+    routeTypes: ["document_wide"]
+  }));
+}
 function buildSemanticEvidenceCandidatePool(results, query, retrievalQueries = [], queryPlan = null) {
   const routeCatalog = semanticEvidenceRouteCatalog(query, retrievalQueries, queryPlan);
   const routes = semanticEvidenceSearchRoutes(query, retrievalQueries, queryPlan);
@@ -7548,6 +7611,8 @@ function buildSemanticEvidenceCandidatePool(results, query, retrievalQueries = [
       if (occurrence) occurrences.push(occurrence);
     }
   }
+  const documentWideOccurrences = semanticDocumentWideResourceOccurrences(query, occurrences, queryPlan);
+  occurrences.splice(Math.min(20, occurrences.length), 0, ...documentWideOccurrences);
 
   const selected = [];
   const selectedByKey = new Map();

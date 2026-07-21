@@ -17,7 +17,9 @@ const numberAfter = (name, fallback, minimum, maximum) => {
   return Math.max(minimum, Math.min(maximum, Number.isFinite(parsed) ? parsed : fallback));
 };
 
-const seedList = valueAfter("--seeds", "blind-v2-a,blind-v2-b,blind-v2-c")
+const suite = valueAfter("--suite", "v2").toLowerCase();
+if (!new Set(["v2", "v3"]).has(suite)) throw new Error("Choose --suite v2 or --suite v3.");
+const seedList = valueAfter("--seeds", `blind-${suite}-a,blind-${suite}-b,blind-${suite}-c`)
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
@@ -34,7 +36,7 @@ const MAX_PROMPT_CHARS = 105000;
 const commandArg = (value) => /^[A-Za-z0-9_./,:=\\-]+$/.test(value) ? value : JSON.stringify(value);
 const exactCommand = ["node", "scripts/semantic-selector-ceiling-v2.mjs", ...args].map(commandArg).join(" ");
 
-const fixtureUrl = new URL("./fixtures/rag-holdout-suite-v2.json", import.meta.url);
+const fixtureUrl = new URL(`./fixtures/rag-holdout-suite-${suite}.json`, import.meta.url);
 const blackboardCorpusUrl = new URL("./fixtures/rag-holdout-v2-blackboard-corpus.json", import.meta.url);
 const packRoot = new URL("../resource-packs/schwarzman-c11/", import.meta.url);
 const manifestUrl = new URL("pack.json", packRoot);
@@ -304,6 +306,7 @@ for (const seed of seedList) {
       rows.push({
         opaqueId: testCase.id,
         kind: testCase.kind,
+        variantIndex: variantIndex + 1,
         expectedParents: testCase.expected_documents.length,
         parentHits,
         evidenceGroups: testCase.evidence_groups.length,
@@ -328,9 +331,11 @@ const maximum = (selector) => Math.max(0, ...rows.map(selector));
 const logicalCases = fixture.cases.map((testCase) => {
   const caseRows = rows.filter((row) => row.opaqueId === testCase.id);
   return {
+    id: testCase.id,
     kind: testCase.kind,
     parentFailures: caseRows.filter((row) => !row.parentComplete).length,
     evidenceFailures: caseRows.filter((row) => !row.evidenceComplete).length,
+    evidenceFailureVariants: Array.from(new Set(caseRows.filter((row) => !row.evidenceComplete).map((row) => row.variantIndex))).sort(),
     jointPasses: caseRows.filter((row) => row.jointComplete).length,
     attempts: caseRows.length
   };
@@ -355,11 +360,11 @@ const runtimeEntries = [
   ["scripts/semantic-selector-ceiling-v2.mjs", fs.readFileSync(selfUrl)],
   ...productionUrls.map((url) => [url.pathname.split("/").slice(-2).join("/"), fs.readFileSync(url)]),
   ["sidepanel/sidepanel.js", fs.readFileSync(sidepanelUrl)],
-  ["scripts/fixtures/rag-holdout-suite-v2.json", fs.readFileSync(fixtureUrl)],
+  [`scripts/fixtures/rag-holdout-suite-${suite}.json`, fs.readFileSync(fixtureUrl)],
   ["scripts/fixtures/rag-holdout-v2-blackboard-corpus.json", fs.readFileSync(blackboardCorpusUrl)]
 ];
 const report = {
-  diagnostic: "v2_production_semantic_selector_pool_ceiling",
+  diagnostic: `${suite}_production_semantic_selector_pool_ceiling`,
   status: "production_pool_release_gate",
   command: exactCommand,
   suite: {
@@ -415,6 +420,10 @@ const report = {
     fully_consistent_logical_case_rate:
       logicalCases.filter((item) => item.jointPasses === item.attempts).length / Math.max(1, logicalCases.length),
     zero_pass_logical_case_count: logicalCases.filter((item) => item.jointPasses === 0).length,
+    incomplete_logical_case_ids: logicalCases.filter((item) => item.evidenceFailures > 0).map((item) => item.id),
+    incomplete_logical_cases: logicalCases
+      .filter((item) => item.evidenceFailures > 0)
+      .map((item) => ({ id: item.id, variant_indexes: item.evidenceFailureVariants })),
     failure_counts_by_logical_kind: failureCountsByKind
   },
   audit: {

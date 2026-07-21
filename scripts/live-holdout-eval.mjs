@@ -24,7 +24,7 @@ Credentials (one is required unless --self-test is used):
   --api-key VALUE         Accept a key directly (environment variables are safer)
 
 Evaluation options:
-  --suite v1|v2          Holdout/corpus suite to execute (default: v1)
+  --suite v1|v2|v3       Holdout/corpus suite to execute (default: v1)
   --seed VALUE            Seed for case order and variant selection (default: live-release)
   --repeats N             Seeded variant rotations, 1-6 (default: 1)
   --case IDS              Comma-separated opaque holdout IDs
@@ -51,7 +51,7 @@ const showDetails = hasFlag("--details");
 const noGate = hasFlag("--no-gate");
 const useJudge = hasFlag("--judge") && !selfTest;
 const suite = valueAfter("--suite", "v1").toLowerCase();
-if (!new Set(["v1", "v2"]).has(suite)) throw new Error("Choose --suite v1 or --suite v2.");
+if (!new Set(["v1", "v2", "v3"]).has(suite)) throw new Error("Choose --suite v1, --suite v2, or --suite v3.");
 const seed = valueAfter("--seed", selfTest ? "mock-self-test" : "live-release");
 const repeats = selfTest ? 1 : numberAfter("--repeats", 1, 1, 6);
 const delayMs = selfTest ? 0 : numberAfter("--delay-ms", 0, 0, 60000);
@@ -124,6 +124,10 @@ const suiteFiles = {
   v2: {
     fixture: "./fixtures/rag-holdout-suite-v2.json",
     blackboard: "./fixtures/rag-holdout-v2-blackboard-corpus.json"
+  },
+  v3: {
+    fixture: "./fixtures/rag-holdout-suite-v3.json",
+    blackboard: "./fixtures/rag-holdout-v2-blackboard-corpus.json"
   }
 };
 const fixtureUrl = new URL(suiteFiles[suite].fixture, import.meta.url);
@@ -179,6 +183,14 @@ if (
     `${fixture.blackboard_corpus_digest}, received ${blackboardCorpus.corpus_id}@${blackboardCorpus.corpus_version} ` +
     `${actualBlackboardDigest}`
   );
+}
+
+if (suite === "v3") {
+  const answerableCount = fixture.cases.filter((testCase) => testCase.kind !== "unanswerable").length;
+  const unanswerableCount = fixture.cases.filter((testCase) => testCase.kind === "unanswerable").length;
+  if (fixture.cases.length !== 22 || answerableCount !== 20 || unanswerableCount !== 2) {
+    throw new Error("V3 must remain frozen at 20 answerable cases plus two unanswerable controls.");
+  }
 }
 
 const allCaseIds = new Set(fixture.cases.map((testCase) => testCase.id));
@@ -1021,7 +1033,11 @@ const caseSummaries = eligibleCases.map((testCase) => {
     passes: caseRows.filter((row) => row.passed).length
   };
 }).filter((item) => item.attempts > 0);
-const rate = (predicate) => rows.filter(predicate).length / Math.max(1, rows.length);
+const answerableRows = rows.filter((row) => row.kind !== "unanswerable");
+const unanswerableRows = rows.filter((row) => row.kind === "unanswerable");
+const rateFor = (selectedRows, predicate) =>
+  selectedRows.length ? selectedRows.filter(predicate).length / selectedRows.length : null;
+const rate = (predicate) => rateFor(rows, predicate);
 const percentile = (values, fraction) => {
   const ordered = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!ordered.length) return null;
@@ -1075,6 +1091,21 @@ const report = {
     contradiction_rate: rate((row) => (row.score?.contradictions || []).length > 0),
     citation_pass_rate: rate((row) => row.score?.citationsPassed),
     judge_accuracy: useJudge ? rate((row) => row.judge?.correct) : null,
+    answerable_cases: {
+      executions: answerableRows.length,
+      production_validation_rate: rateFor(answerableRows, (row) => row.score?.productionValidationPassed),
+      generated_answer_accuracy: rateFor(answerableRows, (row) => row.answerPassed),
+      grounding_pass_rate: rateFor(answerableRows, (row) => row.score?.groundingPassed),
+      end_to_end_accuracy: rateFor(answerableRows, (row) => row.passed),
+      judge_accuracy: useJudge ? rateFor(answerableRows, (row) => row.judge?.correct) : null
+    },
+    unanswerable_controls: {
+      executions: unanswerableRows.length,
+      correct_abstention_rate: rateFor(unanswerableRows, (row) => row.passed),
+      behavior_pass_rate: rateFor(unanswerableRows, (row) => row.score?.behaviorPassed),
+      grounding_pass_rate: rateFor(unanswerableRows, (row) => row.score?.groundingPassed),
+      judge_accuracy: useJudge ? rateFor(unanswerableRows, (row) => row.judge?.correct) : null
+    },
     consistent_case_rate: repeats > 1
       ? caseSummaries.filter((item) => item.passes === item.attempts).length / Math.max(1, caseSummaries.length)
       : null,
@@ -1139,12 +1170,17 @@ const report = {
 const gateFailures = [];
 const minimumAccuracy = 0.95;
 if (report.metrics.pipeline_completion_rate < 0.98) gateFailures.push("pipeline completion below 98%");
-if (report.metrics.production_validation_rate < minimumAccuracy) gateFailures.push("production validation below 95%");
-if (report.metrics.generated_answer_accuracy < minimumAccuracy) gateFailures.push("generated-answer accuracy below 95%");
-if (report.metrics.grounding_pass_rate < minimumAccuracy) gateFailures.push("grounding pass rate below 95%");
-if (report.metrics.end_to_end_accuracy < minimumAccuracy) gateFailures.push("end-to-end accuracy below 95%");
+if (answerableRows.length) {
+  if (report.metrics.answerable_cases.production_validation_rate < minimumAccuracy) gateFailures.push("answerable production validation below 95%");
+  if (report.metrics.answerable_cases.generated_answer_accuracy < minimumAccuracy) gateFailures.push("answerable generated-answer accuracy below 95%");
+  if (report.metrics.answerable_cases.grounding_pass_rate < minimumAccuracy) gateFailures.push("answerable grounding pass rate below 95%");
+  if (report.metrics.answerable_cases.end_to_end_accuracy < minimumAccuracy) gateFailures.push("answerable end-to-end accuracy below 95%");
+  if (useJudge && report.metrics.answerable_cases.judge_accuracy < minimumAccuracy) gateFailures.push("answerable judge accuracy below 95%");
+}
 if (report.metrics.contradiction_rate > 0) gateFailures.push("at least one forbidden contradiction was generated");
-if (useJudge && report.metrics.judge_accuracy < minimumAccuracy) gateFailures.push("judge accuracy below 95%");
+if (unanswerableRows.length && report.metrics.unanswerable_controls.correct_abstention_rate < 1) {
+  gateFailures.push("unanswerable-control abstention below 100%");
+}
 const minimumConsistency = 0.95;
 if (repeats >= 3 && report.metrics.consistent_case_rate < minimumConsistency) {
   gateFailures.push(`consistent-case rate below ${Math.round(minimumConsistency * 100)}%`);
@@ -1165,8 +1201,9 @@ if (jsonOnly) {
   const percent = (value) => value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
   console.log(
     `live-holdout-eval ${report.gate.passed ? "passed" : "failed"}: ` +
-    `answer ${percent(report.metrics.generated_answer_accuracy)}, grounding ${percent(report.metrics.grounding_pass_rate)}, ` +
-    `end-to-end ${percent(report.metrics.end_to_end_accuracy)}, contradictions ${percent(report.metrics.contradiction_rate)}, ` +
+    `answerable ${percent(report.metrics.answerable_cases.generated_answer_accuracy)}, grounding ${percent(report.metrics.answerable_cases.grounding_pass_rate)}, ` +
+    `end-to-end ${percent(report.metrics.answerable_cases.end_to_end_accuracy)}, abstention controls ${percent(report.metrics.unanswerable_controls.correct_abstention_rate)}, ` +
+    `contradictions ${percent(report.metrics.contradiction_rate)}, ` +
     `consistent ${percent(report.metrics.consistent_case_rate)}, ` +
     `pipeline p50/p95 ${Math.round(report.metrics.production_pipeline_latency_p50_ms || 0)}/${Math.round(report.metrics.production_pipeline_latency_p95_ms || 0)} ms, ` +
     `provider calls avg/p95 ${(report.metrics.production_provider_calls_average || 0).toFixed(1)}/${report.metrics.production_provider_calls_p95 || 0}`
