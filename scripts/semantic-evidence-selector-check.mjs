@@ -2094,7 +2094,7 @@ vm.runInContext(
 await context.__handlePromise;
 const handleFinalMessage = context.__handleMessages.filter((message) => message.role === "assistant").at(-1);
 if (
-  context.__handleProviderStages.join(",") !== "planner,selector,answer,verifier" ||
+  context.__handleProviderStages.join(",") !== "selector,answer,verifier" ||
   context.__handleDirectCalls !== 0 ||
   !/Proposal for Funding Form/.test(handleFinalMessage?.text || "") ||
   !/\[1\]/.test(handleFinalMessage?.text || "") ||
@@ -2122,7 +2122,7 @@ const apiExactFinal = context.__handleMessages.filter((message) => message.role 
 if (
   context.__earlyExactCalls !== 0 ||
   context.__earlyReadinessCalls !== 0 ||
-  context.__handleProviderStages.join(",") !== "planner,selector,deep,answer,verifier" ||
+  context.__handleProviderStages.join(",") !== "selector,deep,answer,verifier" ||
   !/Proposal for Funding Form/.test(apiExactFinal?.text || "")
 ) {
   throw new Error("API exact-quote question was preempted before selector -> answer -> verifier: " + JSON.stringify({ exact: context.__earlyExactCalls, readiness: context.__earlyReadinessCalls, stages: context.__handleProviderStages, final: apiExactFinal, warnings: warnings.slice(-5) }));
@@ -2142,7 +2142,7 @@ const apiDocumentFinal = context.__handleMessages.filter((message) => message.ro
 if (
   context.__earlyExactCalls !== 0 ||
   context.__earlyReadinessCalls !== 0 ||
-  context.__handleProviderStages.join(",") !== "planner,selector,answer,verifier" ||
+  context.__handleProviderStages.join(",") !== "selector,answer,verifier" ||
   !/Proposal for Funding Form/.test(apiDocumentFinal?.text || "")
 ) {
   throw new Error("API document-body question was preempted before selector -> answer -> verifier: " + JSON.stringify({ exact: context.__earlyExactCalls, readiness: context.__earlyReadinessCalls, stages: context.__handleProviderStages, final: apiDocumentFinal, warnings: warnings.slice(-5), candidates: (context.__lastHandleSelectorPayload?.candidates || []).map((candidate) => candidate.candidate_id), facets: context.__lastHandleSelectorPayload?.facets, response: context.__lastHandleSelectorResponse }));
@@ -2189,7 +2189,7 @@ vm.runInContext(
 await context.__handleEmptyPromise;
 const emptyEvidenceFinal = context.__handleMessages.filter((message) => message.role === "assistant").at(-1);
 if (
-  context.__handleProviderStages.join(",") !== "planner" ||
+  context.__handleProviderStages.length !== 0 ||
   context.__handleDirectCalls !== 0 ||
   emptyEvidenceFinal?.text !== "I could not find that in the indexed resources." ||
   (emptyEvidenceFinal?.sources || []).length !== 0
@@ -2198,6 +2198,6 @@ if (
 }
 console.log(
   "semantic-evidence-selector-check passed " +
-  "(API-only; raw/facet/planner pool; per-facet JSON validation; parent grouping; deterministic failure fallback; " +
+  "(API-only; standalone planner bypass with follow-up gating; raw/facet/planner-capable pool; per-facet JSON validation; parent grouping; deterministic failure fallback; " +
   "prompt-injection/key-leak guards; bounded targeted parent deep-read; final cited synthesis handoff)"
 );

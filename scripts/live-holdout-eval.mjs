@@ -510,15 +510,17 @@ vm.runInContext(`
     return await __liveRealCallChatCompletion(request);
   };
 
-  globalThis.__runLiveProductionPipeline = async (query) => {
+  globalThis.__runLiveProductionPipeline = async (query, memory = []) => {
     globalThis.__livePhase = "production";
     const traceStart = globalThis.__liveProviderTrace.length;
     try {
-      const baseRetrievalQuery = buildRetrievalQuery(query, []);
-      const plan = await buildQueryPlan(query, [], baseRetrievalQuery);
+      const baseRetrievalQuery = buildRetrievalQuery(query, memory);
+      const plan = shouldUseLlmQueryPlanner(query, memory)
+        ? await buildQueryPlan(query, memory, baseRetrievalQuery)
+        : defaultRagPlan(query, baseRetrievalQuery);
       const retrievalQuery = enhanceRetrievalQueryForIntent(
         query,
-        plannedRetrievalQuery(plan, query, baseRetrievalQuery),
+        plannedRetrievalQuery(plan, query, baseRetrievalQuery, hasConversationHistory(memory)),
         plan
       );
       const retrievalQueries = retrievalQueriesForPlan(query, baseRetrievalQuery, retrievalQuery, plan);
@@ -530,12 +532,13 @@ vm.runInContext(`
         deterministicSources,
         retrievalQueries,
         retrievalQuery,
-        plan
+        plan,
+        memory
       );
       const sources = evidenceSelection.sources.slice(0, 8);
-      const synthesisSources = expandAnswerSourcesForSynthesis(query, sources, [], plan);
+      const synthesisSources = expandAnswerSourcesForSynthesis(query, sources, memory, plan);
       const promptSources = answerPromptSources(synthesisSources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
-      const answer = await generateVerifiedApiAnswer(query, synthesisSources, [], retrievalQuery, plan);
+      const answer = await generateVerifiedApiAnswer(query, synthesisSources, memory, retrievalQuery, plan);
       const cleanNotFound = isCleanNotFoundAnswer(answer?.text || "");
       const validation = cleanNotFound
         ? { ok: true, reasons: [], cleanNotFound: true }
@@ -776,9 +779,10 @@ function parseJsonObject(text) {
   }
 }
 
-async function runProductionPipeline(query) {
+async function runProductionPipeline(query, memory = []) {
   context.__liveQuery = query;
-  vm.runInContext("globalThis.__livePipelinePromise = __runLiveProductionPipeline(globalThis.__liveQuery);", context);
+  context.__liveMemory = structuredClone(memory);
+  vm.runInContext("globalThis.__livePipelinePromise = __runLiveProductionPipeline(globalThis.__liveQuery, globalThis.__liveMemory);", context);
   return await context.__livePipelinePromise;
 }
 async function runJudge(question, answer, answerKey) {
@@ -808,6 +812,16 @@ async function runSelfTest() {
       required_behavior: "answer"
     }
   };
+  const plannerGate = vm.runInContext(`({
+    standalone: shouldUseLlmQueryPlanner("Which local map app is recommended in China?", []),
+    localPronoun: shouldUseLlmQueryPlanner("Can students bring guests, and what must they do?", [{ user: "Earlier topic", assistant: "Earlier answer" }]),
+    independentTurn: shouldUseLlmQueryPlanner("What is the X1 residence-permit deadline?", [{ user: "Tell me about dining", assistant: "Dining summary" }]),
+    ellipticalFollowUp: shouldUseLlmQueryPlanner("What visa support did it cover?", [{ user: "What did the webinar cover?", assistant: "It covered travel and visa support." }])
+  })`, context);
+  if (plannerGate.standalone || plannerGate.localPronoun || plannerGate.independentTurn || !plannerGate.ellipticalFollowUp) {
+    throw new Error("The planner gate did not isolate genuine conversation-dependent follow-ups: " + JSON.stringify(plannerGate));
+  }
+
   const pipelineResult = await runProductionPipeline(testCase.variants[0]);
   const score = scoreAnswer(testCase, pipelineResult);
   if (!score.passed) {
@@ -822,19 +836,19 @@ async function runSelfTest() {
   }
   const normalStages = pipelineResult.providerTrace.map((entry) => entry.stage);
   const normalDeepStageCount = normalStages.filter((stage) => stage === "deep_selector").length;
-  const normalMiddleStages = normalStages.slice(2, -2);
+  const normalMiddleStages = normalStages.slice(1, -2);
   if (
     !new Set(["semantic", "semantic_deep_read"]).has(pipelineResult.evidenceSelection?.mode) ||
     pipelineResult.evidenceSelection?.deepReadCalls < 0 ||
     pipelineResult.evidenceSelection?.deepReadCalls > 1 ||
     normalDeepStageCount !== pipelineResult.evidenceSelection?.deepReadCalls ||
-    normalStages[0] !== "planner" ||
-    normalStages[1] !== "selector" ||
+    normalStages.includes("planner") ||
+    normalStages[0] !== "selector" ||
     normalStages.at(-2) !== "answer" ||
     normalStages.at(-1) !== "verifier" ||
     normalMiddleStages.some((stage) => stage !== "deep_selector")
   ) {
-    throw new Error("Self-test did not exercise bounded planner -> semantic selector/deep-read -> draft synthesis -> grounding verifier: " + JSON.stringify(pipelineResult.providerTrace));
+    throw new Error("Self-test did not exercise the standalone fast path: semantic selector/deep-read -> draft synthesis -> grounding verifier: " + JSON.stringify(pipelineResult.providerTrace));
   }
   const finalPromptStages = new Set(["answer", "verifier", "reviewer", "recovery"]);
   if (pipelineResult.providerTrace.some((entry) => finalPromptStages.has(entry.stage) && entry.opaqueCandidateIdPresent)) {
@@ -846,12 +860,13 @@ async function runSelfTest() {
   const policyPipelineResult = await runProductionPipeline("Are visiting students allowed to audit a restricted seminar?");
   context.__liveMockAnswer = normalMockAnswer;
   const policyStages = policyPipelineResult.providerTrace.map((entry) => entry.stage);
-  for (const requiredStage of ["planner", "selector", "deep_selector", "answer", "reviewer", "recovery"]) {
+  for (const requiredStage of ["selector", "deep_selector", "answer", "reviewer", "recovery"]) {
     if (!policyStages.includes(requiredStage)) {
       throw new Error(`Policy self-test omitted ${requiredStage}: ${policyStages.join(",")}`);
     }
   }
   if (
+    policyStages.includes("planner") ||
     policyPipelineResult.evidenceSelection?.deepReadCalls < 1 ||
     policyPipelineResult.evidenceSelection?.deepReadCalls > 1 ||
     policyPipelineResult.sources.some((source) => source.text.length > 24000) ||
@@ -938,17 +953,17 @@ async function runSelfTest() {
     throw new Error("Self-test did not keep answer-key content inside the post-production judge phase.");
   }
   if (
-    !productionTrace.some((entry) => entry.stage === "planner") ||
+    productionTrace.some((entry) => entry.stage === "planner") ||
     !productionTrace.some((entry) => entry.stage === "selector") ||
     !productionTrace.some((entry) => entry.stage === "answer") ||
     !productionTrace.some((entry) => entry.stage === "verifier")
   ) {
-    throw new Error("Self-test did not exercise planner, semantic selector, answer generation, and grounding verification.");
+    throw new Error("Self-test did not exercise standalone planner bypass, semantic selection, answer generation, and grounding verification.");
   }
   if (productionTrace.some((entry) => entry.credentialMarkerPresent)) {
     throw new Error("Provider credentials leaked into a production prompt.");
   }
-  console.log(`live-holdout-eval ${suite} self-test passed (no network; planner -> semantic selector/deep-read -> adaptive full-document synthesis -> grounding verifier with bounded fresh repair/recovery; high context safety ceilings; answer-key/judge separation)`);
+  console.log(`live-holdout-eval ${suite} self-test passed (no network; standalone planner bypass -> semantic selector/deep-read -> adaptive full-document synthesis -> grounding verifier with bounded fresh repair/recovery; follow-up planner gate; high context safety ceilings; answer-key/judge separation)`);
 }
 
 if (selfTest) {

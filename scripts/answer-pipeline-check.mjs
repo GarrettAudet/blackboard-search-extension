@@ -622,7 +622,8 @@ async function runProductionApiRoute(testCase) {
   context.__productionRouteCase = {
     query: testCase.query,
     planner: plannerResponseFor(testCase),
-    draft: testCase.draft || "I could not find that in the indexed resources."
+    draft: testCase.draft || "I could not find that in the indexed resources.",
+    memory: testCase.memory || []
   };
   vm.runInContext(`
     (() => {
@@ -661,7 +662,7 @@ async function runProductionApiRoute(testCase) {
         apiKey: "route-test-key",
         hasApiKey: true
       };
-      state.conversation = [];
+      state.conversation = globalThis.__productionRouteCase.memory;
       els.queryInput.value = globalThis.__productionRouteCase.query;
       globalThis.__productionPreparedMatch = isPreparedDirectAnswerQuery(globalThis.__productionRouteCase.query);
       globalThis.__productionCapabilityMatch = isCapabilityQuestion(globalThis.__productionRouteCase.query);
@@ -686,7 +687,7 @@ for (const testCase of preparedFailureDomainCases) {
   if (
     !productionRoute.preparedMatch ||
     productionRoute.directCalls !== 0 ||
-    productionRoute.stages.join(",") !== "planner,selector,synthesis,semantic-verifier"
+    productionRoute.stages.join(",") !== "selector,synthesis,semantic-verifier"
   ) {
     throw new Error(
       "A prepared failure-domain question bypassed the production LLM route: " +
@@ -705,7 +706,7 @@ if (
   !mixedCapabilityRoute.preparedMatch ||
   mixedCapabilityRoute.capabilityMatch ||
   mixedCapabilityRoute.directCalls !== 0 ||
-  mixedCapabilityRoute.stages.join(",") !== "planner,selector,synthesis,semantic-verifier"
+  mixedCapabilityRoute.stages.join(",") !== "selector,synthesis,semantic-verifier"
 ) {
   throw new Error(
     "An API-configured mixed capability/content question bypassed the production LLM route: " +
@@ -713,6 +714,22 @@ if (
   );
 }
 
+const followUpRoute = await runProductionApiRoute({
+  ...answerCases[0],
+  name: "conversation-dependent follow-up route",
+  query: "What happens after that?",
+  memory: [{
+    user: "What is the capstone submission deadline?",
+    assistant: "The indexed task page provides the capstone deadline."
+  }]
+});
+if (followUpRoute.stages.join(",") !== "planner,selector,synthesis,semantic-verifier") {
+  throw new Error(
+    "A conversation-dependent follow-up bypassed the semantic planner: " +
+    JSON.stringify(followUpRoute, null, 2)
+  );
+}
+
 console.log(
-  "answer-pipeline-check passed (10 answer-keyed content cases use planner -> fused retrieval -> LLM synthesis -> strict semantic verification; independently verified reviewer/recovery; no extractive answer fallback)"
+  "answer-pipeline-check passed (10 answer-keyed content cases cover planning/synthesis/verification; standalone production questions bypass the planner while conversation-dependent follow-ups retain it; independently verified reviewer/recovery; no extractive answer fallback)"
 );

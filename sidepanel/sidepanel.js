@@ -4657,8 +4657,8 @@ async function handleAsk(event) {
   let retrievalQuery = baseRetrievalQuery;
   let queryPlan = defaultRagPlan(query, baseRetrievalQuery);
 
-  if (canUseApiPipeline) {
-    setStatus("Generating answer: planning the search...");
+  if (canUseApiPipeline && shouldUseLlmQueryPlanner(query, contextMemory)) {
+    setStatus("Generating answer: resolving the follow-up...");
     try {
       queryPlan = await buildQueryPlan(query, contextMemory, baseRetrievalQuery);
       retrievalQuery = plannedRetrievalQuery(queryPlan, query, baseRetrievalQuery, hasConversationMemory);
@@ -4666,6 +4666,8 @@ async function handleAsk(event) {
       console.warn("RAG query planning failed", error);
       setStatus(`Planner skipped: ${readableErrorMessage(error)}. Using local retrieval.`);
     }
+  } else if (canUseApiPipeline) {
+    setStatus("Generating answer: searching the local index...");
   }
 
   retrievalQuery = enhanceRetrievalQueryForIntent(query, retrievalQuery, queryPlan);
@@ -9061,6 +9063,10 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
   if (!answer) console.warn("Answer generator returned invalid structured output.");
   return answer;
 }
+function shouldUseLlmQueryPlanner(query, memory = []) {
+  return hasConversationHistory(memory) && requiresConversationResolution(query);
+}
+
 async function buildQueryPlan(query, memory = [], fallbackRetrievalQuery = query) {
   const promptQuery = clampText(query, MAX_QUERY_CHARS);
   const promptFallbackRetrievalQuery = clampText(fallbackRetrievalQuery, MAX_QUERY_CHARS);
@@ -9624,6 +9630,9 @@ function isEllipticalFollowUpQuestion(query) {
     const hasLocalGeneralAntecedent = /\b(?:students?|visitors?|guests?|documents?|records?|forms?|courses?|classes?|resources?|requirements?|deadlines?|options?|services?|trains?|buses?|claims?|applications?)\b/.test(prefix);
     const hasLocalPersonAntecedent = /\b(?:student|visitor|guest|applicant|traveler|person|member)\b/.test(prefix);
     const hasLocalSingularThingAntecedent = /\b(?:document|record|form|course|class|resource|requirement|deadline|option|service|train|bus|claim|application|visa|passport|permit|bag|carry on|dining hall)\b/.test(prefix);
+    const invertedItSubject = /^(?:it|its)$/.test(pronoun) &&
+      /\b(?:what|which|where|when|how|why)\b.{0,120}\b(?:did|does|do|can|could|will|would|should|must|is|was|has|had)\s*$/.test(prefix);
+    if (invertedItSubject) return true;
     // A pronoun whose antecedent is stated in the same question is not a
     // conversation follow-up (for example, "Can students ... and what must
     // they retain?"). Keep the whole standalone question intact.
