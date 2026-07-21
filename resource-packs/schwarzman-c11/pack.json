@@ -1,7 +1,7 @@
 {
   "id": "schwarzman-c11",
   "title": "Schwarzman C11 Optional Resources",
-  "version": "2026.07.7",
+  "version": "2026.07.8",
   "description": "Optional resources for Schwarzman C11 students.",
   "resources": [
     {
@@ -197,7 +197,7 @@
       "page_title": "C11 Student Life Webinar transcript",
       "document_id": "student-life-webinar",
       "document_title": "C11 Student Life Webinar transcript",
-      "page_range": "00:00-15:12",
+      "page_range": "00:00-16:15",
       "provenance": "program webinar transcript"
     },
     {
@@ -211,7 +211,21 @@
       "page_title": "C11 Student Life Webinar transcript",
       "document_id": "student-life-webinar",
       "document_title": "C11 Student Life Webinar transcript",
-      "page_range": "17:42-29:35",
+      "page_range": "16:15-33:21",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "student-life-webinar-003",
+      "title": "C11 Student Life Webinar transcript",
+      "type": "document",
+      "url": "texts/student-life-webinar-003.txt",
+      "text_url": "texts/student-life-webinar-003.txt",
+      "description": "Sanitized searchable transcript from the C11 Student Life webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "C11 Student Life Webinar transcript",
+      "document_id": "student-life-webinar",
+      "document_title": "C11 Student Life Webinar transcript",
+      "page_range": "33:22-49:03",
       "provenance": "program webinar transcript"
     },
     {
@@ -225,7 +239,7 @@
       "page_title": "C11 International Scholars Logistics Webinar transcript",
       "document_id": "international-logistics-webinar",
       "document_title": "C11 International Scholars Logistics Webinar transcript",
-      "page_range": "chunk 1",
+      "page_range": "00:00-16:16",
       "provenance": "program webinar transcript"
     },
     {
@@ -239,7 +253,21 @@
       "page_title": "C11 International Scholars Logistics Webinar transcript",
       "document_id": "international-logistics-webinar",
       "document_title": "C11 International Scholars Logistics Webinar transcript",
-      "page_range": "chunk 2",
+      "page_range": "16:16-35:21",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "international-logistics-webinar-003",
+      "title": "C11 International Scholars Logistics Webinar transcript",
+      "type": "document",
+      "url": "texts/international-logistics-webinar-003.txt",
+      "text_url": "texts/international-logistics-webinar-003.txt",
+      "description": "Sanitized searchable transcript from the C11 international scholars logistics webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "C11 International Scholars Logistics Webinar transcript",
+      "document_id": "international-logistics-webinar",
+      "document_title": "C11 International Scholars Logistics Webinar transcript",
+      "page_range": "35:22-49:33",
       "provenance": "program webinar transcript"
     },
     {
@@ -253,7 +281,7 @@
       "page_title": "C11 Academic Webinar transcript",
       "document_id": "academic-webinar",
       "document_title": "C11 Academic Webinar transcript",
-      "page_range": "chunk 1",
+      "page_range": "00:00-12:35",
       "provenance": "program webinar transcript"
     },
     {
@@ -267,7 +295,63 @@
       "page_title": "C11 Academic Webinar transcript",
       "document_id": "academic-webinar",
       "document_title": "C11 Academic Webinar transcript",
-      "page_range": "chunk 2",
+      "page_range": "12:35-32:59",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "academic-webinar-003",
+      "title": "C11 Academic Webinar transcript",
+      "type": "document",
+      "url": "texts/academic-webinar-003.txt",
+      "text_url": "texts/academic-webinar-003.txt",
+      "description": "Sanitized searchable transcript from the C11 academic webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "C11 Academic Webinar transcript",
+      "document_id": "academic-webinar",
+      "document_title": "C11 Academic Webinar transcript",
+      "page_range": "32:59-51:50",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "academic-webinar-004",
+      "title": "C11 Academic Webinar transcript",
+      "type": "document",
+      "url": "texts/academic-webinar-004.txt",
+      "text_url": "texts/academic-webinar-004.txt",
+      "description": "Sanitized searchable transcript from the C11 academic webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "C11 Academic Webinar transcript",
+      "document_id": "academic-webinar",
+      "document_title": "C11 Academic Webinar transcript",
+      "page_range": "51:51-1:07:58",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "academic-webinar-005",
+      "title": "C11 Academic Webinar transcript",
+      "type": "document",
+      "url": "texts/academic-webinar-005.txt",
+      "text_url": "texts/academic-webinar-005.txt",
+      "description": "Sanitized searchable transcript from the C11 academic webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "C11 Academic Webinar transcript",
+      "document_id": "academic-webinar",
+      "document_title": "C11 Academic Webinar transcript",
+      "page_range": "1:07:58-1:24:07",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "academic-webinar-006",
+      "title": "C11 Academic Webinar transcript",
+      "type": "document",
+      "url": "texts/academic-webinar-006.txt",
+      "text_url": "texts/academic-webinar-006.txt",
+      "description": "Sanitized searchable transcript from the C11 academic webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "C11 Academic Webinar transcript",
+      "document_id": "academic-webinar",
+      "document_title": "C11 Academic Webinar transcript",
+      "page_range": "1:24:07-1:27:15",
       "provenance": "program webinar transcript"
     },
     {
@@ -281,7 +365,7 @@
       "page_title": "Schwarzman Life in China Webinar transcript",
       "document_id": "life-in-china-webinar",
       "document_title": "Schwarzman Life in China Webinar transcript",
-      "page_range": "chunk 1",
+      "page_range": "00:00-20:52",
       "provenance": "program webinar transcript"
     },
     {
@@ -295,7 +379,7 @@
       "page_title": "Schwarzman Life in China Webinar transcript",
       "document_id": "life-in-china-webinar",
       "document_title": "Schwarzman Life in China Webinar transcript",
-      "page_range": "chunk 2",
+      "page_range": "21:00-39:15",
       "provenance": "program webinar transcript"
     },
     {
@@ -309,35 +393,119 @@
       "page_title": "Schwarzman Life in China Webinar transcript",
       "document_id": "life-in-china-webinar",
       "document_title": "Schwarzman Life in China Webinar transcript",
-      "page_range": "chunk 3",
+      "page_range": "39:15-54:48",
       "provenance": "program webinar transcript"
     },
     {
       "id": "beijing-transportation-workshop-001",
-      "title": "Beijing Transportation Workshop transcript",
+      "title": "Beijing Public Transportation Webinar transcript",
       "type": "document",
       "url": "texts/beijing-transportation-workshop-001.txt",
       "text_url": "texts/beijing-transportation-workshop-001.txt",
-      "description": "Sanitized searchable transcript from the Beijing transportation workshop. Speaker names were removed before packaging.",
+      "description": "Sanitized searchable transcript from the Beijing public transportation webinar. Speaker names were removed before packaging.",
       "section": "Optional webinar transcripts - Schwarzman C11",
-      "page_title": "Beijing Transportation Workshop transcript",
+      "page_title": "Beijing Public Transportation Webinar transcript",
       "document_id": "beijing-transportation-workshop",
-      "document_title": "Beijing Transportation Workshop transcript",
-      "page_range": "chunk 1",
+      "document_title": "Beijing Public Transportation Webinar transcript",
+      "page_range": "00:00-23:04",
       "provenance": "program webinar transcript"
     },
     {
       "id": "beijing-transportation-workshop-002",
-      "title": "Beijing Transportation Workshop transcript",
+      "title": "Beijing Public Transportation Webinar transcript",
       "type": "document",
       "url": "texts/beijing-transportation-workshop-002.txt",
       "text_url": "texts/beijing-transportation-workshop-002.txt",
-      "description": "Sanitized searchable transcript from the Beijing transportation workshop. Speaker names were removed before packaging.",
+      "description": "Sanitized searchable transcript from the Beijing public transportation webinar. Speaker names were removed before packaging.",
       "section": "Optional webinar transcripts - Schwarzman C11",
-      "page_title": "Beijing Transportation Workshop transcript",
+      "page_title": "Beijing Public Transportation Webinar transcript",
       "document_id": "beijing-transportation-workshop",
-      "document_title": "Beijing Transportation Workshop transcript",
-      "page_range": "chunk 2",
+      "document_title": "Beijing Public Transportation Webinar transcript",
+      "page_range": "23:04-39:34",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "beijing-transportation-workshop-003",
+      "title": "Beijing Public Transportation Webinar transcript",
+      "type": "document",
+      "url": "texts/beijing-transportation-workshop-003.txt",
+      "text_url": "texts/beijing-transportation-workshop-003.txt",
+      "description": "Sanitized searchable transcript from the Beijing public transportation webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "Beijing Public Transportation Webinar transcript",
+      "document_id": "beijing-transportation-workshop",
+      "document_title": "Beijing Public Transportation Webinar transcript",
+      "page_range": "39:34-53:20",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "discovering-beijing-webinar-001",
+      "title": "Discovering Beijing Webinar transcript",
+      "type": "document",
+      "url": "texts/discovering-beijing-webinar-001.txt",
+      "text_url": "texts/discovering-beijing-webinar-001.txt",
+      "description": "Sanitized searchable transcript from the Discovering Beijing student webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "Discovering Beijing Webinar transcript",
+      "document_id": "discovering-beijing-webinar",
+      "document_title": "Discovering Beijing Webinar transcript",
+      "page_range": "00:00-19:30",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "discovering-beijing-webinar-002",
+      "title": "Discovering Beijing Webinar transcript",
+      "type": "document",
+      "url": "texts/discovering-beijing-webinar-002.txt",
+      "text_url": "texts/discovering-beijing-webinar-002.txt",
+      "description": "Sanitized searchable transcript from the Discovering Beijing student webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "Discovering Beijing Webinar transcript",
+      "document_id": "discovering-beijing-webinar",
+      "document_title": "Discovering Beijing Webinar transcript",
+      "page_range": "19:30-34:54",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "discovering-beijing-webinar-003",
+      "title": "Discovering Beijing Webinar transcript",
+      "type": "document",
+      "url": "texts/discovering-beijing-webinar-003.txt",
+      "text_url": "texts/discovering-beijing-webinar-003.txt",
+      "description": "Sanitized searchable transcript from the Discovering Beijing student webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "Discovering Beijing Webinar transcript",
+      "document_id": "discovering-beijing-webinar",
+      "document_title": "Discovering Beijing Webinar transcript",
+      "page_range": "34:54-48:44",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "discovering-beijing-webinar-004",
+      "title": "Discovering Beijing Webinar transcript",
+      "type": "document",
+      "url": "texts/discovering-beijing-webinar-004.txt",
+      "text_url": "texts/discovering-beijing-webinar-004.txt",
+      "description": "Sanitized searchable transcript from the Discovering Beijing student webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "Discovering Beijing Webinar transcript",
+      "document_id": "discovering-beijing-webinar",
+      "document_title": "Discovering Beijing Webinar transcript",
+      "page_range": "48:44-1:04:16",
+      "provenance": "program webinar transcript"
+    },
+    {
+      "id": "discovering-beijing-webinar-005",
+      "title": "Discovering Beijing Webinar transcript",
+      "type": "document",
+      "url": "texts/discovering-beijing-webinar-005.txt",
+      "text_url": "texts/discovering-beijing-webinar-005.txt",
+      "description": "Sanitized searchable transcript from the Discovering Beijing student webinar. Speaker names were removed before packaging.",
+      "section": "Optional webinar transcripts - Schwarzman C11",
+      "page_title": "Discovering Beijing Webinar transcript",
+      "document_id": "discovering-beijing-webinar",
+      "document_title": "Discovering Beijing Webinar transcript",
+      "page_range": "1:04:18-1:09:21",
       "provenance": "program webinar transcript"
     }
   ]

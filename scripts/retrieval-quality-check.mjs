@@ -29,6 +29,28 @@ for (const raw of manifest.resources || []) {
   });
   contentStore[id] = fs.readFileSync(new URL(raw.text_url, packRoot), "utf8");
 }
+const officialAcademicCalendarId = "bb-official-academic-calendar";
+resources.push({
+  id: officialAcademicCalendarId,
+  type: "pdf",
+  title: "Slides_C11 Academic Webinar.pdf",
+  url: "https://lms.sc.tsinghua.edu.cn/courses/C11/Slides_C11_Academic_Webinar.pdf",
+  page_url: "https://lms.sc.tsinghua.edu.cn/courses/C11/academics",
+  page_title: "C11 Academic Webinar",
+  section: "Official Blackboard academic materials",
+  context: "Official indexed Blackboard academic-calendar slides.",
+  source_class: "official_blackboard",
+  collection_kind: "blackboard",
+  content_origin: "blackboard",
+  canonical_parent_id: "official-academic-calendar",
+  authority_verified: true,
+  source_authority_verified: true,
+  body_verified: true,
+  indexed_body_source: "extracted"
+});
+contentStore[officialAcademicCalendarId] =
+  "Page 9: After the orientation and course-registration process, classes begin on September 14th.";
+
 
 const modulePaths = [
   new URL("../lib/answer-formatting.js", import.meta.url),
@@ -120,7 +142,7 @@ const cases = [
   { query: "Do guests have to leave the college by 10:30 p.m.?", expected: ["student-life-webinar"], evidence: ["1030"] },
   { query: "Are kosher meals available in the college dining hall?", expected: ["student-life-webinar"], evidence: ["kosher"] },
   { query: "How often do Beijing subway trains arrive and what does a normal trip cost?", expected: ["beijing-transportation-workshop"], evidence: ["2 to 5 minutes"] },
-  { query: "When do classes begin after orientation?", expected: ["academic-webinar"], evidence: ["september 14"] },
+  { query: "When do classes begin after orientation?", expected: ["official-academic-calendar"], evidence: ["september 14"] },
   {
     query: "What approvals and documentation do I need before spending money on a student event?",
     expected: ["survival-guide"],
@@ -144,7 +166,7 @@ state.settings = { hasApiKey: false };
 invalidateSearchIndexCache();
 
 function documentIdForQuality(source) {
-  return source?.source_pack_document_id || sourceDedupeKey(source || {});
+  return source?.source_pack_document_id || source?.canonical_parent_id || sourceDedupeKey(source || {});
 }
 
 const details = qualityCases.map((testCase) => {

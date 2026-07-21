@@ -58,6 +58,18 @@ resources.push(
     section: "Chinese Language Learning Resources Announcements",
     authority_verified: true,
     context: "Mandarin placement and study materials"
+  },
+  {
+    id: "official-academic-calendar",
+    type: "pdf",
+    title: "Slides_C11 Academic Webinar.pdf",
+    url: "https://lms.sc.tsinghua.edu.cn/official-academic-calendar.pdf",
+    page_title: "C11 Academic Webinar",
+    section: "Official Blackboard academic materials",
+    authority_verified: true,
+    body_verified: true,
+    indexed_body_source: "extracted",
+    context: "Official indexed Blackboard academic-calendar slides"
   }
 );
 contentStore["official-x1-visa"] =
@@ -66,6 +78,8 @@ contentStore["official-packing-list"] =
   "Page 1: Packing List for Students 2026. Bring your passport and copies of key documents, visa paperwork, admission notice, JW202 if applicable, prescription medication in original packaging, doctor letters for prescriptions, adapters, chargers, clothing layers, professional clothes, comfortable walking shoes, toiletries, insurance information, bank cards, emergency contacts, and your arrival address.";
 contentStore["official-mandarin-resources"] =
   "Chinese Language Learning Resources include key vocabulary and grammar structures for each Mandarin level, placement preparation, and survival Chinese materials.";
+contentStore["official-academic-calendar"] =
+  "Page 9: After the orientation and course-registration process, classes begin on September 14th.";
 
 const moduleSource = [
   "../lib/answer-formatting.js",
@@ -277,7 +291,7 @@ const capstoneCase = {
 };
 const plannerResponse = plannerResponseFor(capstoneCase);
 const supportedDraft =
-  "Here is the answer from the indexed academic webinar.\n\nYou can choose either a group capstone or an individual capstone [1].";
+  "Here is the answer from the indexed resources.\n\nYou can choose either a group capstone or an individual capstone [1].";
 const cleanRun = await runPipeline(query, [plannerResponse, supportedDraft, semanticSupportedVerdict]);
 
 if (
@@ -288,7 +302,7 @@ if (
 ) {
   throw new Error("A valid answer did not use the normal LLM route: " + JSON.stringify(cleanRun, null, 2));
 }
-if (cleanRun.documentIds[0] !== "academic-webinar" || cleanRun.duplicateKeys !== 0) {
+if (!cleanRun.documentIds.includes("academic-webinar") || cleanRun.duplicateKeys !== 0) {
   throw new Error("Planner/retrieval did not return one deduplicated academic parent source: " + JSON.stringify(cleanRun, null, 2));
 }
 if (/could not produce/i.test(cleanRun.answer.text) || !/group capstone/i.test(cleanRun.answer.text) || !/\[1\]/.test(cleanRun.answer.text)) {
@@ -346,7 +360,7 @@ const answerCases = [
       "classes begin after orientation",
       "academic webinar September 14 class start"
     ],
-    expectedSources: ["academic-webinar"],
+    expectedSources: ["official-academic-calendar"],
     draft: "Classes begin on September 14, after academic orientation and the course sign-up period [1].",
     phrases: [/September 14/i],
     evidence: [/classes begin/i, /september 14/i]

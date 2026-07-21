@@ -2,28 +2,28 @@
   "schema_version": 1,
   "suite_id": "schwarzman-c11-holdout-v1",
   "pack_id": "schwarzman-c11",
-  "pack_version": "2026.07.7",
-  "corpus_digest": "5855b05be21b7d63d4c3705bafbb70abed334d28099dc2b05f1f55ed36cbe20c",
+  "pack_version": "2026.07.8",
+  "corpus_digest": "2503812d2571d5fb23ad4253c204596c869b410dc5a9b33aa3e3959dd7c617bb",
   "cases": [
     {
       "id": "h01", "kind": "answerable",
       "variants": ["How many credits do I need, does that differ for mainland Chinese students, and is a Tsinghua course required?", "credit minimum for international vs mainland scholars + do we have to take a tsinghua class?", "Separate the ordinary degree-credit requirement, the mainland-China requirement, and the cross-registration rule."],
       "expected_documents": ["academic-webinar"],
-      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["at least 28 degree credits", "total of 31 credits", "at least one Tsinghua course"]}],
+      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["at least 28 degree credits", "of 31 credits", "at least one Tsinghua course"]}],
       "answer_key": {"patterns_all": ["28", "31", "Tsinghua course"], "forbidden_patterns": ["international students? (?:must|need to|are required to) (?:(?:complete|earn|take) )?31 credits", "Tsinghua course is optional"]}
     },
     {
       "id": "h02", "kind": "negative_polarity",
       "variants": ["Can someone with an IR background opt out of the prerequisite; what are the application deadline and supporting-document requirement; and do they keep its credits?", "IR prerequisite exemption: deadline, documents, and whether the credits are automatic?", "I studied political science already. Explain the exception process, its deadline and supporting documents, and what replaces the exempted course credits."],
       "expected_documents": ["academic-webinar"],
-      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["supporting documents by June 30th", "does not imply the automatic award of its credits", "more courses from the electives"]}],
+      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["supporting documents by June 30th", "does not imply the automatic word of its credits", "more courses from the electives"]}],
       "answer_key": {"patterns_all": ["June 30", "not automatic", "electives"], "forbidden_patterns": ["you automatically (?:receive|keep|get|earn).*credits", "exemption automatically (?:awards|grants|keeps).*credits", "July 30"]}
     },
     {
       "id": "h03", "kind": "answerable",
       "variants": ["What is the Deep Dive course format, credit value, weekly schedule, and timing of the main field trip?", "Deep Dive: mandatory or optional, how many credits, when are its weekly lectures, and when is the week-long trip?", "Summarize the year-long Deep Dive structure, including Fridays and the trip between modules."],
       "expected_documents": ["academic-webinar"],
-      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["mandatory two credit course", "lectures on Fridays", "in between Modules 1 and 2"]}],
+      "evidence_groups": [{"document_id": "academic-webinar", "patterns_all": ["mandatory two credit course", "lectures on Fridays", "field trips that take place in between modules one and two"]}],
       "answer_key": {"patterns_all": ["two", "Friday", "Modules 1 and 2"], "forbidden_patterns": ["Deep Dive is optional", "between Modules? 2 and 3"]}
     },
     {
@@ -37,14 +37,14 @@
       "id": "h05", "kind": "negative_polarity",
       "variants": ["Do I need to create WeChat before arriving, and which channel is official before then?", "wechat before landing? where are official pre-arrival messages actually sent?", "Clarify whether WeChat is urgent before China and why a Chinese SIM changes registration."],
       "expected_documents": ["international-logistics-webinar"],
-      "evidence_groups": [{"document_id": "international-logistics-webinar", "patterns_all": ["not in a rush to set up a WeChat prior to your arrival", "SC email is the only official channel", "Chinese phone number"]}],
+      "evidence_groups": [{"document_id": "international-logistics-webinar", "patterns_all": ["not in rush to set up a WeChat prior to your arrival", "SC email is the only official channel", "Chinese phone number"]}],
       "answer_key": {"patterns_all": ["not", "SC email", "Chinese"], "forbidden_patterns": ["must (?:set up|create|register).*WeChat before", "WeChat is the only official channel"]}
     },
     {
       "id": "h06", "kind": "negative_polarity",
       "variants": ["Can a positive cannabis test cause deportation even if the use happened legally outside China, and what preparation window is advised?", "Student-life drug rule: does pre-China use still matter on a later test, what can happen, and how early should I prepare?", "Explain the consequence risk from drug residue and the suggested preparation window."],
       "expected_documents": ["student-life-webinar"],
-      "evidence_groups": [{"document_id": "student-life-webinar", "patterns_all": ["did not do that drug while in China", "deportation if you're if you're a foreign student", "Give yourself at least 30 days"]}],
+      "evidence_groups": [{"document_id": "student-life-webinar", "patterns_all": ["did not do that drug while in China", "deportation if you're a foreign student", "Give yourself at least 30 days"]}],
       "answer_key": {"patterns_all": ["positive", "deportation", "30 days"], "forbidden_patterns": ["no consequences", "use outside China has no consequences", "legal use outside China cannot cause consequences"]}
     },
     {

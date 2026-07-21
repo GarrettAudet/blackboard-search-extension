@@ -2,8 +2,8 @@
   "schema_version": 2,
   "suite_id": "blackboard-schwarzman-blind-holdout-v2",
   "pack_id": "schwarzman-c11",
-  "pack_version": "2026.07.7",
-  "pack_corpus_digest": "5855b05be21b7d63d4c3705bafbb70abed334d28099dc2b05f1f55ed36cbe20c",
+  "pack_version": "2026.07.8",
+  "pack_corpus_digest": "2503812d2571d5fb23ad4253c204596c869b410dc5a9b33aa3e3959dd7c617bb",
   "blackboard_corpus_id": "local-blackboard-representative-v2",
   "blackboard_corpus_version": "2026.07.17.1",
   "blackboard_corpus_digest": "5dedb8e25342c80c5c1e67d5db2ca813f29df129729823583da822059f8d0b94",
@@ -72,7 +72,7 @@
       ],
       "expected_documents": ["academic-webinar"],
       "evidence_groups": [
-        {"document_id": "academic-webinar", "patterns_all": ["Chinese courses are mandatory in module one for all international students", "altogether nine sub-levels", "written test that will be sent out via email in early July", "speaking and reading test", "during orientation"]}
+        {"document_id": "academic-webinar", "patterns_all": ["Chinese courses are mandatory in Module 1 for all international students", "altogether nine sub-levels", "written test that will be sent out via email in early July", "speaking and reading test", "during orientation"]}
       ],
       "answer_key": {
         "patterns_all": ["mandatory in module one for international students", "nine sub levels", "written test email early July", "speaking and reading test during orientation"],
@@ -89,7 +89,7 @@
       ],
       "expected_documents": ["student-life-webinar"],
       "evidence_groups": [
-        {"document_id": "student-life-webinar", "patterns_all": ["flight itinerary. It's not the booking yet", "Make sure that the airport's checked", "get to the airport on time", "within 48 hours"]}
+        {"document_id": "student-life-webinar", "patterns_all": ["flight itinerary. It's not the booking yet", "Make sure that the airport's correct", "get to the airport on time", "within 48 hours"]}
       ],
       "answer_key": {
         "patterns_all": ["not booked yet", "check the airport", "get to the airport on time", "reply within 48 hours"],
@@ -106,7 +106,7 @@
       ],
       "expected_documents": ["international-logistics-webinar"],
       "evidence_groups": [
-        {"document_id": "international-logistics-webinar", "patterns_all": ["arriving too early", "ticket will not be covered by Schwarzman scholars", "basic economy level", "Any additions to the ticket will be at your own expense"]}
+        {"document_id": "international-logistics-webinar", "patterns_all": ["arriving too early", "ticket will not be covered by Schwartzman scholars", "basic economy level", "Any additions to the ticket will be at your own expense"]}
       ],
       "answer_key": {
         "patterns_all": ["early arrival ticket not covered", "basic economy", "additions at your own expense"],
@@ -140,7 +140,7 @@
       ],
       "expected_documents": ["student-life-webinar"],
       "evidence_groups": [
-        {"document_id": "student-life-webinar", "patterns_all": ["all scholars will live in a single room, private bathroom", "virtual tours of your rooms on the Schwarzman College website", "must tap in and out of the building every time"]}
+        {"document_id": "student-life-webinar", "patterns_all": ["all scholars will live in a single-room private bathroom", "virtual tours of your rooms on the Schwarzman College website", "must tap in and out of the building every time"]}
       ],
       "answer_key": {
         "patterns_all": ["single room private bathroom", "virtual tour Schwarzman College website", "tap in and out every time"],
@@ -174,7 +174,7 @@
       ],
       "expected_documents": ["student-life-webinar"],
       "evidence_groups": [
-        {"document_id": "student-life-webinar", "patterns_all": ["administrator of a WeChat ID, a WeChat group", "legally responsible for anything that's posted in that group", "if you didn't post it"]}
+        {"document_id": "student-life-webinar", "patterns_all": ["administrator of a WeChat group", "legally responsible for anything that's posted in that group", "if you didn't post it"]}
       ],
       "answer_key": {
         "patterns_all": ["administrator legally responsible for anything posted", "even if admin did not post it"],

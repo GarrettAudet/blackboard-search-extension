@@ -7152,6 +7152,7 @@ function answerPromptSources(results, limit = 5, textLimit = MAX_ANSWER_SOURCE_T
 
 const SEMANTIC_EVIDENCE_LIMITS = Object.freeze({
   maxFacets: 5,
+  maxRouteMatches: 20,
   maxCandidates: 80,
   maxCandidatesPerParent: 16,
   maxCandidateTextChars: 2400,
@@ -7305,14 +7306,14 @@ function semanticEvidenceSearchRoutes(query, retrievalQueries = [], queryPlan = 
     const key = normalizeText(facet);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    routes.push({ routeIndex: routes.length, query: facet, type: "facet", limit: 20 });
+    routes.push({ routeIndex: routes.length, query: facet, type: "facet", limit: SEMANTIC_EVIDENCE_LIMITS.maxRouteMatches });
   }
   for (const route of semanticEvidenceRouteCatalog(query, retrievalQueries, queryPlan)) {
     const routeQuery = String(route.query || "").trim();
     const key = normalizeText(routeQuery);
     if (!routeQuery || !key || seen.has(key)) continue;
     seen.add(key);
-    routes.push({ ...route, query: routeQuery, limit: 20 });
+    routes.push({ ...route, query: routeQuery, limit: SEMANTIC_EVIDENCE_LIMITS.maxRouteMatches });
   }
   return routes;
 }

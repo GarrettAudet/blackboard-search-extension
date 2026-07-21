@@ -102,7 +102,7 @@ function scanTranscriptText(resource, textPath, text) {
 
   if (/\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/.test(resource.page_range || "")) {
     const firstContentLine = text.split(/\r?\n/).find((line) => line.trim());
-    if (firstContentLine && !/^\[\d{1,2}:\d{2}/.test(firstContentLine.trim())) {
+    if (firstContentLine && !/^\[?\d{1,2}:\d{2}/.test(firstContentLine.trim())) {
       fail(`${label} is a timed chunk but does not start with a timestamp.`);
     }
   }

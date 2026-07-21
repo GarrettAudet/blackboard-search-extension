@@ -1,151 +1,457 @@
-C11 Academic Webinar 260617
+[00:00] Let's have Joan say hello to everyone first.
 
-It's hard to believe it's our 11th year of the program and we're really excited to be welcoming you as we start off our second decade of the Schwarzman Scholars Program. I'll be around in orientation and look forward to meeting you then. I'm the for Academic Programs based in the New York office and represent the academic team in New York City.
+[00:05] Yeah, well, welcome. Welcome to C11.
 
-I'm often at the program and look forward to seeing you and meeting and working with you next year. Now Thank you remarks.
+[00:09] It's hard to believe it's our 11th year of the program, and we're really excited to be welcoming you as we start off our second decade of the Schwartzman Scholars Program.
 
-Okay, Thank you. Welcome cohort 11. You're the first cohort to begin your journey as we enter the program's second decade in the era defined by complexity and interdependence.
+[00:20] I'll be around in orientation and look forward to meeting you then.
 
-The capacity to engage across differences, think critically, and lead collaboratively has never been more vital. Schwarzman College, as part of Tsinghua University, offers two complementary paths to build these capacities. A deeper understanding of China and its role in the world and the learning that happens among peers, classmates whose experiences and perspectives may differ profoundly from your own.
+[00:24] As Dean Lu Yao mentioned, I'm the Senior Director for Academic Programs based in the New York office and represent the academic team in New York City.
 
-During today's session, you'll learn more about the academic experiences that awaits you. I draw your attention in particular to the capstone project and particularly probably to the group capstone, one of the signature features of the Schwarzman experience. By working in diverse teams to address real-world problems, scholars learn not only to apply knowledge but to learn through complexity across disciplines, cultures, and perspectives.
+[00:40] And I'm often at the program and look forward to seeing you and meeting and working with you next year.
 
-These are precisely the capabilities that effective leadership demands in today's world. So we look forward to welcoming you in person this fall and to seeing how cohort 11 makes its mark both within Schwarzman scholars community and beyond. Thank you today's session.
+[00:48] Now I'm going to turn it over to the next presenter to say hello to everybody.
 
-Okay, Thank you. Thank you this wonderful opening remark. I was wondering whether, she's online or not.
+[00:53] Thank you
 
-I don't think so. I didn't see her in the participant list, so we should just Okay, okay.
+[00:54] Thank you, sir, for opening remarks.
 
-Yes, Thank you. So briefly, today we will have several important presentations. Then we will follow.
+[00:56] Okay, thank you.
 
-Oh, hello,. Hello. I think is not in the attendance list.
+[00:58] Welcome, Cohort 11.
 
-Okay, so we should go to presentations. Go forward, yeah. Yes.
+[01:00] You're the first cohort to begin your journey as we enter the program's second decade.
 
-Okay, okay, yeah. So then let's have our important presentations. We will have several important presentations for delivering so many important information, and then we will have an open Q&A section.
+[01:05] In an era defined by complexity and interdependence, the capacity to engage across differences, think critically, and lead collaboratively has never been more vital.
 
-And please feel free to submit your questions by the chat box at any moment. So, you want to continue? Yes, I'm going to briefly go over our agenda for today. We're going to introduce our academic team members, both in Beijing and in the New York office.
+[01:17] Schwartzman College, as part of Tsinghua University offers two complementary paths to build these capacities: a deeper understanding of China and its role in the world, and the learning that happens among peers, classmates whose experiences and perspectives may differ profoundly from your own.
 
-Altogether, we have a large academic team divided between the two offices that will provide you with academic support and play many roles in the year ahead. So we'll introduce them to you first. Then we're going to review the requirements for obtaining the master's degree and the curriculum breakdown and the course offerings for the academic year, including the co-curricular mandatory activities that are outside the actual academic degree requirements.
+[01:37] During today's session, you'll learn more about the academic experience. And I would draw your attention in particular to the Capstone project and particularly to the group Capstone, one of the signature features of the Schwartzman experience.
 
-And then we're going to review in some depth the capstone project, which is really the culminating event and activity that you, for the degree requirement, which you'll spend the entire year working on, including taking a capstone course, and highlight the differences between the group capstone project as well as the individual capstone project. You can choose either option to do a group or to do an individual one. And then we'll move on to some of the expectations for you in terms of integrity and other behaviors for your year at the Schwarzman Scholars Program and give you a short timeline about what's next before classes start, including the orientation process you'll be going through, including the academic orientation and course sign-up process that you'll be doing in the couple of weeks before the academic program begins, the classes begin on September 14th.
+[01:55] By working in diverse teams to address real-world problems, scholars learn not only to apply knowledge but to learn things through complexity across disciplines, cultures, and perspectives. These are precisely the capabilities that effective leadership demands in today's world.
 
-And then we're going to leave plenty of time for Q&A and to try to answer your questions that you put in the chat box, as well as any other questions that you might have that come up and that you want to just ask later. So here we go. We're going to jump right in.
+[02:15] So we look forward to welcoming you in person this fall and to see how Cohort 11 makes its mark both within the Schwartzman Scholars community and beyond. Thank you and enjoy today's session.
 
-Let me start off by introducing the New York academic team members. I am, the for Academic Programs based in New York. I co-manage the academic program together with our Associate Dean for Academics, Dean, who's based in Beijing.
+[02:30] Liao?
 
-We have a lovely, wonderful partnership, co-governance process between New York and Beijing and the college for the Schwarzman Scholars Program. We all love each other and work together very well together. So we look forward to working with you.
+[02:31] Liao?
 
-Next, I'm going to introduce, who's our for Academics based in New York. The next on the screen, just wave your hand and say hello with your camera on. Hi, everyone.
+[02:32] Okay, thank you. Thank you for this wonderful opening remark. I was wondering whether Amy, she's online or not?
 
-Good. Yeah. And then, who's our Administrative and based in New York, who's largely responsible for getting all of our faculty to the college, our contracting and travel and everything else, and many of our administrative policies.
+[02:42] I don't think so, Liao. I didn't see her in the participant list. So we should just go ahead.
 
-The next on the call, please turn your camera on and say hello. Hi, everyone. Yeah.
+[02:49] Okay, okay. Yes. Thank you very much. So briefly, today we will have several important presentations. Then we will follow-
 
-And then, who's our Academic Coordinator based in New York, who coordinates between our Beijing academic team and our New York academic team and our faculty and does many, many things. The next please turn your camera on and say hello? Hi, everyone. Welcome.
+[02:58] Right!
 
-Good. So that's our New York team. And I'm going to turn it over now to to introduce our Beijing team to you.
+[02:59] Oh, hello, Amy? Hello?
 
-Thank you. Thank you,. So now it's my turn.
+[03:04] Can you hear me?
 
-I'm so delighted to introduce our great Beijing team. So you can see that our Beijing team actually is much larger. So first of all, myself, I'm currently Associate Dean of Academic Affairs.
+[03:07] Amy is not in the attendance list.
 
-Actually, I'm also a professor in finance from the School of Economics and Management. I just newly joined Schwarzman College. actually was Associate Dean of Academic Affairs.
+[03:11] Okay, so we should go to presentations.
 
-She now is a. She knows a lot for college and she's very experienced. The next online? So do you want to turn on camera to say hello to everyone? I am online, but it's difficult to turn on camera.
+[03:16] Move forward, yeah.
 
-Sorry. OK, so next,., she currently is of Academic Affairs.
+[03:18] Yes.
 
-She also in charge of a wide range of academic related affairs. She spent a lot of effort these days to collect many wonderful capstone topics, and she's going to provide more information about the capstone projects in later presentations. The next to turn on camera and say hello to everyone? Hi, everyone.
+[03:19] Okay, okay, yeah. So then let's have our important presentations. We will have several important presentations for delivering so many important information. And then we will have an open QA section. And please feel free to submit your questions by the chat box.
 
-OK, Thank you. 
+[03:40] We will have a chat box at any moment. So Joan, you want to continue?
 
-actually joined the college from the first day of college, so she has been working here for so long time. She knows a lot. She's very experienced.
+[03:45] Yes, I'm going to go over our agenda for today. We're going to introduce our academic team members, both in Beijing and in the New York office. Altogether, we have a large academic team divided between the two offices that will provide you with academic support and play many roles in the year ahead. So we'll introduce them to you first.
 
-She is in charge also of so many different dimensions of academic related issues, such as scheduling courses, scheduling final defense, so on so forth. The next to open camera to say hello to everyone? Hi, everyone. Welcome.
+[04:04] Then we're going to review our requirements for obtaining the master's degree and the curriculum breakdown and the course offerings for the academic year, including the co-curricular mandatory activities that are available for the academic year.
 
-OK, Thank you,., so you already saw., she is a of Academic Counseling and Services.
+[04:09] And then we're going to be able to provide you with the academic requirements.
 
-So she is a really good bridge between academic office and scholars. She will provide very good counseling services and also try to make friends with everybody. The next to say hello to everyone again? Of course.
+[04:14] And then we're going to be able to provide you with the academic requirements for the academic year.
 
-Hi everyone. Nice to see you online.
+[04:19] So we're going to be able to provide you with the academic requirements for the academic year.
 
-OK, Thank you,. Next,. She is Academic Manager.
+[04:26] And then we're going to be able to provide you with the academic requirements for the academic year.
 
- She will go to classroom in the beginning of semester and also end of semester to take beautiful pictures with you and faculty. And also, she will be a very good bridge between you and faculty and between you and TA.
+[04:28] So we're going to be able to provide you with the academic requirements for the academic year, including the co-curricular mandatory activities that are outside the actual academic degree requirements.
 
-The next to turn on camera to say hello to everyone? Hi, everyone. Nice to see you. Welcome.
+[04:38] And then we're going to review in some depth the capstone project, which is really the culminating event and activity that you, for the degree requirement, which you'll spend the entire year working on.
 
-OK, Thank you,. Next one is. is Academic Manager.
+[04:57] And then we're going to be able to provide you with the academic year.
 
- So when you are working on your capstone, you may need to get some help for formatting issue, you know, getting some resources from a library. She will be a very nice lady to help you out.
+[05:02] And then we're going to be able to provide you with the academic year.
 
-The next to turn on camera and say hello to everyone? Hi, everyone. Welcome. OK, Thank you.
+[05:04] And then we're going to be able to provide you with the academic year.
 
-Thank you. is a of Academic Affairs.
+[05:05] And then we're going to be able to provide you with the academic year.
 
- Probably she will contact some of you during capstone work process. The next to say hello to everyone? Hello, everyone.
+[05:06] And then we're going to be able to provide you with the academic year.
 
-Welcome. Thank you. Thank you,.
+[05:07] And then we're going to be able to provide you with the academic year.
 
-So just had a very busy schedule during last week because last week was our capstone week. Next,. also is Academic Administrator.
+[05:08] And then we're going to be able to provide you with the academic year.
 
-These days, did a lot of work supporting these international faculties. So without 's help, all these international faculties may not come to China and teach our great scholars smoothly and have a great China experience. The next to turn on camera and say hello to everyone? Hi, everyone.
+[05:09] And then we're going to be able to provide you with the academic year.
 
-Welcome. OK, Thank you,. The last but not least,.
+[05:10] And then we're going to be able to provide you with the academic year.
 
-is Academic Officer. She is also in charge of some academic administration work and also communication between academic office and the students. In the future, probably you will receive so many important emails sent under the name of Academic Office.
+[05:11] And then we're going to be able to provide you with the academic year.
 
-But now I can tell you, actually all of these emails are sent by. The next to turn on camera and say hello to everyone? Hello, everyone., welcome.
+[05:12] And then we're going to be able to provide you with the academic year.
 
-OK, great. So Thank you,. You know, I finished.
+[05:13] And then we're going to be able to provide you with the academic year.
 
-Hello,. Hello, The next hear me? Yes, I can hear you. OK, great.
+[05:14] And then we're going to be able to provide you with the academic year.
 
-Sorry, I was muted. OK, so now I'm going to just introduce our postdoc teaching fellows as well. They are not staff, but they are full time residents at the college, along with our residential faculty who come module by module.
+[05:19] And then we're going to be able to provide you with the academic year.
 
-The postdocs are there for the entire year. We have six postdoc teaching fellows who we consider kind of junior faculty, and they provide really invaluable support to us and to the faculty. They support the core courses, including the mandatory China core course, the mandatory global affairs core courses, and also the mandatory ethics courses.
+[05:20] And then we're going to be able to provide you with the academic year.
 
-So you will be meeting. Oh, and in addition to that, the capstone course. So you'll be meeting and working with the postdoc teaching fellows, both as discussion leaders and as mentors for those all those courses over the academic year.
+[05:21] And then we're going to be able to provide you with the academic year.
 
-They are really a great in-house support for us, both for academic support. They will have fixed office hours and you will be meeting them in the dining room and their office hours and the courses. And they provide academic support, support for academic writing.
+[05:22] And then we're going to be able to provide you with the academic year.
 
-And we know many of our scholars don't come from a social science background and some of the types of writing that you are required to do in the course, Schwarzman College courses may be challenging for you. So please go to help take advantage of the postdoc teaching fellows to support you. They provide capstone support all along the way, both in terms of the support for research methods, writing the organization format and argumentation of your capstone report, and will be a resource for you for that.
+[05:29] And then we're going to be able to provide you with the academic year.
 
-And then for any of you who are interested in pursuing a Ph.D. after your year at the Schwarzman Scholars Program, they can provide helpful advice on the application for a Ph.D. program, what it entails. As people who have just finished writing their own doctoral dissertation research and conducting research, they have lots and lots of good advice to offer in that. And in general, they provide overall academic tutoring.
+[05:31] And then we're going to be able to provide you with the academic year.
 
-So we will introduce them to you at the academic overview during orientation. We're still finalizing the two PTFs, two new PTFs for this year. We have four returning postdoc teaching fellows who've been wonderful additions to our program.
+[05:32] And then we're going to be able to provide you with the academic year.
 
-So we'll look forward to introducing them to you in person at orientation, and you'll get to know them and can rely on them for the whole academic year. Okay, All right.
+[05:33] And then we're going to be able to provide you with the academic year.
 
-Yeah, I'll Thank you, and Thank you. So hi, everyone.
+[05:34] And then we're going to be able to provide you with the academic year.
 
-It's again, and I'm very happy to meet you all today. So in the next few minutes, I'll briefly walk you through the degree requirements and curriculum structure to give you a full picture of the program. So the Schwarzman Scholar Program is a one-year professional master's program that combines academic study, leadership development, and cultural immersion.
+[05:36] And then we're going to be able to provide you with the academic year.
 
-The name of the degree conferred will be Master of Global Affairs, of which Chinese is 全球领导力, and the discipline code is S1259, which is super important during your graduation season. And students who successfully complete the degree requirements and pass the capstone defense will be awarded a professional master's degree in global affairs. Next slide, please.
+[05:38] And then we're going to be able to provide you with the academic year.
 
-And before we go into the details of the curriculum, I would like to first introduce the three pillars of the Schwarzman's curriculum. And when we talk about curriculum, we focus on three essential pillars that form the foundation of the courses, which are China, global affairs, and leadership. These pillars are designed to give students a broad international perspective, a deep understanding of China's unique development path, and the skills to become effective, responsible leaders in a rapidly changing world.
+[05:40] And then we're going to be able to provide you with the academic year.
 
-So in each area, we have a mix of co-courses and elective courses. Co-courses provide a strong foundation, while electives allow you to explore topics in greater depth. So you can pick courses that match your interests and career goals and apply what you learned to real world problems.
+[05:42] And then we're going to be able to provide you with the academic year.
 
-And at the end of the program, students bring together what they've learned from all three pillars in a capstone project report. Next slide, please.
+[05:44] And then we're going to be able to provide you with the academic year.
 
-So to graduate, students must complete at least 28 degree credits, including co-courses, electives, professional ethics, language courses, professional practice, and other mandatory activities. So students from mainland China are required to complete an additional three credits of ideology and education courses, bringing a total of 31 credits. And all students are required to take at least one Tsinghua course.
+[05:46] And then we're going to be able to provide you with the academic year.
 
-And in addition, we are excited to have a new senior director for leadership with us to oversee co-curriculum leadership programming, which will start during orientation in August. And this new staff member will work closely with the academic team on our leadership curriculum in and out of the classroom throughout the year. So we are very excited to have him with us.
+[05:48] And then we're going to be able to provide you with the academic year.
 
-And next slide, please. And let's take a quick look at the curriculum structure. So here you can see the co-curriculum covers China, global affairs, and leadership, the three pillars we mentioned before.
+[05:52] And then we're going to be able to provide you with the academic year.
 
-And students are required to complete mandatory courses in each area, while also having flexibility to explore electives based on your interests and career goals. So we currently offer more than 27 elective courses across global affairs, China studies, and industry-focused topics. And students are also required to complete professional ethics course, language courses, and professional practice components, including deep dive and the capstone project, which are the key features of our practice-oriented program.
+[05:54] And then we're going to be able to provide you with the academic year.
 
-And my colleague will go into details about that later. And in addition, all students participate in orientation, PIGO, and at least one Tsinghua course. And more details can be found on Blackboard.
+[05:56] And then we're going to be able to provide you with the academic year.
 
-As I can see, some of you in the chat box has already set up that very good habit of checking information on the Blackboard. That's really good. And we appreciate that a lot.
+[05:58] And then we're going to be able to provide you with the academic year.
 
-And as you can see, this curriculum is a very intensive one. And our program is an intensive one-year program as well. So we encourage you to make thoughtful choices that align with your interests and long-term goals.
+[06:00] And then we're going to be able to provide you with the academic year.
 
-All right. So next slide, please. So up next, we'll take a closer look at the prerequisite requirement for the global affairs cluster, language courses, deep dive, capstone project, and Tsinghua course.
+[06:02] And then we're going to be able to provide you with the academic year.
 
-Next slide, please. Okay. So the course introduction to international relations theory and strategy is the prerequisite for the global affairs cluster and provides a foundation in international relations and strategy, especially for students who are new to the field.
+[06:04] And then we're going to be able to provide you with the academic year.
 
-So all the students are required to take it, and the credits earned will be counted as electives. However, students with a background in international relations or political science can submit an exception application to opt out. So for the exemption application, you need to submit the form with supporting documents by June 30th.
+[06:06] And then we're going to be able to provide you with the academic year.
+
+[06:08] And then we're going to be able to provide you with the academic year.
+
+[06:10] And then we're going to be able to provide you with the academic year.
+
+[06:12] And then we're going to be able to provide you with the academic year.
+
+[06:14] And then we're going to be able to provide you with the academic year.
+
+[06:16] And then we're going to be able to provide you with the academic year.
+
+[06:18] And then we're going to be able to provide you with the academic year.
+
+[06:20] And then we're going to be able to provide you with the academic year.
+
+[06:21] And then we're going to be able to provide you with the academic year.
+
+[06:22] And then we're going to be able to provide you with the academic year.
+
+[06:23] And then we're going to be able to provide you with the academic year.
+
+[06:24] And then we're going to be able to provide you with the academic year.
+
+[06:25] And then we're going to be able to provide you with the academic year.
+
+[06:26] And then we're going to be able to provide you with the academic year.
+
+[06:27] And then we're going to be able to provide you with the academic year.
+
+[06:28] And then we're going to be able to provide you with the academic year.
+
+[06:29] And then we're going to be able to provide you with the academic year.
+
+[06:32] And then we're going to be able to provide you with the academic year.
+
+[06:33] And then we're going to be able to provide you with the academic year.
+
+[06:34] And then we're going to be able to provide you with the academic year.
+
+[06:35] And then we're going to be able to provide you with the academic year.
+
+[06:36] And then we're going to be able to provide you with the academic year.
+
+[06:37] And then we're going to be able to provide you with the academic year.
+
+[06:38] And then we're going to be able to provide you with the academic year.
+
+[06:39] And then we're going to be able to provide you with the academic year.
+
+[06:42] And then we're going to be able to provide you with the academic year.
+
+[06:44] And then we're going to be able to provide you with the academic year.
+
+[06:45] And then we're going to be able to provide you with the academic year.
+
+[06:46] And then we're going to be able to provide you with the academic year.
+
+[06:47] And then we're going to be able to provide you with the academic year.
+
+[06:48] And then we're going to be able to provide you with the academic year.
+
+[06:49] And then we're going to be able to provide you with the academic year.
+
+[06:50] And then we're going to be able to provide you with the academic year.
+
+[06:51] And then we're going to be able to provide you with the academic year.
+
+[06:52] And then we're going to be able to provide you with the academic year.
+
+[06:53] And then we're going to be able to provide you with the academic year.
+
+[06:54] And then we're going to be able to provide you with the academic year.
+
+[06:57] And then we're going to be able to provide you with the academic year.
+
+[06:58] And then we're going to be able to provide you with the academic year.
+
+[06:59] And then we're going to be able to provide you with the academic year.
+
+[07:00] And then we're going to be able to provide you with the academic year.
+
+[07:01] And then we're going to be able to provide you with the academic year.
+
+[07:02] And then we're going to be able to provide you with the academic year.
+
+[07:03] And then we're going to be able to provide you with the academic year.
+
+[07:04] And then we're going to be able to provide you with the academic year.
+
+[07:05] And then we're going to be able to provide you with the academic year.
+
+[07:06] And then we're going to be able to provide you with the academic year.
+
+[07:08] And then we're going to be able to provide you with the academic year.
+
+[07:10] And then we're going to be able to provide you with the academic year.
+
+[07:14] And then we're going to be able to provide you with the academic year.
+
+[07:16] And then we're going to be able to provide you with the academic year.
+
+[07:18] And then we're going to be able to provide you with the academic year.
+
+[07:20] And then we're going to be able to provide you with the academic year.
+
+[07:22] And then we're going to be able to provide you with the academic year.
+
+[07:24] And then we're going to be able to provide you with the academic year.
+
+[07:26] And then we're going to be able to provide you with the academic year.
+
+[07:28] And then we're going to be able to provide you with the academic year.
+
+[07:30] And then we're going to be able to provide you with the academic year.
+
+[07:32] And then we're going to be able to provide you with the academic year.
+
+[07:34] And then we're going to be able to provide you with the academic year.
+
+[07:36] And then we're going to be able to provide you with the academic year.
+
+[07:38] And then we're going to be able to provide you with the academic year.
+
+[07:40] And then we're going to be able to provide you with the academic year.
+
+[07:42] And then we're going to be able to provide you with the academic year.
+
+[07:44] And then we're going to be able to provide you with the academic year.
+
+[07:46] And then we're going to be able to provide you with the academic year.
+
+[07:48] And then we're going to be able to provide you with the academic year.
+
+[07:50] And then we're going to be able to provide you with the academic year.
+
+[07:52] And then we're going to be able to provide you with the academic year.
+
+[07:54] And then we're going to be able to provide you with the academic year.
+
+[07:56] And then we're going to be able to provide you with the academic year.
+
+[07:58] And then we're going to be able to provide you with the academic year.
+
+[08:00] And then we're going to be able to provide you with the academic year.
+
+[08:02] And then we're going to be able to provide you with the academic year.
+
+[08:04] And then we're going to be able to provide you with the academic year.
+
+[08:06] And then we're going to be able to provide you with the academic year.
+
+[08:08] And then we're going to be able to provide you with the academic year.
+
+[08:10] And then we're going to be able to provide you with the academic year.
+
+[08:12] And then we're going to be able to provide you with the academic year.
+
+[08:14] So first of all, myself, I'm currently Associate Dean of Academic Affairs.
+
+[08:20] Actually, I'm also a professor in finance from a School of Economics and Management.
+
+[08:26] I just newly joined Swartzman College.
+
+[08:30] Jun Qian actually was Associate Dean of Academic Affairs.
+
+[08:34] She now is a senior academic advisor.
+
+[08:39] She knows a lot for college and she's very experienced.
+
+[08:43] Jun, are you online?
+
+[08:44] So do you want to turn on camera to say hello to everyone?
+
+[08:48] I am online, but it's difficult to turn on camera.
+
+[08:54] Sorry.
+
+[08:55] Okay.
+
+[08:56] So next, Annie Zhang.
+
+[09:00] She currently is Assistant Dean of Academic Affairs.
+
+[09:05] She is also in charge of a wide range of academic related affairs.
+
+[09:10] She spent a lot of effort these days to collect, you know, many wonderful Capstone topics.
+
+[09:18] And she's going to provide more information about the Capstone projects in later presentations.
+
+[09:24] Annie, do you want to turn on camera and say hello to everyone?
+
+[09:27] Hi, everyone.
+
+[09:28] Okay.
+
+[09:29] Thank you.
+
+[09:30] Next one, Rose.
+
+[09:31] Rose Sun.
+
+[09:32] She is a Director of Academic Affairs.
+
+[09:33] Rose actually joined the college from the first day of college.
+
+[09:46] So she has been working here for so long time.
+
+[09:49] She knows a lot.
+
+[09:50] She's very experienced.
+
+[09:51] She is in charge also of so many different dimensions of academic related issues,
+
+[09:58] such as scheduling courses, scheduling final defense, so on and so forth.
+
+[10:07] So, Rose, do you want to open the camera to say hello to everyone?
+
+[10:11] Hi, everyone.
+
+[10:12] Welcome.
+
+[10:13] Okay.
+
+[10:14] Thank you
+
+[10:15] Stella, so you already, you know, saw Stella.
+
+[10:20] Stella Wang, she is a Senior Manager of Academic Counseling and Services.
+
+[10:28] So, she is a really good bridge between academic office and scholars.
+
+[10:35] She will provide very good counseling services and also try to make friends with everybody.
+
+[10:43] So, Stella, do you want to say hello to everyone again?
+
+[10:47] Of course.
+
+[10:48] Hi, everyone.
+
+[10:49] I am a program team member Online.
+
+[10:50] Okay.
+
+[10:51] Thank you
+
+[10:52] Next, Xin Yi Du.
+
+[10:55] She is Academic Manager.
+
+[10:57] She is in charge of course and TA related work.
+
+[11:01] She will go to classroom in the beginning of semester and also end of semester to take a beautiful pictures with you and faculty.
+
+[11:11] And also, she will be a very good bridge between you and faculty and between you and TA.
+
+[11:19] Xin Yi, do you want to turn on camera to say hello to everyone?
+
+[11:23] Hi, everyone.
+
+[11:24] Nice to see you.
+
+[11:25] Welcome.
+
+[11:26] Okay.
+
+[11:27] Thank you
+
+[11:28] Next one is Jie Ying Liu.
+
+[11:29] Jie Ying is an Academic Manager.
+
+[11:30] She is in charge of library related service work and also provide some academic resources.
+
+[11:44] So when you are working on your capstone, you may need to get some help for formatting issue, getting some resources from a library.
+
+[11:51] She will be a very nice lady to help you out.
+
+[11:53] Jie Ying, do you want to turn on camera and say hello to everyone?
+
+[11:58] Hi, everyone.
+
+[11:59] Welcome.
+
+[12:00] Okay.
+
+[12:01] Thank you.
+
+[12:02] Thank you.
+
+[12:03] Next one is Lisa Li.
+
+[12:04] Lisa Li is a Senior Manager of Academic Affairs.
+
+[12:07] She is in charge of degree related work and also capstone related work.
+
+[12:22] Probably she will contact some of you during capstone work process.
+
+[12:28] Lisa, do you want to say hello to everyone?
+
+[12:31] Hello, everyone.
+
+[12:32] Welcome.
+
+[12:33] Thank you.
+
+[12:34] Thank you

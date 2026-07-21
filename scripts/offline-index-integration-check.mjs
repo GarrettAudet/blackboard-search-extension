@@ -376,14 +376,15 @@ const webinarContextContract = clone(vm.runInContext(`(() => {
   };
 })()`, sidepanelContext));
 assert.equal(webinarContextContract.found, true, "The Student Life webinar parent was not retrievable from the installed pack.");
-assert.equal(webinarContextContract.resourceCount, 2, "The Student Life webinar parent did not retain both packaged transcript sections.");
+assert.equal(webinarContextContract.resourceCount, 3, "The Student Life webinar parent did not retain every packaged transcript section.");
 assert.ok(webinarContextContract.bodyChars > 24000, "The real webinar fixture no longer exercises the former 24k prompt truncation.");
 assert.ok(webinarContextContract.broadPromptChars > 24000, "Document-wide synthesis still truncated the real webinar at 24k.");
 assert.equal(webinarContextContract.broadCoverage, "full_indexed_document", "The broad webinar query did not receive full parent-document context.");
 assert.equal(webinarContextContract.broadComplete, true, "The broad webinar context was not marked complete.");
 assert.equal(webinarContextContract.broadHasEveryBody, true, "The broad webinar prompt omitted at least one indexed transcript section.");
-assert.match(webinarContextContract.broadPageRange, /00:00-15:12/, "The broad webinar source lost its first indexed time range.");
-assert.match(webinarContextContract.broadPageRange, /17:42-29:35/, "The broad webinar source lost its second indexed time range.");
+assert.match(webinarContextContract.broadPageRange, /00:00-16:15/, "The broad webinar source lost its first indexed time range.");
+assert.match(webinarContextContract.broadPageRange, /16:15-33:21/, "The broad webinar source lost its middle indexed time range.");
+assert.match(webinarContextContract.broadPageRange, /33:22-49:03/, "The broad webinar source lost its final indexed time range.");
 assert.equal(webinarContextContract.followRetrievedParent, true, "The elliptical webinar follow-up did not retrieve its conversation parent.");
 assert.equal(webinarContextContract.followCoverage, "full_indexed_document", "The elliptical webinar follow-up did not receive full parent-document context.");
 assert.equal(webinarContextContract.followComplete, true, "The elliptical webinar follow-up context was not marked complete.");
@@ -392,12 +393,12 @@ assert.equal(webinarContextContract.targetedExpanded, false, "A standalone targe
 assert.match(webinarContextContract.coverageLabel, /All indexed transcript chunks supplied/, "The source UI no longer exposes complete indexed-transcript prompt coverage.");
 assert.equal(
   webinarContextContract.transcriptUsageLabel,
-  "Indexed transcript 00:00-29:35 (2 chunks); answer used all 2",
+  "Indexed transcript 00:00-49:03 (3 chunks); answer used all 3",
   "The source UI did not expose the full indexed video range and all chunks used for the broad answer."
 );
 assert.match(
   webinarContextContract.targetedTranscriptUsageLabel,
-  /^Indexed transcript 00:00-29:35 \(2 chunks\); answer used (?:1 of 2: \d{2}:\d{2}-\d{2}:\d{2}|all 2)$/,
+  /^Indexed transcript 00:00-49:03 \(3 chunks\); answer used (?:1 of 3: \d{2}:\d{2}-\d{2}:\d{2}|all 3)$/,
   "The source UI did not distinguish targeted chunk use from total indexed transcript coverage."
 );
 
