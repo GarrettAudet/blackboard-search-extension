@@ -780,6 +780,29 @@ if (
   throw new Error("A vague replacement for an exact source time was not repaired: " + JSON.stringify(exactTimeRun));
 }
 
+const threeSiteQuery =
+  "Compare the webinar's visitor advice for the Forbidden City, Temple of Heaven, and National Museum of China.";
+const threeSiteSource = source(
+  "three-sites",
+  "Discovering Beijing webinar",
+  "The Forbidden City is best understood with an English tour guide. The Temple of Heaven park is active early in the morning. If you go at 6.30 a.m., you can see local seniors practicing Tai Chi and calligraphy. Reserve the National Museum up to seven days in advance and allow at least four hours."
+);
+const unrelatedGuestClockSource = source(
+  "guest-rules",
+  "Student Life webinar",
+  "During the school year, guests must be checked in and out and must leave the College by 10:30 p.m."
+);
+const exactThreeSiteAnswer =
+  "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven at 6:30 a.m. for the early-morning park activities. Reserve the National Museum seven days in advance and allow at least four hours [1].";
+const threeSiteExactnessReasons = context.missingPracticalExactEvidenceReasons(
+  threeSiteQuery,
+  exactThreeSiteAnswer,
+  [threeSiteSource, unrelatedGuestClockSource]
+);
+if (threeSiteExactnessReasons.length) {
+  throw new Error("An unrelated guest-policy clock contaminated the exact three-site answer: " + JSON.stringify(threeSiteExactnessReasons));
+}
+
 const fundingPackageQuery =
   "Which major costs and equipment does the program funding include, and can a partner live with me in the College?";
 const fundingPackageAnswer =

@@ -501,6 +501,31 @@ for (const testCase of answerCases) {
   }
 }
 
+const broadTransportationQuery = "How should I travel around Beijing day to day?";
+const broadTransportationBadDraft =
+  "Use OmniTransit because Beijing has exactly 99 transport networks, including the subway, ride-hailing, shared bikes, and buses [1].";
+const broadTransportationSafeRepair =
+  "Beijing's main day-to-day transport options are the subway, ride-hailing services, shared bikes, and buses [1].";
+const broadTransportationRepairRun = await runPipeline(broadTransportationQuery, [
+  plannerResponseFor({
+    query: broadTransportationQuery,
+    retrieval: "Beijing transportation subway ride hailing shared bikes buses",
+    searchQueries: ["Beijing four ways subway ride hailing shared bike bus"]
+  }),
+  broadTransportationBadDraft,
+  broadTransportationSafeRepair,
+  semanticSupportedVerdict
+]);
+if (
+  broadTransportationRepairRun.providerStages.join(",") !== "planner,answer,reviewer,verifier" ||
+  broadTransportationRepairRun.answer.text !== broadTransportationSafeRepair ||
+  broadTransportationRepairRun.answer.pipeline_diagnostics?.[0]?.reason_codes?.some((code) =>
+    code === "numeric_conflict" || code === "named_entity_conflict"
+  ) !== true
+) {
+  throw new Error("A broad overview with incidental unsupported details was not reduced to the grounded enumerated categories: " + JSON.stringify(broadTransportationRepairRun, null, 2));
+}
+
 const negativeCase = {
   query: "What is the exact printer model and per-page printing fee?",
   retrieval: "printer model per-page printing fee IT helpdesk",

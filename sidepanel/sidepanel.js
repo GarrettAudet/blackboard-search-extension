@@ -6797,6 +6797,21 @@ function readableExactEvidenceFact(fact) {
   return String(fact || "");
 }
 
+function exactnessTopicAnchors(value) {
+  const anchors = new Set(deterministicNamedTerms(value));
+  for (const match of String(value || "").matchAll(/\b[A-Z][A-Za-z0-9&.-]*(?:\s+(?:(?:of|the|and|for|in)\s+)?[A-Z][A-Za-z0-9&.-]*)+/g)) {
+    const anchor = normalizeText(match[0]);
+    if (anchor.split(" ").filter(Boolean).length >= 2) anchors.add(anchor);
+  }
+  return Array.from(anchors);
+}
+
+function textContainsExactnessTopicAnchor(value, anchor) {
+  const text = normalizeText(value);
+  const terms = normalizeText(anchor).split(" ").filter((term) => term.length > 2 && !STOP_WORDS.has(term));
+  return terms.length > 0 && terms.every((term) => answerSupportTextHasTerm(text, term));
+}
+
 function missingPracticalExactEvidenceReasons(query, candidateText, sources) {
   if (!practicalGuidanceQuestion(query) || !String(candidateText || "").trim()) return [];
   const rawFacets = String(query || "")
@@ -6810,6 +6825,8 @@ function missingPracticalExactEvidenceReasons(query, candidateText, sources) {
       .filter(Boolean)
   ));
   const candidateFacts = new Set(canonicalNumericFacts(candidateText));
+  const topicAnchors = exactnessTopicAnchors(query)
+    .filter((anchor) => textContainsExactnessTopicAnchor(candidateText, anchor));
   const requestedKinds = requestedSpecificAnswerKinds(query);
   const countTargetTerms = specificAnswerFacetTargetTerms(query, "count");
   const exactFactWasRequested = (fact) => {
@@ -6857,6 +6874,9 @@ function missingPracticalExactEvidenceReasons(query, candidateText, sources) {
         const topicEnd = Math.min(sourceClauses.length, sourceIndex + 7);
         const topicNeighborhood = sourceClauses.slice(topicStart, topicEnd).join(" ");
         if (!specificAnswerRelevantClauses(candidateText, topicNeighborhood).length) continue;
+        if (topicAnchors.length && !topicAnchors.some((anchor) =>
+          textContainsExactnessTopicAnchor(topicNeighborhood, anchor)
+        )) continue;
         for (const fact of exactFacts) {
           if (candidateFacts.has(fact)) continue;
           missing.set(fact, readableExactEvidenceFact(fact));
@@ -9242,6 +9262,7 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
         "Never include raw page labels, document headers, truncated excerpt fragments, retrieval-status boilerplate, raw URLs, or a Sources section. " +
         "Keep the answer complete but compact and prefer relevant details over exhaustive lists. " +
         "For a broad how-to or overview question, when the excerpts explicitly enumerate major relevant options or categories, cover each major option instead of answering with only one incidental detail. " +
+        "For that broad overview, state the enumerated categories and their essential distinctions; omit incidental prices, counts, app names, line numbers, historical dates, and examples unless the user asks for them. " +
         "Do not invent categories that the excerpts do not support. " +
         structuredAnswerContractInstruction()
     },
@@ -9710,6 +9731,7 @@ async function reviewApiAnswer(
         groundedAnswerPolicyInstruction() +
         "Preserve supported paraphrases, remove unsupported or contradictory claims, and correct changed numbers, names, conditions, permissions, obligations, and polarity. " +
         "Cover every explicitly requested facet the excerpts can answer. For a broad question, cover each major relevant option explicitly enumerated in the excerpts while omitting unsupported categories. " +
+        "For a broad overview, retain the enumerated categories but remove incidental numbers, prices, app names, line numbers, historical dates, and examples unless the question requests them. " +
         "Synthesize concise prose; never paste source metadata, page labels, prompt boundaries, raw URLs, or long retrieval passages. " +
         structuredAnswerContractInstruction()
     },
@@ -9755,6 +9777,7 @@ async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery
         groundedAnswerPolicyInstruction() +
         "Synthesize coherent, practical prose instead of copying snippets, page labels, or document headers. Do not add outside knowledge, unsupported examples, prices, recommendations, or proper names. " +
         "For a broad question, cover each major relevant option explicitly enumerated in the excerpts and omit unsupported categories. " +
+        "For a broad overview, state only those categories and essential distinctions; drop incidental numbers, prices, app names, line numbers, historical dates, and examples unless the question requests them. " +
         structuredAnswerContractInstruction()
     },
     {

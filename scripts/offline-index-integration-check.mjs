@@ -480,15 +480,28 @@ const transportationContextContract = clone(vm.runInContext(`(() => {
     resource.source_pack_document_id === "beijing-transportation-workshop"
   );
   const bodies = resources.map((resource) => cleanIndexedText(state.contentStore[resource.id] || ""));
-  const expanded = expandAnswerSourcesForSynthesis(query, [hit], [], defaultRagPlan(query, retrievalQuery));
+  const plan = defaultRagPlan(query, retrievalQuery);
+  const expanded = expandAnswerSourcesForSynthesis(query, [hit], [], plan);
   const prompt = answerPromptSources(expanded, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
-  const facets = semanticEvidenceFacets(query, defaultRagPlan(query, retrievalQuery)).map((facet) => facet.text);
+  const survivalHit = results.find((result) => result.source_pack_document_id === "survival-guide");
+  const combinedSources = safeAnswerSourceResults(
+    expandAnswerSourcesForSynthesis(query, [hit, survivalHit].filter(Boolean), [], plan),
+    5,
+    MAX_ANSWER_SOURCE_TEXT_CHARS
+  );
+  const broadAnswer = alignAnswerCitations(
+    "Beijing's main day-to-day transport options are the subway, ride-hailing services, shared bikes, and buses [1].",
+    combinedSources
+  );
+  const broadValidation = citedAnswerValidation(query, broadAnswer, combinedSources, retrievalQuery);
+  const facets = semanticEvidenceFacets(query, plan).map((facet) => facet.text);
   return {
     found: true,
     resourceCount: resources.length,
     coverage: prompt.document_coverage,
     complete: prompt.document_coverage_complete,
     hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
+    broadValidationReasons: broadValidation.reasons,
     vagueTempleExactnessReasons: missingPracticalExactEvidenceReasons(
       query,
       "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven in the morning for park activities. Reserve the National Museum seven days ahead and allow at least four hours [1].",
@@ -504,6 +517,7 @@ assert.equal(transportationContextContract.coverage, "full_indexed_document", "T
 assert.equal(transportationContextContract.complete, true, "The broad transportation context was not marked complete.");
 assert.equal(transportationContextContract.hasEveryBody, true, "The broad transportation prompt omitted an indexed workshop chunk.");
 assert.equal(transportationContextContract.hasFourWays, true, "The synthesis prompt omitted the workshop's four-mode overview.");
+assert.deepEqual(transportationContextContract.broadValidationReasons, [], "The grounded four-mode overview failed against the actual expanded production sources.");
 for (const expectedFacet of ["subway", "ride hailing", "shared bikes", "bus"]) {
   assert.ok(
     transportationContextContract.facets.some((facet) => facet.toLowerCase().includes(expectedFacet)),
@@ -514,7 +528,8 @@ for (const expectedFacet of ["subway", "ride hailing", "shared bikes", "bus"]) {
 const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
   const query = "Compare the webinar's visitor advice for the Forbidden City, Temple of Heaven, and National Museum of China.";
   const retrievalQuery = enhanceRetrievalQueryForIntent(query, query, defaultRagPlan(query, query));
-  const hit = searchIndex(retrievalQuery, 24).find((result) =>
+  const results = searchIndex(retrievalQuery, 120);
+  const hit = results.find((result) =>
     result.source_pack_id === "schwarzman-c11" &&
     result.source_pack_document_id === "discovering-beijing-webinar"
   );
@@ -524,14 +539,39 @@ const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
     resource.source_pack_document_id === "discovering-beijing-webinar"
   );
   const bodies = resources.map((resource) => cleanIndexedText(state.contentStore[resource.id] || ""));
-  const expanded = expandAnswerSourcesForSynthesis(query, [hit], [], defaultRagPlan(query, retrievalQuery));
+  const plan = defaultRagPlan(query, retrievalQuery);
+  const expanded = expandAnswerSourcesForSynthesis(query, [hit], [], plan);
   const prompt = answerPromptSources(expanded, 5, MAX_ANSWER_SOURCE_TEXT_CHARS)[0];
+  const productionOrder = [
+    "beijing-transportation-workshop",
+    "survival-guide",
+    "international-logistics-webinar",
+    "discovering-beijing-webinar",
+    "life-in-china-webinar"
+  ];
+  const productionHits = productionOrder
+    .map((documentId) => results.find((result) => result.source_pack_document_id === documentId))
+    .filter(Boolean);
+  const productionSources = safeAnswerSourceResults(
+    expandAnswerSourcesForSynthesis(query, productionHits, [], plan),
+    5,
+    MAX_ANSWER_SOURCE_TEXT_CHARS
+  );
+  const exactProductionAnswer =
+    "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven at 6:30 a.m. for the early-morning park activities. Reserve the National Museum seven days in advance and allow at least four hours [4].";
+  const exactProductionReasons = missingPracticalExactEvidenceReasons(
+    query,
+    exactProductionAnswer,
+    productionSources
+  );
   return {
     found: true,
     resourceCount: resources.length,
     coverage: prompt.document_coverage,
     complete: prompt.document_coverage_complete,
     hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
+    productionOrderDocumentIds: productionSources.map((source) => source.source_pack_document_id),
+    exactProductionReasons,
     vagueTempleExactnessReasons: missingPracticalExactEvidenceReasons(
       query,
       "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven in the morning for park activities. Reserve the National Museum seven days ahead and allow at least four hours [1].",
@@ -547,6 +587,8 @@ assert.equal(discoveringBeijingContextContract.resourceCount, 5, "The Discoverin
 assert.equal(discoveringBeijingContextContract.coverage, "full_indexed_document", "The three-site comparison did not receive full webinar context.");
 assert.equal(discoveringBeijingContextContract.complete, true, "The Discovering Beijing full-document context was not marked complete.");
 assert.equal(discoveringBeijingContextContract.hasEveryBody, true, "The Discovering Beijing prompt omitted an indexed transcript chunk.");
+assert.deepEqual(discoveringBeijingContextContract.productionOrderDocumentIds, ["beijing-transportation-workshop", "survival-guide", "international-logistics-webinar", "discovering-beijing-webinar", "life-in-china-webinar"], "The actual live source ordering could not be reproduced offline.");
+assert.deepEqual(discoveringBeijingContextContract.exactProductionReasons, [], "The correct three-site answer was rejected against the actual live distractor-source ordering.");
 assert.equal(discoveringBeijingContextContract.hasForbiddenCityGuide, true, "The full synthesis prompt omitted the Forbidden City guide advice.");
 assert.equal(discoveringBeijingContextContract.hasTempleMorning, true, "The full synthesis prompt omitted the Temple of Heaven morning advice.");
 assert.ok(discoveringBeijingContextContract.vagueTempleExactnessReasons.some((reason) => /6:30 a\.m\./.test(reason)), "The actual three-site query allowed vague wording to replace the 6:30 a.m. recommendation: " + JSON.stringify(discoveringBeijingContextContract.vagueTempleExactnessReasons));

@@ -486,12 +486,14 @@ vm.runInContext(`
     const answerKeyMarkerPresent = promptText.includes("<ANSWER_KEY_EVALUATION_ONLY>");
     const opaqueCandidateIdPresent = /\\b(?:E\\d{3}|D\\d+C\\d{2})\\b/.test(promptText);
     const credentialMarkerPresent = Boolean(liveSettings.apiKey && promptText.includes(liveSettings.apiKey));
+    const nonExhaustiveJudgePolicyPresent = promptText.includes("minimum, non-exhaustive set of required facts");
     globalThis.__liveProviderTrace.push({
       phase: globalThis.__livePhase,
       stage,
       answerKeyMarkerPresent,
       opaqueCandidateIdPresent,
-      credentialMarkerPresent
+      credentialMarkerPresent,
+      nonExhaustiveJudgePolicyPresent
     });
     if (globalThis.__livePhase === "production" && (answerKeyMarkerPresent || credentialMarkerPresent)) {
       throw new Error("Evaluation or credential content reached a production prompt.");
@@ -591,7 +593,7 @@ vm.runInContext(`
             role: "system",
             content:
               "You are a strict holdout evaluator, not a user-facing assistant. Return JSON only with fields correct, score, missing_facts, contradictions, and reason. " +
-              "Judge the candidate against the answer key. Accept faithful paraphrases and equivalent numeric formats. Mark any forbidden contradiction incorrect. " +
+              "Judge the candidate against the answer key. The answer key is a minimum, non-exhaustive set of required facts, not a ban on additional relevant detail. Accept faithful paraphrases and equivalent numeric formats. Do not mark an answer incorrect merely because it includes an additional claim absent from the key; mark it incorrect only if a required fact is missing or the added claim contradicts the key or a forbidden pattern. Mark any forbidden contradiction incorrect. " +
               "For abstain_or_qualify cases, require both a clear limitation and the useful supported guidance. Exact rubric values and named channels are mandatory: vague timing is not equivalent to a stated exact time, and a generic communication platform is not equivalent to a specifically named website or service. Do not improve or rewrite the answer."
           },
           {
@@ -695,7 +697,18 @@ function orderedTokenWindowMatch(required, actual, maxGap = 5) {
 function factMatches(answerText, pattern) {
   const requiredTokens = canonicalTokens(pattern);
   const actualTokens = canonicalTokens(answerText);
-  return orderedTokenWindowMatch(requiredTokens, actualTokens);
+  if (orderedTokenWindowMatch(requiredTokens, actualTokens)) return true;
+
+  // Gold phrases describe semantic obligations, not a mandatory word order.
+  // Allow a compact same-sentence reordering while keeping exact numbers and
+  // the separate forbidden-pattern contradiction veto intact.
+  const weak = new Set(["a", "all", "an", "and", "for", "in", "of", "on", "the", "to"]);
+  const substantive = requiredTokens.filter((token) => !weak.has(token));
+  if (substantive.length < 3) return false;
+  return String(answerText || "").split(/[.!?\n]+/).some((sentence) => {
+    const sentenceTokens = canonicalTokens(sentence);
+    return substantive.every((required) => sentenceTokens.some((actual) => tokenEquivalent(required, actual)));
+  });
 }
 function numericFacts(value) {
   return canonicalTokens(value).filter((token) => /^\d+$/.test(token));
@@ -810,6 +823,12 @@ async function runJudge(question, answer, answerKey) {
 }
 
 async function runSelfTest() {
+  if (!factMatches(
+    "The Module 1 Chinese requirement is mandatory for all international students.",
+    "mandatory in module one for international students"
+  )) {
+    throw new Error("Required-fact scoring rejected a faithful same-sentence word-order paraphrase.");
+  }
   const testCase = {
     id: "synthetic-live-runner-self-test",
     variants: ["Which local map app is recommended instead of Google Maps in China, and what is its alternate name?"],
@@ -967,6 +986,9 @@ async function runSelfTest() {
   if (productionTrace.some((entry) => entry.answerKeyMarkerPresent)) throw new Error("Answer-key marker leaked into production prompts.");
   if (!evaluationTrace.some((entry) => entry.stage === "judge" && entry.answerKeyMarkerPresent)) {
     throw new Error("Self-test did not keep answer-key content inside the post-production judge phase.");
+  }
+  if (!evaluationTrace.some((entry) => entry.stage === "judge" && entry.nonExhaustiveJudgePolicyPresent)) {
+    throw new Error("The judge prompt no longer treats semantic answer keys as minimum, non-exhaustive requirements.");
   }
   if (
     productionTrace.some((entry) => entry.stage === "planner") ||
