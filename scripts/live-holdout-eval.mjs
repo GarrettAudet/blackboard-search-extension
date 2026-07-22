@@ -742,7 +742,7 @@ vm.runInContext(`
         apiKey: liveJudgeSettings.apiKey,
         model: liveJudgeSettings.model,
         temperature: 0,
-        maxTokens: 600,
+        maxTokens: 350,
         messages: [
           {
             role: "system",
@@ -1521,8 +1521,8 @@ async function runSelfTest() {
   }
   if (
     pipelineResult.sources.length > 5 ||
-    pipelineResult.sources.some((source, index) => source.promptSourceId !== index + 1 || source.text.length > 120000) ||
-    pipelineResult.sources.reduce((sum, source) => sum + source.text.length, 0) > 240000
+    pipelineResult.sources.some((source, index) => source.promptSourceId !== index + 1 || source.text.length > 45000) ||
+    pipelineResult.sources.reduce((sum, source) => sum + source.text.length, 0) > 90000
   ) {
     throw new Error("Self-test scoring exceeded the five-source provider-bounded document-context safety ceilings.");
   }

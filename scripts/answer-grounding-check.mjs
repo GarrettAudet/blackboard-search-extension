@@ -1141,10 +1141,10 @@ if (
 const safetyBoundedSource = source(
   "safety-bounded",
   "Safety-bounded source",
-  "x".repeat(120100) + "HARD_SAFETY_CEILING_SENTINEL"
+  "x".repeat(45100) + "HARD_SAFETY_CEILING_SENTINEL"
 );
 const safetyBoundedPrompt = context.answerPromptSources([safetyBoundedSource])[0].text;
-if (safetyBoundedPrompt.length !== 120000 || /HARD_SAFETY_CEILING_SENTINEL/.test(safetyBoundedPrompt)) {
+if (safetyBoundedPrompt.length !== 45000 || /HARD_SAFETY_CEILING_SENTINEL/.test(safetyBoundedPrompt)) {
   throw new Error("The expanded answer context exceeded its provider-bounded safety ceiling.");
 }
 

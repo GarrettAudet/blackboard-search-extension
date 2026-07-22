@@ -21,8 +21,8 @@ const MAX_CONTENT_CHARS = 500000;
 // GPT-4.1 mini can accept substantially more context than this. These are
 // application safety ceilings, not retrieval targets: ordinary selected
 // documents should be supplied in full whenever they fit below them.
-const MAX_ANSWER_SOURCE_TEXT_CHARS = 120000;
-const MAX_ANSWER_CONTEXT_TEXT_CHARS = 240000;
+const MAX_ANSWER_SOURCE_TEXT_CHARS = 45000;
+const MAX_ANSWER_CONTEXT_TEXT_CHARS = 90000;
 const MAX_PROMPT_SAFETY_SCAN_CHARS = MAX_ANSWER_SOURCE_TEXT_CHARS;
 const LOCAL_RESOURCE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 const LOCAL_RESOURCE_MAX_PREFLIGHT_FILES = 24;
@@ -10275,7 +10275,7 @@ async function selectSemanticEvidenceForApi(
         apiKey: state.settings.apiKey,
         model: state.settings.model || defaultModel(state.settings.provider),
         messages: selectorMessages,
-        maxTokens: 700,
+        maxTokens: 550,
         temperature: 0
       });
       const strictSelection = validateSemanticEvidenceSelection(response, facets, candidatePool);
@@ -10408,7 +10408,7 @@ async function selectSemanticEvidenceForApi(
           apiKey: state.settings.apiKey,
           model: state.settings.model || defaultModel(state.settings.provider),
           messages: semanticDeepReadMessages(resolvedQuestion, deepFacets, batch, batchIndex),
-          maxTokens: 700,
+          maxTokens: 550,
           temperature: 0
         });
         let deepSelection = validateSemanticDeepReadSelection(deepResponse, deepFacets, batch);
@@ -10518,7 +10518,7 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
     apiKey: state.settings.apiKey,
     model: state.settings.model || defaultModel(state.settings.provider),
     messages,
-    maxTokens: 1400,
+    maxTokens: 850,
     temperature: 0
   });
   const parseResult = structuredCitedAnswerParseResult(response, context.length);
@@ -10992,7 +10992,7 @@ async function reviewApiAnswer(
       apiKey: state.settings.apiKey,
       model: state.settings.model || defaultModel(state.settings.provider),
       messages,
-      maxTokens: 1200,
+      maxTokens: 550,
       temperature: 0
     });
     const parseResult = structuredCitedAnswerParseResult(response, sourceList.length);
@@ -11037,7 +11037,7 @@ async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery
     apiKey: state.settings.apiKey,
     model: state.settings.model || defaultModel(state.settings.provider),
     messages,
-    maxTokens: 1100,
+    maxTokens: 650,
     temperature: 0
   });
   const parseResult = structuredCitedAnswerParseResult(response, sourceList.length);
