@@ -8969,6 +8969,7 @@ function groundedAnswerPolicyInstruction() {
     "When useful sources conflict, state the conflict, identify which guidance controls, and do not invent a compromise or reconciliation that no source states. " +
     "Preserve timing, ordering, conditions, quantities, and named subjects exactly as stated by the controlling excerpt. Source wording controls: never turn before or after an event into at or during that event, or otherwise soften a sequence boundary. " +
     "When the user requests practical guidance and the excerpt gives an exact time, duration, quantity, contact, identifier, or named location, state that exact value rather than replacing it with a vague approximation. " +
+    "If an excerpt states an explicit count but the nearby item list is incomplete, duplicated, transcript-noisy, or does not add up to that count, state the explicit count and do not enumerate unsupported or inconsistent items; say only what the excerpt itself reliably lists. " +
     "When the user requests an exact current value but the excerpts only say where to obtain it, explicitly state that the indexed sources do not list the value, then identify the source-provided route for obtaining it. " +
     "Never add an unstated purpose, rationale, causal explanation, assurance, or consequence merely because it seems plausible; omit it unless a cited excerpt explicitly states it. " +
     "When sources do not conflict, combine complementary facts without implying that community material is official. " +
