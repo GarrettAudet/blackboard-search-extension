@@ -537,24 +537,33 @@ vm.runInContext(`
       );
       const sources = evidenceSelection.sources.slice(0, 8);
       const synthesisSources = expandAnswerSourcesForSynthesis(query, sources, memory, plan);
-      const promptSources = answerPromptSources(synthesisSources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
-      const answer = await generateVerifiedApiAnswer(query, synthesisSources, memory, retrievalQuery, plan);
+      const generationSources = safeAnswerSourceResults(synthesisSources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
+      const promptSources = answerPromptSources(generationSources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
+      const answer = await generateVerifiedApiAnswer(query, generationSources, memory, retrievalQuery, plan);
       const cleanNotFound = isCleanNotFoundAnswer(answer?.text || "");
       const validation = cleanNotFound
         ? { ok: true, reasons: [], cleanNotFound: true }
-        : citedAnswerValidation(query, answer, synthesisSources, retrievalQuery);
+        : citedAnswerValidation(query, answer, generationSources, retrievalQuery);
       return {
         plan,
         retrievalQuery,
         retrievalQueries,
         sources: promptSources.map((promptSource, index) => ({
-          documentId: synthesisSources[index]?.source_pack_document_id || synthesisSources[index]?.resource_id || sourceDedupeKey(synthesisSources[index]),
+          documentId: generationSources[index]?.source_pack_document_id || generationSources[index]?.resource_id || sourceDedupeKey(generationSources[index]),
           title: promptSource.title,
           text: String(promptSource.text || ""),
-          score: Number(synthesisSources[index]?.score) || 0,
+          score: Number(generationSources[index]?.score) || 0,
           promptSourceId: promptSource.id
         })),
         answer: { text: String(answer?.text || ""), sourceCount: Array.isArray(answer?.sources) ? answer.sources.length : 0 },
+        pipelineDiagnostics: (Array.isArray(answer?.pipeline_diagnostics) ? answer.pipeline_diagnostics : []).map((item) => ({
+          phase: String(item?.phase || "").slice(0, 40),
+          accepted: Boolean(item?.accepted),
+          deterministic_ok: item?.deterministic_ok === null ? null : Boolean(item?.deterministic_ok),
+          semantic_verifier_called: Boolean(item?.semantic_verifier_called),
+          semantic_verdict: String(item?.semantic_verdict || "").slice(0, 40),
+          reason_codes: (Array.isArray(item?.reason_codes) ? item.reason_codes : []).map((value) => String(value).slice(0, 80)).slice(0, 12)
+        })),
         validation: { ok: Boolean(validation.ok), reasons: [...(validation.reasons || [])], cleanNotFound },
         evidenceSelection: {
           mode: evidenceSelection.mode,
@@ -825,7 +834,14 @@ async function runSelfTest() {
   const pipelineResult = await runProductionPipeline(testCase.variants[0]);
   const score = scoreAnswer(testCase, pipelineResult);
   if (!score.passed) {
-    throw new Error("Mocked production pipeline did not pass scoring: " + JSON.stringify({ score, pipelineResult }, null, 2));
+    context.__selfTestExactnessQuery = testCase.variants[0];
+    context.__selfTestExactnessAnswer = context.__liveMockAnswer;
+    context.__selfTestExactnessSources = pipelineResult.sources;
+    const exactnessReasons = vm.runInContext(
+      "missingPracticalExactEvidenceReasons(__selfTestExactnessQuery, __selfTestExactnessAnswer, __selfTestExactnessSources)",
+      context
+    );
+    throw new Error("Mocked production pipeline did not pass scoring: " + JSON.stringify({ score, exactnessReasons, pipelineResult }, null, 2));
   }
   if (
     pipelineResult.sources.length > 5 ||
@@ -963,7 +979,7 @@ async function runSelfTest() {
   if (productionTrace.some((entry) => entry.credentialMarkerPresent)) {
     throw new Error("Provider credentials leaked into a production prompt.");
   }
-  console.log(`live-holdout-eval ${suite} self-test passed (no network; standalone planner bypass -> semantic selector/deep-read -> adaptive full-document synthesis -> grounding verifier with bounded fresh repair/recovery; follow-up planner gate; high context safety ceilings; answer-key/judge separation)`);
+  console.log(`live-holdout-eval ${suite} self-test passed (no network; standalone planner bypass -> semantic selector/deep-read -> adaptive full/focused parent-document synthesis -> grounding verifier with bounded fresh repair/recovery; follow-up planner gate; high context safety ceilings; answer-key/judge separation)`);
 }
 
 if (selfTest) {
@@ -1047,6 +1063,7 @@ for (let index = 0; index < schedule.length; index += 1) {
     providerStages,
     providerCalls: providerStages.length,
     sourceDocumentIds: (pipelineResult?.sources || []).slice(0, 5).map((source) => source.documentId),
+    pipelineDiagnostics: pipelineResult?.pipelineDiagnostics || [],
     answer: pipelineResult?.answer?.text || ""
   });
   if (!jsonOnly) {
@@ -1200,6 +1217,7 @@ const report = {
       row.markerLeak ? "answer_key_marker_leak" : ""
     ].filter(Boolean),
     provider_stages: row.providerStages,
+    pipeline_diagnostics: row.pipelineDiagnostics,
     source_document_ids: row.sourceDocumentIds,
     ...(showDetails ? { answer: row.answer, deterministic_score: row.score, judge_result: row.judge } : {})
   }))

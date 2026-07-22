@@ -4793,6 +4793,7 @@ function groundingValidationReasonCodes(validation) {
     [/too short/i, "answer_too_short"],
     [/every factual paragraph or checklist item/i, "incomplete_citation_coverage"],
     [/comparable number, date, time, amount, or count/i, "numeric_conflict"],
+    [/exact value from query-relevant practical guidance/i, "missing_exact_evidence_value"],
     [/named entity/i, "named_entity_conflict"],
     [/negation, permission, obligation, or availability/i, "polarity_conflict"],
     [/clean not-found answer must not cite/i, "cited_abstention"],
@@ -5013,7 +5014,7 @@ function specificAnswerFacetBindingScore(facetText, source) {
           return Boolean(match && (requestedTemporalUnits.has("*") || requestedTemporalUnits.has(match[1])));
         });
         const hasTemporalFact = facts.some((fact) => /^(?:date|time):/.test(fact)) || compatibleMeasure;
-        const signals = Array.from(String(clause || "").matchAll(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?|\b\d{1,2}(?::?\d{2})\s*(?:a\.?m\.?|p\.?m\.?)|\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)\b/gi));
+        const signals = Array.from(String(clause || "").matchAll(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?|\b\d{1,2}(?:(?::|\.)?\d{2})\s*(?:a\.?m\.?|p\.?m\.?)|\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)\b/gi));
         if (!hasTemporalFact || !signals.length) continue;
         for (const signal of signals) {
           const window = specificAnswerBindingWindow(clause, signal, /\b(?:deadline|due|starts?|begins?|opens?|closes?|ends?|arrives?|departs?|arrival|departure|lasts?|takes?|runs?|before|after|by|on|at)\b/gi, 6, 5);
@@ -5169,6 +5170,16 @@ async function evaluateGroundedAnswerCandidate(
       ok: false,
       reasons: [...validation.reasons, "Selected evidence contains a concrete answer to at least one requested facet; abstention is not permitted."]
     };
+  }
+  if (!cleanAbstention) {
+    const exactnessReasons = missingPracticalExactEvidenceReasons(query, aligned.text, answerSources);
+    if (exactnessReasons.length) {
+      validation = {
+        ...validation,
+        ok: false,
+        reasons: [...validation.reasons, ...exactnessReasons]
+      };
+    }
   }
   if (!validation.ok) {
     return {
@@ -6392,10 +6403,40 @@ function shouldExpandParentForDocumentWideQuery(query, source, queryPlan = null)
   return source?.source_pack_document_id === "beijing-transportation-workshop";
 }
 
+function queryFocusedParentContextText(query, selectedText, fullText, queryPlan = null) {
+  const resolved = String(queryPlan?.rewritten_question || query || "").trim();
+  const rawFacets = resolved
+    .replace(/[\u2013\u2014;+]/g, ",")
+    .split(/(?:[,?!]|\.(?:\s|$)|\b(?:and|plus)\b)/i)
+    .map((part) => part.replace(/^\s*(?:explain|summarize|describe|state|list|clarify|tell me)\s+/i, "").trim())
+    .filter((part) => part.length >= 5);
+  const facets = Array.from(new Set([
+    resolved,
+    ...semanticEvidenceFacets(resolved, queryPlan).map((facet) => facet.text),
+    ...rawFacets
+  ]));
+  const snippets = [];
+  const seen = new Set();
+  const add = (value) => {
+    const clean = cleanupTaskPhrase(value);
+    const key = normalizeText(clean);
+    if (!clean || !key || seen.has(key)) return;
+    seen.add(key);
+    snippets.push(clean);
+  };
+
+  add(selectedText);
+  for (const facet of facets) {
+    for (const clause of specificAnswerRelevantClauses(facet, fullText).slice(0, 12)) add(clause);
+  }
+  return clampText(snippets.join("\n"), MAX_ANSWER_SOURCE_TEXT_CHARS);
+}
+
 function expandAnswerSourcesForSynthesis(query, sources, memory = [], queryPlan = null) {
   const input = Array.isArray(sources) ? sources : [];
-  if (!input.length || (!isDocumentWideSynthesisQuery(query, memory, queryPlan) &&
-      !isMultiFacetSynthesisQuery(query, queryPlan))) return input;
+  const documentWide = isDocumentWideSynthesisQuery(query, memory, queryPlan);
+  const multiFacet = isMultiFacetSynthesisQuery(query, queryPlan);
+  if (!input.length || (!documentWide && !multiFacet)) return input;
 
   const visible = input.slice(0, 5);
   let totalChars = visible.reduce((sum, source) => sum + cleanIndexedText(source?.text || "").length, 0);
@@ -6404,6 +6445,30 @@ function expandAnswerSourcesForSynthesis(query, sources, memory = [], queryPlan 
     const parent = parentDocumentContextForResult(source);
     const selectedText = cleanIndexedText(source?.text || "");
     const fullText = parent.text;
+
+    if (!documentWide && multiFacet && fullText) {
+      const focusedText = queryFocusedParentContextText(query, selectedText, fullText, queryPlan);
+      const additionalChars = Math.max(0, focusedText.length - selectedText.length);
+      if (focusedText && totalChars + additionalChars <= MAX_ANSWER_CONTEXT_TEXT_CHARS) {
+        totalChars += additionalChars;
+        return {
+          ...source,
+          text: focusedText,
+          selected_excerpt_text: selectedText,
+          matched_resource_ids: parent.resourceIds.length ? parent.resourceIds : source.matched_resource_ids,
+          source_pack_page_range: parent.pageRanges.join(", ") || source.source_pack_page_range || "",
+          matched_chunk_count: Math.max(Number(source.matched_chunk_count) || 1, parent.resourceIds.length || 1),
+          document_context_requested: true,
+          document_context_scope: "query_focused_parent_excerpts",
+          document_context_complete: false,
+          document_parent_scanned_complete: parent.complete,
+          document_context_char_count: focusedText.length,
+          document_context_available_chars: fullText.length,
+          document_context_missing_body_count: parent.missingBodyCount
+        };
+      }
+    }
+
     const additionalChars = Math.max(0, fullText.length - selectedText.length);
     const fitsSource = fullText.length <= MAX_ANSWER_SOURCE_TEXT_CHARS;
     const fitsRequest = totalChars + additionalChars <= MAX_ANSWER_CONTEXT_TEXT_CHARS;
@@ -6414,6 +6479,7 @@ function expandAnswerSourcesForSynthesis(query, sources, memory = [], queryPlan 
         document_context_requested: true,
         document_context_scope: "selected_excerpts",
         document_context_complete: false,
+        document_parent_scanned_complete: Boolean(parent.complete),
         document_context_char_count: selectedText.length,
         document_context_available_chars: fullText.length,
         document_context_limit_reason: !fitsSource ? "per_source_safety_ceiling" : "total_request_safety_ceiling"
@@ -6431,13 +6497,13 @@ function expandAnswerSourcesForSynthesis(query, sources, memory = [], queryPlan 
       document_context_requested: true,
       document_context_scope: parent.complete ? "full_indexed_document" : "available_indexed_document",
       document_context_complete: parent.complete,
+      document_parent_scanned_complete: parent.complete,
       document_context_char_count: fullText.length,
       document_context_available_chars: fullText.length,
       document_context_missing_body_count: parent.missingBodyCount
     };
   });
 }
-
 function answerEvidenceTextForSource(source) {
   const retrievedText = cleanIndexedText(source?.text || "");
   return retrievedText || fullTextForResult(source);
@@ -6459,7 +6525,15 @@ function cleanupTaskPhrase(value) {
 }
 function splitSentences(value) {
   const clean = cleanupTaskPhrase(value);
-  return clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((sentence) => cleanupTaskPhrase(sentence)).filter(Boolean) || [];
+  const protectedClockPeriods = clean
+    .replace(/(\d)\.(?=\d)/g, "$1__numeric_period__")
+    .replace(/\b([ap])\.\s*m\./gi, "$1__clock_period__m__clock_period__");
+  return protectedClockPeriods
+    .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+    ?.map((sentence) => cleanupTaskPhrase(
+      sentence.replace(/__numeric_period__/g, ".").replace(/__clock_period__/g, ".")
+    ))
+    .filter(Boolean) || [];
 }
 
 function extractDateLikeText(value) {
@@ -6640,7 +6714,7 @@ function canonicalNumericFacts(value) {
     facts.add(`number:${Number(match[2])}`);
     if (match[3]) facts.add(`number:${Number(match[3])}`);
   }
-  for (const match of normalized.matchAll(/\b(\d{1,2})(?::(\d{2}))\s*(am|pm)\b/g)) {
+  for (const match of normalized.matchAll(/\b(\d{1,2})(?::|\.)(\d{2})\s*(am|pm)\b/g)) {
     remember(match, `time:${Number(match[1])}:${match[2]}:${match[3]}`);
   }
   for (const match of normalized.matchAll(/\b(\d{1,2})(\d{2})\s*(am|pm)\b/g)) {
@@ -6691,6 +6765,110 @@ function canonicalNumericFacts(value) {
   return Array.from(facts);
 }
 
+function practicalGuidanceQuestion(value) {
+  return /\b(?:advice|advise|guidance|recommend(?:ation|ations|ed)?|should|plan(?:ning)?|visit(?:or|ors|ing)?|reserve|book|prepare|navigate|how\s+(?:do|can|should)|what\s+do\s+i\s+need)\b/.test(
+    normalizeText(value)
+  );
+}
+
+function practicalGuidanceClause(value) {
+  return /\b(?:advis(?:e|es|ed)|recommend(?:s|ed|ation|ations)?|should|must|need(?:s|ed)?|plan(?:s|ned)?|reserve(?:s|d)?|book(?:s|ed)?|allow(?:s|ed)?|arrive(?:s|d)?|depart(?:s|ed)?|schedule(?:s|d)?|if\s+you\s+(?:go|visit|arrive|leave|book|reserve)|when\s+(?:visiting|planning|booking|arriving|leaving))\b/.test(
+    normalizeText(value)
+  );
+}
+
+function isStructuredExactEvidenceFact(fact) {
+  return /^(?:time|date|measure|money|count|percent):/.test(String(fact || ""));
+}
+
+function readableExactEvidenceFact(fact) {
+  let match = String(fact || "").match(/^time:(\d+):(\d{2}):(am|pm)$/);
+  if (match) return match[1] + ":" + match[2] + " " + (match[3] === "am" ? "a.m." : "p.m.");
+  match = String(fact || "").match(/^date:([a-z]+)-(\d+)(?:-(\d{4}))?$/);
+  if (match) return match[1] + " " + match[2] + (match[3] ? ", " + match[3] : "");
+  match = String(fact || "").match(/^measure:([^:]+):(.+)$/);
+  if (match) return match[1] + " " + match[2];
+  match = String(fact || "").match(/^money:([^:]+):(.+)$/);
+  if (match) return match[1] + " " + match[2].toUpperCase();
+  match = String(fact || "").match(/^count:([^:]+):(.+)$/);
+  if (match) return match[1] + " " + match[2];
+  match = String(fact || "").match(/^percent:([^:]+)$/);
+  if (match) return match[1] + "%";
+  return String(fact || "");
+}
+
+function missingPracticalExactEvidenceReasons(query, candidateText, sources) {
+  if (!practicalGuidanceQuestion(query) || !String(candidateText || "").trim()) return [];
+  const rawFacets = String(query || "")
+    .replace(/[\u2013\u2014;+]/g, ",")
+    .split(/(?:[,?!]|\.(?:\s|$)|\b(?:and|plus)\b)/i)
+    .map((part) => part.replace(/^\s*(?:compare|explain|summarize|describe|state|list|clarify|tell me)\s+/i, "").trim())
+    .filter((part) => part.length >= 5);
+  const facets = Array.from(new Set(
+    [query, ...questionFacetRetrievalQueries(query, 6), ...rawFacets]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  ));
+  const candidateFacts = new Set(canonicalNumericFacts(candidateText));
+  const requestedKinds = requestedSpecificAnswerKinds(query);
+  const countTargetTerms = specificAnswerFacetTargetTerms(query, "count");
+  const exactFactWasRequested = (fact) => {
+    if (fact.startsWith("time:")) return true;
+    if (requestedKinds.has("temporal") && /^(?:date|measure):/.test(fact)) return true;
+    if (requestedKinds.has("money") && /^(?:money|percent):/.test(fact)) return true;
+    const countMatch = requestedKinds.has("count") && String(fact || "").match(/^count:[^:]+:(.+)$/);
+    return Boolean(countMatch && specificAnswerBindingHasTarget(countTargetTerms, countMatch[1]));
+  };
+  const missing = new Map();
+
+  for (const source of Array.isArray(sources) ? sources : []) {
+    const body = answerEvidenceTextForSource(source);
+    if (!body) continue;
+    const sourceClauses = splitSentences(body);
+    const normalizedSourceClauses = sourceClauses.map(normalizeText);
+
+    for (const facet of facets) {
+      if (!specificAnswerRelevantClauses(facet, candidateText).length) continue;
+      const anchorKeys = new Set(specificAnswerRelevantClauses(facet, body).map(normalizeText));
+      if (!anchorKeys.size) continue;
+      const anchorIndices = normalizedSourceClauses
+        .map((clause, index) => anchorKeys.has(clause) ? index : -1)
+        .filter((index) => index >= 0);
+      if (!anchorIndices.length) continue;
+
+      const contextualIndices = new Set();
+      for (const anchorIndex of anchorIndices) {
+        // A transcript may introduce a venue and state its exact advice several
+        // utterances later. Scan the nearby section, but only enforce fact types
+        // the question requested (plus clock times that vague wording can hide).
+        const start = Math.max(0, anchorIndex - 12);
+        const end = Math.min(sourceClauses.length, anchorIndex + 13);
+        for (let index = start; index < end; index += 1) contextualIndices.add(index);
+      }
+
+      for (const sourceIndex of contextualIndices) {
+        const sourceClause = sourceClauses[sourceIndex];
+        if (!practicalGuidanceClause(sourceClause)) continue;
+        const exactFacts = canonicalNumericFacts(sourceClause)
+          .filter(isStructuredExactEvidenceFact)
+          .filter(exactFactWasRequested);
+        if (!exactFacts.length) continue;
+        const topicStart = Math.max(0, sourceIndex - 6);
+        const topicEnd = Math.min(sourceClauses.length, sourceIndex + 7);
+        const topicNeighborhood = sourceClauses.slice(topicStart, topicEnd).join(" ");
+        if (!specificAnswerRelevantClauses(candidateText, topicNeighborhood).length) continue;
+        for (const fact of exactFacts) {
+          if (candidateFacts.has(fact)) continue;
+          missing.set(fact, readableExactEvidenceFact(fact));
+        }
+      }
+    }
+  }
+
+  return Array.from(missing.values()).slice(0, 8).map((value) =>
+    "The answer replaced or omitted an exact value from query-relevant practical guidance: " + value + "."
+  );
+}
 function sourceSupportsCanonicalNumericFact(sourceFacts, fact, sourceText) {
   if (sourceFacts.has(fact)) return true;
   if (fact.startsWith("date:")) {
@@ -7331,6 +7509,7 @@ function answerPromptSource(result, index, textLimit = MAX_ANSWER_SOURCE_TEXT_CH
     url: clampText(String(result.url || ""), 600),
     document_coverage: clampText(String(result.document_context_scope || "selected_excerpts"), 60),
     document_coverage_complete: Boolean(result.document_context_complete),
+    document_parent_scanned_complete: Boolean(result.document_parent_scanned_complete),
     document_context_chars: Math.max(0, Number(result.document_context_char_count) || cleanIndexedText(result.text).length),
     document_context_available_chars: Math.max(0, Number(result.document_context_available_chars) || cleanIndexedText(result.text).length),
     document_context_missing_bodies: Math.max(0, Number(result.document_context_missing_body_count) || 0),
@@ -7744,6 +7923,7 @@ function groundedAnswerPolicyInstruction() {
     "Never add an unstated purpose, rationale, causal explanation, assurance, or consequence merely because it seems plausible; omit it unless a cited excerpt explicitly states it. " +
     "When sources do not conflict, combine complementary facts without implying that community material is official. " +
     "Use each source's document_coverage field literally. For full_indexed_document, the entire indexed parent document was supplied; broad summaries must cover its distinct substantive topics. " +
+    "For query_focused_parent_excerpts, the complete indexed parent was scanned locally but only query-relevant excerpts were supplied; answer those details without claiming an exhaustive document summary. " +
     "For selected_excerpts or available_indexed_document, answer supported details but never imply the response exhaustively covers the parent document. "
   );
 }
@@ -7752,7 +7932,7 @@ function structuredAnswerContractInstruction() {
   return (
     "Return exactly one JSON object with exactly two fields: not_found and answer_blocks. " +
     "not_found must be a Boolean. answer_blocks must be an array of zero to eight objects, each with exactly text and source_ids. " +
-    "Each text value is one synthesized user-facing paragraph or checklist item and must not contain citation markers. " +
+    "Each text value is one synthesized user-facing paragraph or checklist item and must not contain citation markers. Group related list entries into one answer block instead of creating a separate block for every item. " +
     "Each source_ids value is an array of one to three integer source IDs that directly support every factual claim in that block. " +
     "Use not_found=false with at least one answer block whenever any excerpt supports a useful answer, even if other requested facets are absent. " +
     "Use exactly {\"not_found\":true,\"answer_blocks\":[]} only when no excerpt supports any useful answer. " +
@@ -7765,11 +7945,14 @@ function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
   if (!parsed || !objectHasOnlyKeys(parsed, ["answer_blocks", "not_found"])) return "";
   if (typeof parsed.not_found !== "boolean" || !Array.isArray(parsed.answer_blocks)) return "";
   if (parsed.not_found) return parsed.answer_blocks.length === 0 ? CLEAN_INDEXED_NOT_FOUND_ANSWER : "";
-  if (!parsed.answer_blocks.length || parsed.answer_blocks.length > 8) return "";
+  // The contract asks for at most eight blocks. Accept a bounded over-segmented
+  // response only when adjacent blocks can be safely coalesced without changing
+  // their source bindings; this prevents a correct long list from failing closed.
+  if (!parsed.answer_blocks.length || parsed.answer_blocks.length > 16) return "";
 
   const maximumSourceId = Math.max(0, Math.min(8, Math.floor(Number(sourceCount) || 0)));
   if (!maximumSourceId) return "";
-  const renderedBlocks = [];
+  const normalizedBlocks = [];
   for (const block of parsed.answer_blocks) {
     if (!block || typeof block !== "object" || Array.isArray(block)) return "";
     if (!objectHasOnlyKeys(block, ["source_ids", "text"])) return "";
@@ -7785,13 +7968,33 @@ function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
       .replace(/\s+/g, " ")
       .trim();
     if (!blockText || isCouldNotFindAnswer(blockText) || looksLikeReviewerLeak(blockText) || looksLikeRawEvidenceDump(blockText)) return "";
-    const citationText = sourceIds.map((id) => "[" + id + "]").join(", ");
-    const terminalPunctuation = blockText.match(/[.!?]$/)?.[0] || "";
-    const citedText = terminalPunctuation
-      ? blockText.slice(0, -1).trimEnd() + " " + citationText + terminalPunctuation
-      : blockText + " " + citationText;
-    renderedBlocks.push(citedText);
+    normalizedBlocks.push({ text: blockText, sourceIds });
   }
+
+  let answerBlocks = normalizedBlocks;
+  if (answerBlocks.length > 8) {
+    const coalesced = [];
+    for (const block of answerBlocks) {
+      const key = [...block.sourceIds].sort((left, right) => left - right).join(",");
+      const previous = coalesced.at(-1);
+      if (previous?.key === key) {
+        const separator = /[.!?]$/.test(previous.text) ? " " : ". ";
+        previous.text += separator + block.text;
+      } else {
+        coalesced.push({ ...block, key });
+      }
+    }
+    answerBlocks = coalesced;
+    if (answerBlocks.length > 8) return "";
+  }
+
+  const renderedBlocks = answerBlocks.map((block) => {
+    const citationText = block.sourceIds.map((id) => "[" + id + "]").join(", ");
+    const terminalPunctuation = block.text.match(/[.!?]$/)?.[0] || "";
+    return terminalPunctuation
+      ? block.text.slice(0, -1).trimEnd() + " " + citationText + terminalPunctuation
+      : block.text + " " + citationText;
+  });
   return cleanAnswerText(
     renderedBlocks.length === 1
       ? renderedBlocks[0]
@@ -7799,7 +8002,6 @@ function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
     maximumSourceId
   );
 }
-
 function objectHasOnlyKeys(value, allowedKeys) {
   const keys = Object.keys(value || {}).sort();
   const allowed = [...allowedKeys].sort();

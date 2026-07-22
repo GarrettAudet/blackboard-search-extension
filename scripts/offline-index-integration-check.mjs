@@ -414,6 +414,16 @@ const multiFacetContextContract = clone(vm.runInContext(`(() => {
       ]
     },
     {
+      query: "Which major costs and equipment does the program funding include, and can a partner live with me in the College?",
+      documentId: "survival-guide",
+      checks: [
+        /tuition, room and board, travel, study tours, books/i,
+        /Lenovo laptop and a smartphone, health insurance, and a personal stipend/i,
+        /Partners may (?:come to|accompany you to) Beijing/i,
+        /partners may not live(?: or stay overnight)? in (?:the )?(?:College|building)/i
+      ]
+    },
+    {
       query: "For a family transfer into my BOC account, what four pieces of information does the guide specify?",
       documentId: "survival-guide",
       checks: [
@@ -439,6 +449,9 @@ const multiFacetContextContract = clone(vm.runInContext(`(() => {
       found: true,
       coverage: prompt.document_coverage,
       complete: prompt.document_coverage_complete,
+      parentScannedComplete: prompt.document_parent_scanned_complete,
+      promptChars: prompt.text.length,
+      availableChars: prompt.document_context_available_chars,
       deepReadCanBeSkipped: isMultiFacetSynthesisQuery(item.query, plan) && completeParentDocumentsFitAnswerContext([hit]),
       checks: item.checks.map((pattern) => pattern.test(prompt.text))
     };
@@ -446,10 +459,12 @@ const multiFacetContextContract = clone(vm.runInContext(`(() => {
 })()`, sidepanelContext));
 for (const item of multiFacetContextContract) {
   assert.equal(item.found, true, `The multi-facet query did not retrieve ${item.documentId}.`);
-  assert.equal(item.coverage, "full_indexed_document", `The multi-facet query did not fully expand ${item.documentId}.`);
-  assert.equal(item.complete, true, `The multi-facet context for ${item.documentId} was incomplete.`);
+  assert.equal(item.coverage, "query_focused_parent_excerpts", `The multi-facet query did not use focused parent context for ${item.documentId}.`);
+  assert.equal(item.complete, false, `Focused multi-facet excerpts incorrectly claimed exhaustive document coverage for ${item.documentId}.`);
+  assert.equal(item.parentScannedComplete, true, `The complete indexed parent was not scanned before focusing ${item.documentId}.`);
+  assert.ok(item.promptChars < item.availableChars, `Focused context did not reduce the prompt for ${item.documentId}.`);
   assert.equal(item.deepReadCanBeSkipped, true, `The complete multi-facet parent ${item.documentId} still required a paid deep-read call.`);
-  assert.ok(item.checks.every(Boolean), `The multi-facet prompt omitted a required fact from ${item.documentId}.`);
+  assert.ok(item.checks.every(Boolean), `The multi-facet prompt omitted a required fact from ${item.documentId}.` + JSON.stringify(item));
 }
 const transportationContextContract = clone(vm.runInContext(`(() => {
   const query = "How should I navigate transportation in Beijing?";
@@ -474,6 +489,11 @@ const transportationContextContract = clone(vm.runInContext(`(() => {
     coverage: prompt.document_coverage,
     complete: prompt.document_coverage_complete,
     hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
+    vagueTempleExactnessReasons: missingPracticalExactEvidenceReasons(
+      query,
+      "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven in the morning for park activities. Reserve the National Museum seven days ahead and allow at least four hours [1].",
+      [expanded[0]]
+    ),
     hasFourWays: /four ways to get around in Beijing/i.test(prompt.text),
     facets
   };
@@ -492,7 +512,7 @@ for (const expectedFacet of ["subway", "ride hailing", "shared bikes", "bus"]) {
 }
 
 const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
-  const query = "Which three historical attractions did the Discovering Beijing webinar highlight, and what practical planning advice did it give for each?";
+  const query = "Compare the webinar's visitor advice for the Forbidden City, Temple of Heaven, and National Museum of China.";
   const retrievalQuery = enhanceRetrievalQueryForIntent(query, query, defaultRagPlan(query, query));
   const hit = searchIndex(retrievalQuery, 24).find((result) =>
     result.source_pack_id === "schwarzman-c11" &&
@@ -512,6 +532,11 @@ const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
     coverage: prompt.document_coverage,
     complete: prompt.document_coverage_complete,
     hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
+    vagueTempleExactnessReasons: missingPracticalExactEvidenceReasons(
+      query,
+      "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven in the morning for park activities. Reserve the National Museum seven days ahead and allow at least four hours [1].",
+      [expanded[0]]
+    ),
     hasForbiddenCityGuide: /Forbidden City/i.test(prompt.text) && /get an English tour guide/i.test(prompt.text),
     hasTempleMorning: /Temple of Heaven/i.test(prompt.text) && /If you go at 6\.30 a\.m\./i.test(prompt.text),
     hasMuseumPlanning: /National Museum China/i.test(prompt.text) && /reserve up to seven days in advance/i.test(prompt.text) && /requires at least four hours/i.test(prompt.text)
@@ -524,6 +549,7 @@ assert.equal(discoveringBeijingContextContract.complete, true, "The Discovering 
 assert.equal(discoveringBeijingContextContract.hasEveryBody, true, "The Discovering Beijing prompt omitted an indexed transcript chunk.");
 assert.equal(discoveringBeijingContextContract.hasForbiddenCityGuide, true, "The full synthesis prompt omitted the Forbidden City guide advice.");
 assert.equal(discoveringBeijingContextContract.hasTempleMorning, true, "The full synthesis prompt omitted the Temple of Heaven morning advice.");
+assert.ok(discoveringBeijingContextContract.vagueTempleExactnessReasons.some((reason) => /6:30 a\.m\./.test(reason)), "The actual three-site query allowed vague wording to replace the 6:30 a.m. recommendation: " + JSON.stringify(discoveringBeijingContextContract.vagueTempleExactnessReasons));
 assert.equal(discoveringBeijingContextContract.hasMuseumPlanning, true, "The full synthesis prompt omitted the National Museum planning advice.");
 const authorityQuery = "official X1 visa JW202 admission notice residence permit within 30 days";
 sidepanelContext.__authorityQuery = authorityQuery;

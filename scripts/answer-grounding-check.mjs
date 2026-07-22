@@ -147,6 +147,36 @@ function source(id, title, text, extra = {}) {
   };
 }
 
+const survivalGuideFullText = resources
+  .filter((resource) => resource.source_pack_document_id === "survival-guide")
+  .map((resource) => contentStore[resource.id] || "")
+  .filter(Boolean)
+  .join("\n\n");
+const survivalGuideFullSource = source(
+  "survival-guide-full",
+  "Schwarzman Scholars Survival Guide.pdf",
+  survivalGuideFullText,
+  {
+    source_pack_document_id: "survival-guide",
+    source_pack_document_title: "Schwarzman Scholars Survival Guide.pdf",
+    document_context_scope: "full_indexed_document",
+    document_context_complete: true,
+    document_parent_scanned_complete: true
+  }
+);
+if (context.semanticCandidateHasInstructionInjection(survivalGuideFullSource)) {
+  throw new Error("The complete Survival Guide was falsely classified as prompt injection and removed from answer context.");
+}
+const survivalGuideCoveragePrompt = context.formatSourcesForPrompt([
+  context.answerPromptSource(survivalGuideFullSource, 0)
+]);
+if (
+  !/document_coverage: full_indexed_document/.test(survivalGuideCoveragePrompt) ||
+  !/document_coverage_complete: true/.test(survivalGuideCoveragePrompt) ||
+  !/document_parent_scanned_complete: true/.test(survivalGuideCoveragePrompt)
+) {
+  throw new Error("Answer prompts omitted parent-document coverage metadata.");
+}
 const supportedVerdict = JSON.stringify({
   answerable: true,
   supported: true,
@@ -187,6 +217,18 @@ if (
 }
 
 
+const oversegmentedFundingResponse = context.structuredCitedAnswerFromResponse(JSON.stringify({
+  not_found: false,
+  answer_blocks: [
+    "Tuition is included.", "Room and board are included.", "Travel is included.",
+    "Study tours are included.", "Books are included.", "A Lenovo laptop is included.",
+    "A smartphone is included.", "Health insurance is included.",
+    "A personal stipend is included.", "A partner may come to Beijing but may not live in the College."
+  ].map((text) => ({ text, source_ids: [1] }))
+}), 1);
+if (!oversegmentedFundingResponse || (oversegmentedFundingResponse.match(/\[1\]/g) || []).length !== 1) {
+  throw new Error("A valid over-segmented answer with identical source bindings was not safely coalesced.");
+}
 function validation(query, answer, sources) {
   return context.citedAnswerValidation(query, { text: answer, sources }, sources, query);
 }
@@ -709,19 +751,58 @@ const exactTimeSource = source(
 );
 const vagueTimeAnswer = "Visit the Temple of Heaven early in the morning to see the park activities [1].";
 const exactTimeAnswer = "Visit the Temple of Heaven at 6:30 a.m. to see the morning park activities [1].";
+const vagueTimeExactnessReasons = context.missingPracticalExactEvidenceReasons(
+  exactTimeQuery,
+  vagueTimeAnswer,
+  [exactTimeSource]
+);
+if (!vagueTimeExactnessReasons.some((reason) => /6:30 a\.m\./.test(reason))) {
+  throw new Error("The deterministic exactness guard did not identify the omitted 6:30 a.m. value: " + JSON.stringify({
+    practicalQuestion: context.practicalGuidanceQuestion(exactTimeQuery),
+    practicalClause: context.practicalGuidanceClause(exactTimeSource.text),
+    sourceClauses: context.specificAnswerRelevantClauses(exactTimeQuery, exactTimeSource.text),
+    answerClauses: context.specificAnswerRelevantClauses(exactTimeSource.text, vagueTimeAnswer),
+    sourceFacts: context.canonicalNumericFacts(exactTimeSource.text),
+    answerFacts: context.canonicalNumericFacts(vagueTimeAnswer),
+    reasons: vagueTimeExactnessReasons
+  }));
+}
 const exactTimeRun = await runLadder(exactTimeQuery, [exactTimeSource], [
   vagueTimeAnswer,
-  unsupportedVerdict,
   JSON.stringify({ answer: exactTimeAnswer }),
   supportedVerdict
 ]);
 if (
-  exactTimeRun.stages.join(",") !== "answer,verifier,reviewer,final-verifier" ||
-  exactTimeRun.answer.text !== exactTimeAnswer
+  exactTimeRun.stages.join(",") !== "answer,reviewer,final-verifier" ||
+  exactTimeRun.answer.text !== exactTimeAnswer ||
+  !exactTimeRun.answer.pipeline_diagnostics?.[0]?.reason_codes?.includes("missing_exact_evidence_value")
 ) {
   throw new Error("A vague replacement for an exact source time was not repaired: " + JSON.stringify(exactTimeRun));
 }
 
+const fundingPackageQuery =
+  "Which major costs and equipment does the program funding include, and can a partner live with me in the College?";
+const fundingPackageAnswer =
+  "Program funding includes tuition, room and board, travel, study tours, books, a Lenovo laptop, a smartphone, health insurance, and a personal stipend [1].\n\n" +
+  "A partner may come to Beijing but may not live in the College [1].";
+const fundingPackageValidation = validation(
+  fundingPackageQuery,
+  fundingPackageAnswer,
+  [survivalGuideFullSource]
+);
+if (!fundingPackageValidation.ok) {
+  throw new Error("The deterministic validator rejected the supported funding and partner answer: " + JSON.stringify(fundingPackageValidation));
+}
+const fundingPackageRun = await runLadder(fundingPackageQuery, [survivalGuideFullSource], [
+  fundingPackageAnswer,
+  supportedVerdict
+]);
+if (
+  fundingPackageRun.stages.join(",") !== "answer,verifier" ||
+  !validation(fundingPackageQuery, fundingPackageRun.answer.text, [survivalGuideFullSource]).ok
+) {
+  throw new Error("The supported funding and partner answer failed the production ladder: " + JSON.stringify(fundingPackageRun));
+}
 const namedChannelQuery = "Where can I take the online tour of the standard scholar rooms?";
 const namedChannelSource = source(
   "room-tour",
@@ -779,8 +860,9 @@ if (!context.isCapabilityQuestion("help") || context.isCapabilityQuestion("Can y
 }
 
 const clockFacts = context.canonicalNumericFacts("10:30 p.m.");
+const dottedClockFacts = context.canonicalNumericFacts("6.30 a.m.");
 const compactClockFacts = context.canonicalNumericFacts("1030 p. m.");
-if (!clockFacts.some((fact) => compactClockFacts.includes(fact))) {
+if (!clockFacts.some((fact) => compactClockFacts.includes(fact)) || !dottedClockFacts.includes("time:6:30:am")) {
   throw new Error("10:30 and 1030 clock forms did not canonicalize equivalently: " + JSON.stringify({ clockFacts, compactClockFacts }));
 }
 
