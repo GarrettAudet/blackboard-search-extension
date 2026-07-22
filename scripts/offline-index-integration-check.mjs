@@ -494,6 +494,12 @@ const transportationContextContract = clone(vm.runInContext(`(() => {
     combinedSources
   );
   const broadValidation = citedAnswerValidation(query, broadAnswer, combinedSources, retrievalQuery);
+  const validateTransportation = (text) => {
+    const aligned = alignAnswerCitations(text, combinedSources);
+    return citedAnswerValidation(query, aligned, combinedSources, retrievalQuery, query).reasons;
+  };
+  const detailedTransportationAnswer =
+    "Beijing's four main options are subway, ride-hailing, shared bikes, and buses. The subway operates from 5:00 a.m. to 11:00 p.m. and usually costs 3 to 10 yuan [1].";
   const facets = semanticEvidenceFacets(query, plan).map((facet) => facet.text);
   return {
     found: true,
@@ -502,6 +508,25 @@ const transportationContextContract = clone(vm.runInContext(`(() => {
     complete: prompt.document_coverage_complete,
     hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
     broadValidationReasons: broadValidation.reasons,
+    detailedValidationReasons: validateTransportation(detailedTransportationAnswer),
+    numericDebug: {
+      answerFacts: canonicalNumericFacts(detailedTransportationAnswer),
+      answerBindings: numericClaimBindings(detailedTransportationAnswer, query),
+      sourceFacts: combinedSources.map((source) => ({
+        id: source.source_pack_document_id || source.resource_id,
+        facts: canonicalNumericFacts(answerEvidenceTextForSource(source)).filter((fact) => /^(?:money|range|time):/.test(fact))
+      }))
+    },
+
+    wrongOpeningValidationReasons: validateTransportation(
+      detailedTransportationAnswer.replace("5:00 a.m.", "4:00 a.m.")
+    ),
+    wrongLowerFareValidationReasons: validateTransportation(
+      detailedTransportationAnswer.replace("3 to 10 yuan", "4 to 10 yuan")
+    ),
+    wrongFareValidationReasons: validateTransportation(
+      detailedTransportationAnswer.replace("3 to 10 yuan", "3 to 20 yuan")
+    ),
     vagueTempleExactnessReasons: missingPracticalExactEvidenceReasons(
       query,
       "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven in the morning for park activities. Reserve the National Museum seven days ahead and allow at least four hours [1].",
@@ -518,6 +543,10 @@ assert.equal(transportationContextContract.complete, true, "The broad transporta
 assert.equal(transportationContextContract.hasEveryBody, true, "The broad transportation prompt omitted an indexed workshop chunk.");
 assert.equal(transportationContextContract.hasFourWays, true, "The synthesis prompt omitted the workshop's four-mode overview.");
 assert.deepEqual(transportationContextContract.broadValidationReasons, [], "The grounded four-mode overview failed against the actual expanded production sources.");
+assert.deepEqual(transportationContextContract.detailedValidationReasons, [], "The supported subway hours and fare failed against the actual workshop transcript: " + JSON.stringify(transportationContextContract.numericDebug));
+assert.ok(transportationContextContract.wrongOpeningValidationReasons.some((reason) => /comparable number/i.test(reason)), "The actual workshop accepted a changed 4:00 a.m. subway opening time.");
+assert.ok(transportationContextContract.wrongLowerFareValidationReasons.some((reason) => /comparable number/i.test(reason)), "The actual workshop accepted a changed 4-yuan lower endpoint of the subway fare range.");
+assert.ok(transportationContextContract.wrongFareValidationReasons.some((reason) => /comparable number/i.test(reason)), "The actual workshop accepted a changed 20-yuan subway fare.");
 for (const expectedFacet of ["subway", "ride hailing", "shared bikes", "bus"]) {
   assert.ok(
     transportationContextContract.facets.some((facet) => facet.toLowerCase().includes(expectedFacet)),
@@ -564,6 +593,17 @@ const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
     exactProductionAnswer,
     productionSources
   );
+  const validateDiscovering = (text) => {
+    const aligned = alignAnswerCitations(text, productionSources);
+    return citedAnswerValidation(query, aligned, productionSources, retrievalQuery, query).reasons;
+  };
+  const miscitedExactAnswer = exactProductionAnswer.replace("[4]", "[1]");
+  const repairedMiscited = repairUniqueAnswerCitationBinding(
+    miscitedExactAnswer,
+    productionSources,
+    query
+  );
+  const repairedMiscitedAligned = alignAnswerCitations(repairedMiscited.text, productionSources);
   return {
     found: true,
     resourceCount: resources.length,
@@ -572,6 +612,28 @@ const discoveringBeijingContextContract = clone(vm.runInContext(`(() => {
     hasEveryBody: bodies.every((body) => body && prompt.text.includes(body)),
     productionOrderDocumentIds: productionSources.map((source) => source.source_pack_document_id),
     exactProductionReasons,
+    exactProductionValidationReasons: validateDiscovering(exactProductionAnswer),
+    wrongTempleTimeReasons: validateDiscovering(
+      exactProductionAnswer.replace("6:30 a.m.", "7:30 a.m.")
+    ),
+
+    wrongMuseumLeadReasons: validateDiscovering(
+      exactProductionAnswer.replace("seven days", "five days")
+    ),
+    wrongMuseumDurationReasons: validateDiscovering(
+      exactProductionAnswer.replace("four hours", "three hours")
+    ),
+    miscitedExactReasons: validateDiscovering(miscitedExactAnswer),
+    repairedMiscitedText: repairedMiscited.text,
+    repairedMiscitedRebound: repairedMiscited.rebound,
+    repairedMiscitedDocumentIds: repairedMiscitedAligned.sources.map((source) => source.source_pack_document_id),
+    repairedMiscitedReasons: citedAnswerValidation(
+      query,
+      repairedMiscitedAligned,
+      productionSources,
+      retrievalQuery,
+      query
+    ).reasons,
     vagueTempleExactnessReasons: missingPracticalExactEvidenceReasons(
       query,
       "Use an English tour guide at the Forbidden City. Visit the Temple of Heaven in the morning for park activities. Reserve the National Museum seven days ahead and allow at least four hours [1].",
@@ -589,6 +651,13 @@ assert.equal(discoveringBeijingContextContract.complete, true, "The Discovering 
 assert.equal(discoveringBeijingContextContract.hasEveryBody, true, "The Discovering Beijing prompt omitted an indexed transcript chunk.");
 assert.deepEqual(discoveringBeijingContextContract.productionOrderDocumentIds, ["beijing-transportation-workshop", "survival-guide", "international-logistics-webinar", "discovering-beijing-webinar", "life-in-china-webinar"], "The actual live source ordering could not be reproduced offline.");
 assert.deepEqual(discoveringBeijingContextContract.exactProductionReasons, [], "The correct three-site answer was rejected against the actual live distractor-source ordering.");
+assert.deepEqual(discoveringBeijingContextContract.exactProductionValidationReasons, [], "The full validator rejected the correct three-site answer in actual live source order.");
+assert.ok(discoveringBeijingContextContract.wrongTempleTimeReasons.some((reason) => /comparable number/i.test(reason)), "The actual Discovering Beijing source accepted a changed 7:30 a.m. Temple time: " + JSON.stringify(discoveringBeijingContextContract));
+assert.ok(discoveringBeijingContextContract.wrongMuseumLeadReasons.some((reason) => /comparable number/i.test(reason)), "The actual Discovering Beijing source accepted a changed five-day museum reservation lead.");
+assert.ok(discoveringBeijingContextContract.wrongMuseumDurationReasons.some((reason) => /comparable number/i.test(reason)), "The actual Discovering Beijing source accepted a changed three-hour museum duration.");
+assert.equal(discoveringBeijingContextContract.repairedMiscitedRebound?.to_source_id, 4, "The uniquely supported three-site answer was not rebound to the Discovering Beijing source.");
+assert.deepEqual(discoveringBeijingContextContract.repairedMiscitedDocumentIds, ["discovering-beijing-webinar"], "Citation rebinding did not align the final source card to Discovering Beijing.");
+assert.deepEqual(discoveringBeijingContextContract.repairedMiscitedReasons, [], "The uniquely rebound three-site answer failed deterministic validation.");
 assert.equal(discoveringBeijingContextContract.hasForbiddenCityGuide, true, "The full synthesis prompt omitted the Forbidden City guide advice.");
 assert.equal(discoveringBeijingContextContract.hasTempleMorning, true, "The full synthesis prompt omitted the Temple of Heaven morning advice.");
 assert.ok(discoveringBeijingContextContract.vagueTempleExactnessReasons.some((reason) => /6:30 a\.m\./.test(reason)), "The actual three-site query allowed vague wording to replace the 6:30 a.m. recommendation: " + JSON.stringify(discoveringBeijingContextContract.vagueTempleExactnessReasons));

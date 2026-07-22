@@ -4797,7 +4797,7 @@ function groundingValidationReasonCodes(validation) {
     [/named entity/i, "named_entity_conflict"],
     [/negation, permission, obligation, or availability/i, "polarity_conflict"],
     [/clean not-found answer must not cite/i, "cited_abstention"],
-    [/selected evidence contains a concrete answer/i, "unsupported_abstention"],
+    [/selected evidence contains (?:a concrete|(?:a )?useful) answer/i, "unsupported_abstention"],
     [/semantic verifier rejected/i, "semantic_verifier_rejected"],
     [/semantic verifier returned no valid verdict/i, "semantic_verifier_invalid"]
   ];
@@ -4813,7 +4813,7 @@ function requestedSpecificAnswerKinds(value) {
   const kinds = new Set();
   if (/\b(?:fee|cost|price|fare|amount|how much|per page)\b/.test(text)) kinds.add("money");
   if (/\b(?:model|make and model)\b/.test(text)) kinds.add("model");
-  if (/\b(?:when|what date|which date|what time|deadline|start date|begin date|how long|duration|length of time)\b/.test(text) ||
+  if (/\b(?:when|what date|which date|what time|deadline|start date|begin date|how long|duration|length of time|time commitment)\b/.test(text) ||
       /\bhow many\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\b/.test(text)) kinds.add("temporal");
   if (/\b(?:how many|number of|count of|allowance)\b/.test(text)) kinds.add("count");
   if (/\b(?:which|who|what is the name|what are the names|named)\b/.test(text)) kinds.add("named");
@@ -5103,6 +5103,51 @@ function sourceHasSpecificAnswerForFacet(facetText, source) {
   return specificAnswerFacetBindingScore(facetText, source) > 0;
 }
 
+function isCourseRoomAssignmentQuestion(value) {
+  const text = normalizeText(value);
+  return (
+    /\b(?:room|rooms|classroom|classrooms)\b/.test(text) &&
+    /\b(?:assign|assigned|assignment|assignments|number|numbers|meet|meets|held|located|location|venue)\b/.test(text) &&
+    /\b(?:course|courses|class|classes|calendar|schedule)\b/.test(text)
+  ) || /\bwhere\b.{0,50}\b(?:course|courses|class|classes)\b.{0,50}\b(?:meet|meets|held|located|scheduled)\b/.test(text);
+}
+
+function sourceSupportsQualifiedCourseRoomAnswer(source) {
+  const hasCompleteParentCoverage =
+    source?.document_context_scope === "full_indexed_document" &&
+    source?.document_context_complete === true &&
+    source?.document_parent_scanned_complete === true;
+  if (!hasCompleteParentCoverage) return false;
+
+  const metadata = normalizeText([
+    cleanSourceTitle(source),
+    compactSourceTrail(source),
+    source?.section
+  ].filter(Boolean).join(" "));
+  const rawBody = answerEvidenceTextForSource(source);
+  const body = normalizeText(rawBody);
+  const hasNonNavigationRoomMarker = (pattern) => Array.from(rawBody.matchAll(pattern)).some((match) => {
+    const prefix = rawBody.slice(Math.max(0, match.index - 40), match.index);
+    return !/\bcurrent\s+location\s*(?::|#|-)?\s*$/i.test(prefix) &&
+      !(/\blocation\b/i.test(match[0]) && /\bcurrent\s+$/i.test(prefix));
+  });
+  if (!/\b(?:course calendar|course schedule|academic calendar|class schedule|course offerings?)\b/.test(metadata + " " + body)) {
+    return false;
+  }
+  const listsRelatedScheduleInformation =
+    /\bacademic calendar\b/.test(body) &&
+    /\bcourse offerings?\b/.test(body) &&
+    /\bmodules?\b/.test(body) &&
+    /\bclass schedule\b/.test(body);
+  const listsRoomAssignment =
+    /\b(?:room|classroom)\s+(?:assignment|assignments|number|numbers)\b/.test(body) ||
+    /\b(?:assigned|meets?|held)\b.{0,60}\b(?:room|classroom)\b/.test(body) ||
+    hasNonNavigationRoomMarker(/\b(?:room|classroom|venue|location)\s+[A-Z]?\d{2,}\b/gi) ||
+    hasNonNavigationRoomMarker(/\b(?:room|classroom|venue|location)\s*(?:assignment|number)?\s*[:#-]\s*\S+/gi) ||
+    /\b(?:assigned|meets?|held|located)\b.{0,60}\b(?:room|classroom|venue|location)\b/.test(body);
+  return listsRelatedScheduleInformation && !listsRoomAssignment;
+}
+
 function selectedEvidenceSupportsConcreteAnswer(
   query,
   answerSources,
@@ -5114,6 +5159,12 @@ function selectedEvidenceSupportsConcreteAnswer(
   const facets = semanticEvidenceFacets(resolvedQuestion, { ...(queryPlan || {}), rewritten_question: resolvedQuestion });
   const sources = answerSources || [];
   if (sources.some((source) => sourceHasIdentifierBoundPersonalAnswer(resolvedQuestion, source))) {
+    return true;
+  }
+  if (
+    isCourseRoomAssignmentQuestion(resolvedQuestion) &&
+    sources.some(sourceSupportsQualifiedCourseRoomAnswer)
+  ) {
     return true;
   }
   const exactFacets = facets.filter((facet) => requestedSpecificAnswerKinds(facet.text).size > 0);
@@ -5151,15 +5202,19 @@ async function evaluateGroundedAnswerCandidate(
 ) {
   const cleaned = cleanAnswerText(candidateText, answerSources.length);
   const cleanAbstention = isCleanNotFoundAnswer(cleaned);
+  const groundingText = userProvidedGroundingText(query, memory);
+  const citationRepair = cleanAbstention
+    ? { text: cleaned, rebound: null }
+    : repairUniqueAnswerCitationBinding(cleaned, answerSources, groundingText);
   const aligned = cleanAbstention
     ? { text: cleaned, sources: [] }
-    : alignAnswerCitations(cleaned, answerSources);
+    : alignAnswerCitations(citationRepair.text, answerSources);
   let validation = citedAnswerValidation(
     query,
     aligned,
     answerSources,
     retrievalQuery,
-    userProvidedGroundingText(query, memory)
+    groundingText
   );
   if (
     cleanAbstention &&
@@ -5168,7 +5223,7 @@ async function evaluateGroundedAnswerCandidate(
     validation = {
       ...validation,
       ok: false,
-      reasons: [...validation.reasons, "Selected evidence contains a concrete answer to at least one requested facet; abstention is not permitted."]
+      reasons: [...validation.reasons, "Selected evidence contains a useful answer or qualified limitation for at least one requested facet; abstention is not permitted."]
     };
   }
   if (!cleanAbstention) {
@@ -5192,7 +5247,8 @@ async function evaluateGroundedAnswerCandidate(
         accepted: false,
         deterministic_ok: false,
         semantic_verifier_called: false,
-        reason_codes: groundingValidationReasonCodes(validation)
+        reason_codes: groundingValidationReasonCodes(validation),
+        citation_rebound: citationRepair.rebound
       }
     };
   }
@@ -5222,7 +5278,8 @@ async function evaluateGroundedAnswerCandidate(
         deterministic_ok: true,
         semantic_verifier_called: true,
         semantic_verdict: verdict ? "rejected" : "invalid",
-        reason_codes: [verdict ? "semantic_verifier_rejected" : "semantic_verifier_invalid"]
+        reason_codes: [verdict ? "semantic_verifier_rejected" : "semantic_verifier_invalid"],
+        citation_rebound: citationRepair.rebound
       }
     };
   }
@@ -5237,7 +5294,8 @@ async function evaluateGroundedAnswerCandidate(
       deterministic_ok: true,
       semantic_verifier_called: true,
       semantic_verdict: "accepted",
-      reason_codes: []
+      reason_codes: [],
+      citation_rebound: citationRepair.rebound
     }
   };
 }
@@ -5256,78 +5314,79 @@ async function generateVerifiedApiAnswer(query, answerSources, memory = [], retr
     });
     return { ...reliableCitedAnswerFailure(), pipeline_diagnostics: pipelineDiagnostics };
   }
-  const draftText = cleanAnswerText(
-    await buildApiAnswer(query, answerSources, memory, retrievalQuery, queryPlan),
-    answerSources.length
-  );
-  const draftEvaluation = await evaluateGroundedAnswerCandidate(
-    query, draftText, answerSources, memory, retrievalQuery, queryPlan, "draft"
-  );
+
+  const draftParse = coerceStructuredStageResult(await buildApiAnswer(
+    query,
+    answerSources,
+    memory,
+    retrievalQuery,
+    queryPlan,
+    { includeParseResult: true }
+  ));
+  const draftText = cleanAnswerText(draftParse.answer, answerSources.length);
+  const draftEvaluation = draftParse.ok
+    ? await evaluateGroundedAnswerCandidate(
+        query, draftText, answerSources, memory, retrievalQuery, queryPlan, "draft"
+      )
+    : structuredOutputCandidateEvaluation("draft", draftParse);
+  draftEvaluation.diagnostic = attachStructuredOutputDiagnostic(draftEvaluation.diagnostic, draftParse);
   pipelineDiagnostics.push(draftEvaluation.diagnostic);
   if (draftEvaluation.accepted) return { ...draftEvaluation.answer, pipeline_diagnostics: pipelineDiagnostics };
 
-  const reviewedText = await reviewApiAnswer(
+  const reviewedParse = coerceStructuredStageResult(await reviewApiAnswer(
     query,
     draftText,
     answerSources,
     memory,
     retrievalQuery,
     queryPlan,
-    Array.from(new Set(draftEvaluation.validation.reasons)).join(" ")
-  );
-  if (reviewedText) {
+    Array.from(new Set(draftEvaluation.validation.reasons)).join(" "),
+    { includeParseResult: true }
+  ));
+  if (reviewedParse.ok) {
+    const reviewedText = cleanAnswerText(reviewedParse.answer, answerSources.length);
     const reviewerEvaluation = await evaluateGroundedAnswerCandidate(
       query, reviewedText, answerSources, memory, retrievalQuery, queryPlan, "reviewer"
     );
+    reviewerEvaluation.diagnostic = attachStructuredOutputDiagnostic(reviewerEvaluation.diagnostic, reviewedParse);
     pipelineDiagnostics.push(reviewerEvaluation.diagnostic);
     if (reviewerEvaluation.accepted) return { ...reviewerEvaluation.answer, pipeline_diagnostics: pipelineDiagnostics };
     draftEvaluation.validation.reasons.push(...reviewerEvaluation.validation.reasons);
   } else {
-    pipelineDiagnostics.push({
-      phase: "reviewer",
-      accepted: false,
-      deterministic_ok: null,
-      semantic_verifier_called: false,
-      reason_codes: ["structured_output_invalid"]
-    });
+    pipelineDiagnostics.push(structuredOutputDiagnostic("reviewer", reviewedParse));
+    draftEvaluation.validation.reasons.push(...structuredOutputCandidateEvaluation("reviewer", reviewedParse).validation.reasons);
   }
 
-  let recoveredText = "";
+  let recoveredParse = null;
   try {
-    recoveredText = await recoverReviewedAnswer(
+    recoveredParse = coerceStructuredStageResult(await recoverReviewedAnswer(
       query,
       answerSources,
       memory,
       retrievalQuery,
       queryPlan,
-      Array.from(new Set(draftEvaluation.validation.reasons)).join(" ")
-    );
+      Array.from(new Set(draftEvaluation.validation.reasons)).join(" "),
+      { includeParseResult: true }
+    ));
   } catch (error) {
     console.warn("Final-answer recovery failed.", error);
-    pipelineDiagnostics.push({
-      phase: "recovery",
-      accepted: false,
-      deterministic_ok: null,
-      semantic_verifier_called: false,
-      reason_codes: ["provider_or_runtime_error"]
-    });
+    recoveredParse = structuredAnswerParseFailureResult("provider_or_runtime_error");
   }
 
-  if (recoveredText) {
+  if (recoveredParse?.ok) {
+    const recoveredText = cleanAnswerText(recoveredParse.answer, answerSources.length);
     const recoveryEvaluation = await evaluateGroundedAnswerCandidate(
       query, recoveredText, answerSources, memory, retrievalQuery, queryPlan, "recovery"
     );
+    recoveryEvaluation.diagnostic = attachStructuredOutputDiagnostic(recoveryEvaluation.diagnostic, recoveredParse);
     pipelineDiagnostics.push(recoveryEvaluation.diagnostic);
     if (recoveryEvaluation.accepted) return { ...recoveryEvaluation.answer, pipeline_diagnostics: pipelineDiagnostics };
     console.warn("Recovered answer failed grounding verification.", recoveryEvaluation.validation.reasons);
-  } else if (!pipelineDiagnostics.some((item) => item.phase === "recovery")) {
-    pipelineDiagnostics.push({
-      phase: "recovery",
-      accepted: false,
-      deterministic_ok: null,
-      semantic_verifier_called: false,
-      reason_codes: ["structured_output_invalid"]
-    });
+  } else {
+    pipelineDiagnostics.push(structuredOutputDiagnostic(
+      "recovery",
+      recoveredParse || structuredAnswerParseFailureResult()
+    ));
   }
 
   console.warn("LLM answer failed deterministic and semantic grounding after bounded repair.");
@@ -6372,6 +6431,11 @@ function completeParentDocumentsFitAnswerContext(sources) {
 
 function isDocumentWideSynthesisQuery(query, memory = [], queryPlan = null) {
   if ([query, queryPlan?.rewritten_question].some((value) =>
+    isCourseRoomAssignmentQuestion(String(value || ""))
+  )) {
+    return true;
+  }
+  if ([query, queryPlan?.rewritten_question].some((value) =>
     isBroadBeijingTransportationQuery(String(value || ""))
   )) {
     return true;
@@ -6696,14 +6760,21 @@ function canonicalNumericFacts(value) {
     .replace(/₹/g, " INR ")
     .replace(/₩/g, " KRW ");
   const numericExpanded = currencyExpanded
+    .replace(/(\d(?:\.\d+)?)\s*%\s*[-\u2013\u2014]\s*(\d(?:\.\d+)?)\s*%/g, "$1 percentunit rangeto $2 percentunit")
+    .replace(/%/g, " percentunit ")
     .replace(/(\d),(?=\d)/g, "$1")
-    .replace(/(\d)\.(?=\d)/g, "$1decimalpoint");
+    .replace(/(\d)\.(?=\d)/g, "$1decimalpoint")
+    .replace(/(\d(?:decimalpoint\d+)?)\s*[-\u2013\u2014]\s*(\d(?:decimalpoint\d+)?)/g, "$1 rangeto $2");
   const normalized = normalizeText(numericExpanded.replace(/(\d):(\d)/g, "$1$2"))
     .replace(/\b(\d+)decimalpoint(\d+)\b/g, "$1.$2");
   const facts = new Set();
   const occupied = [];
   const remember = (match, fact) => {
     facts.add(fact);
+    if (Number.isInteger(match.index)) occupied.push([match.index, match.index + match[0].length]);
+  };
+  const rememberRange = (match, rangeFacts) => {
+    for (const fact of rangeFacts) facts.add(fact);
     if (Number.isInteger(match.index)) occupied.push([match.index, match.index + match[0].length]);
   };
   const overlaps = (match) => occupied.some(([start, end]) => match.index < end && match.index + match[0].length > start);
@@ -6723,10 +6794,7 @@ function canonicalNumericFacts(value) {
   for (const match of normalized.matchAll(/\b(\d+)(?:st|nd|rd|th)\b/g)) {
     facts.add(`number:${Number(match[1])}`);
   }
-  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|kilograms?|kgs?|grams?|pounds?|lbs?)\\b`, "g"))) {
-    const amount = numberWordValue(match[1]);
-    if (!Number.isFinite(amount)) continue;
-    const unit = match[2];
+  const canonicalMeasure = (amount, unit) => {
     let canonicalAmount = amount;
     let canonicalUnit = unit;
     if (/^weeks?/.test(unit)) { canonicalAmount *= 7; canonicalUnit = "days"; }
@@ -6738,20 +6806,186 @@ function canonicalNumericFacts(value) {
     else if (/^(kilograms?|kgs?)/.test(unit)) canonicalUnit = "kilograms";
     else if (/^grams?/.test(unit)) canonicalUnit = "grams";
     else if (/^(pounds?|lbs?)/.test(unit)) canonicalUnit = "pounds";
-    remember(match, `measure:${canonicalAmount}:${canonicalUnit}`);
+    return `measure:${canonicalAmount}:${canonicalUnit}`;
+  };
+  const measureUnitPattern = "(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|kilograms?|kgs?|grams?|pounds?|lbs?)";
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${numberPattern})\\s+and\\s+(${numberPattern})\\s*(${measureUnitPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    const lowerFact = canonicalMeasure(lower, match[3]);
+    const upperFact = canonicalMeasure(upper, match[3]);
+    const lowerParts = lowerFact.split(":");
+    const upperParts = upperFact.split(":");
+    rememberRange(match, [
+      lowerFact,
+      upperFact,
+      `range:measure:${lowerParts[1]}:${upperParts[1]}:${lowerParts[2]}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${numberPattern})\\s*(${measureUnitPattern})\\s+and\\s+(${numberPattern})\\s*(${measureUnitPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[3]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    const lowerFact = canonicalMeasure(lower, match[2]);
+    const upperFact = canonicalMeasure(upper, match[4]);
+    const lowerParts = lowerFact.split(":");
+    const upperParts = upperFact.split(":");
+    if (lowerParts[2] !== upperParts[2]) continue;
+    rememberRange(match, [
+      lowerFact,
+      upperFact,
+      `range:measure:${lowerParts[1]}:${upperParts[1]}:${lowerParts[2]}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(?:to|through|rangeto)\\s*(${numberPattern})\\s*(${measureUnitPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    const lowerFact = canonicalMeasure(lower, match[3]);
+    const upperFact = canonicalMeasure(upper, match[3]);
+    const lowerParts = lowerFact.split(":");
+    const upperParts = upperFact.split(":");
+    rememberRange(match, [
+      lowerFact,
+      upperFact,
+      `range:measure:${lowerParts[1]}:${upperParts[1]}:${lowerParts[2]}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(${measureUnitPattern})\\b`, "g"))) {
+    if (overlaps(match)) continue;
+    const amount = numberWordValue(match[1]);
+    if (!Number.isFinite(amount)) continue;
+    remember(match, canonicalMeasure(amount, match[2]));
   }
   const currencyPattern = "(?:usd|cad|aud|nzd|hkd|sgd|eur|gbp|cny|rmb|yuan|jpy|inr|krw)";
   const canonicalCurrency = (value) => /^(?:cny|rmb|yuan)$/.test(value) ? "cny" : value;
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${currencyPattern})\\s*(${numberPattern})\\s+and\\s+(${currencyPattern})\\s*(${numberPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[2]);
+    const upper = numberWordValue(match[4]);
+    const lowerCurrency = canonicalCurrency(match[1]);
+    const upperCurrency = canonicalCurrency(match[3]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lowerCurrency !== upperCurrency) continue;
+    rememberRange(match, [
+      `money:${lower}:${lowerCurrency}`,
+      `money:${upper}:${lowerCurrency}`,
+      `range:money:${lower}:${upper}:${lowerCurrency}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${numberPattern})\\s*(${currencyPattern})\\s+and\\s+(${numberPattern})\\s*(${currencyPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[3]);
+    const lowerCurrency = canonicalCurrency(match[2]);
+    const upperCurrency = canonicalCurrency(match[4]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lowerCurrency !== upperCurrency) continue;
+    rememberRange(match, [
+      `money:${lower}:${lowerCurrency}`,
+      `money:${upper}:${lowerCurrency}`,
+      `range:money:${lower}:${upper}:${lowerCurrency}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${numberPattern})\\s+and\\s+(${numberPattern})\\s*(${currencyPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    const currency = canonicalCurrency(match[3]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    rememberRange(match, [
+      `money:${lower}:${currency}`,
+      `money:${upper}:${currency}`,
+      `range:money:${lower}:${upper}:${currency}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${currencyPattern})\\s*(${numberPattern})\\s*(?:to|through|rangeto)\\s*(${currencyPattern})\\s*(${numberPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[2]);
+    const upper = numberWordValue(match[4]);
+    const lowerCurrency = canonicalCurrency(match[1]);
+    const upperCurrency = canonicalCurrency(match[3]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lowerCurrency !== upperCurrency) continue;
+    rememberRange(match, [
+      `money:${lower}:${lowerCurrency}`,
+      `money:${upper}:${lowerCurrency}`,
+      `range:money:${lower}:${upper}:${lowerCurrency}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(${currencyPattern})\\s*(?:to|through|rangeto)\\s*(${numberPattern})\\s*(${currencyPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[3]);
+    const lowerCurrency = canonicalCurrency(match[2]);
+    const upperCurrency = canonicalCurrency(match[4]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lowerCurrency !== upperCurrency) continue;
+    rememberRange(match, [
+      `money:${lower}:${lowerCurrency}`,
+      `money:${upper}:${lowerCurrency}`,
+      `range:money:${lower}:${upper}:${lowerCurrency}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${currencyPattern})\\s*(${numberPattern})\\s*(?:to|through|rangeto)\\s*(${numberPattern})\\b|\\b(${numberPattern})\\s*(?:to|through|rangeto)\\s*(${numberPattern})\\s*(${currencyPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[2] || match[4]);
+    const upper = numberWordValue(match[3] || match[5]);
+    const currency = canonicalCurrency(match[1] || match[6]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    rememberRange(match, [
+      `money:${lower}:${currency}`,
+      `money:${upper}:${currency}`,
+      `range:money:${lower}:${upper}:${currency}`
+    ]);
+  }
   for (const match of normalized.matchAll(new RegExp(`\\b(${currencyPattern})\\s*(${numberPattern})\\b|\\b(${numberPattern})\\s*(${currencyPattern})\\b`, "g"))) {
+    if (overlaps(match)) continue;
     const amount = numberWordValue(match[2] || match[3]);
     const currency = canonicalCurrency(match[1] || match[4]);
     if (Number.isFinite(amount)) remember(match, `money:${amount}:${currency}`);
   }
-  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*%`, "g"))) {
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(?:percentunit|percent)?\\s*(?:to|through|rangeto)\\s*(${numberPattern})\\s*(?:percentunit|percent)\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    rememberRange(match, [
+      `percent:${lower}`,
+      `percent:${upper}`,
+      `range:percent:${lower}:${upper}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(?:percentunit|percent)\\b`, "g"))) {
+    if (overlaps(match)) continue;
     const amount = numberWordValue(match[1]);
     if (Number.isFinite(amount)) remember(match, `percent:${amount}`);
   }
-  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s+(bags?|pages?|forms?|documents?|copies?|guests?|students?|people|participants?|courses?|classes?)\\b`, "g"))) {
+  const countUnitPattern = "(?:bags?|pages?|forms?|documents?|copies?|guests?|students?|people|participants?|courses?|classes?)";
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${numberPattern})\\s*(?:percentunit|percent)?\\s+and\\s+(${numberPattern})\\s*(?:percentunit|percent)\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    rememberRange(match, [
+      `percent:${lower}`,
+      `percent:${upper}`,
+      `range:percent:${lower}:${upper}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\bbetween\\s+(${numberPattern})\\s+and\\s+(${numberPattern})\\s+(${countUnitPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    const unit = match[3].replace(/s$/, "");
+    rememberRange(match, [
+      `count:${lower}:${unit}`,
+      `count:${upper}:${unit}`,
+      `range:count:${lower}:${upper}:${unit}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s*(?:to|through|rangeto)\\s*(${numberPattern})\\s+(${countUnitPattern})\\b`, "g"))) {
+    const lower = numberWordValue(match[1]);
+    const upper = numberWordValue(match[2]);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    const unit = match[3].replace(/s$/, "");
+    rememberRange(match, [
+      `count:${lower}:${unit}`,
+      `count:${upper}:${unit}`,
+      `range:count:${lower}:${upper}:${unit}`
+    ]);
+  }
+  for (const match of normalized.matchAll(new RegExp(`\\b(${numberPattern})\\s+(${countUnitPattern})\\b`, "g"))) {
+    if (overlaps(match)) continue;
     const amount = numberWordValue(match[1]);
     if (Number.isFinite(amount)) remember(match, `count:${amount}:${match[2].replace(/s$/, "")}`);
   }
@@ -6778,7 +7012,7 @@ function practicalGuidanceClause(value) {
 }
 
 function isStructuredExactEvidenceFact(fact) {
-  return /^(?:time|date|measure|money|count|percent):/.test(String(fact || ""));
+  return /^(?:time|date|measure|money|count|percent|range):/.test(String(fact || ""));
 }
 
 function readableExactEvidenceFact(fact) {
@@ -6794,6 +7028,10 @@ function readableExactEvidenceFact(fact) {
   if (match) return match[1] + " " + match[2];
   match = String(fact || "").match(/^percent:([^:]+)$/);
   if (match) return match[1] + "%";
+  match = String(fact || "").match(/^range:(measure|money|count):([^:]+):([^:]+):(.+)$/);
+  if (match) return match[2] + " to " + match[3] + " " + (match[1] === "money" ? match[4].toUpperCase() : match[4]);
+  match = String(fact || "").match(/^range:percent:([^:]+):([^:]+)$/);
+  if (match) return match[1] + "% to " + match[2] + "%";
   return String(fact || "");
 }
 
@@ -6901,7 +7139,11 @@ function sourceSupportsCanonicalNumericFact(sourceFacts, fact, sourceText) {
 }
 
 function canonicalNumericFactDimension(fact) {
-  let match = String(fact || "").match(/^measure:[^:]+:(.+)$/);
+  let match = String(fact || "").match(/^range:(measure|money|count):[^:]+:[^:]+:(.+)$/);
+  if (match) return `range:${match[1]}:${match[2]}`;
+  match = String(fact || "").match(/^range:percent:[^:]+:[^:]+$/);
+  if (match) return "range:percent";
+  match = String(fact || "").match(/^measure:[^:]+:(.+)$/);
   if (match) return `measure:${match[1]}`;
   match = String(fact || "").match(/^money:[^:]+:(.+)$/);
   if (match) return `money:${match[1]}`;
@@ -6928,6 +7170,783 @@ function canonicalNumericFactsConflict(claimFacts, sourceFacts, sourceText) {
     if (new Set(comparable).size === 1) return true;
   }
   return false;
+}
+
+function stripTranscriptTimingMetadata(value) {
+  return String(value || "")
+    .replace(/\[(?:\d{1,2}:)?\d{1,2}:\d{2}\]/g, " ")
+    .replace(/\bTimestamp\s+(?:\d{1,2}:)?\d{1,2}:\d{2}(?:\s*[-\u2013\u2014]\s*(?:\d{1,2}:)?\d{1,2}:\d{2})?/gi, " ");
+}
+
+function numericEvidenceClauses(value) {
+  return stripTranscriptTimingMetadata(value)
+    .split(/\r?\n+/)
+    .flatMap((line) => splitSentences(line))
+    .flatMap((sentence) =>
+      sentence.split(/\s*(?:;|,(?!\d)|\b(?:while|whereas)\b)\s*/i)
+    )
+    .map(cleanupTaskPhrase)
+    .filter(Boolean);
+}
+
+function numericAnchorTerms(anchor) {
+  return normalizeText(anchor)
+    .split(/\s+/)
+    .filter((term) => term.length > 2 && !STOP_WORDS.has(term));
+}
+
+function numericTextMatchesAnchor(value, anchor) {
+  const terms = numericAnchorTerms(anchor);
+  if (!terms.length) return false;
+  const text = normalizeText(value);
+  const hits = terms.filter((term) => answerSupportTextHasTerm(text, term)).length;
+  return hits >= Math.min(2, terms.length) && hits / terms.length >= 0.66;
+}
+
+function numericEntityAnchors(value) {
+  return Array.from(new Set(exactnessTopicAnchors(value)))
+    .filter((anchor) => numericAnchorTerms(anchor).length >= 2)
+    .slice(0, 12);
+}
+
+function numericQueryEntityAnchors(value) {
+  const fragments = String(value || "")
+    .split(/\s*(?:,|;|\b(?:and|versus|vs\.?|compared with|compared to)\b)\s*/i)
+    .map((fragment) => fragment
+      .replace(/^\s*(?:compare|contrast|between|for|about|what about)\s+/i, "")
+      .trim()
+    )
+    .filter(Boolean);
+  return Array.from(new Set([
+    ...numericEntityAnchors(value),
+    ...fragments.flatMap((fragment) => numericEntityAnchors(fragment))
+  ])).slice(0, 16);
+}
+
+function numericFactLocalText(value, fact) {
+  const text = normalizeText(value);
+  const numeric = String(fact || "").match(/^(?:number|measure|money|count|percent):([^:]+)/)?.[1] ||
+    String(fact || "").match(/^range:[^:]+:([^:]+)/)?.[1] || "";
+  if (!numeric || !/^\d+(?:\.\d+)?$/.test(numeric)) return text;
+  const match = new RegExp("\\b" + numeric.replace(".", "\\.") + "\\b").exec(text);
+  if (!match) return text;
+  return text.slice(Math.max(0, match.index - 80), Math.min(text.length, match.index + match[0].length + 80));
+}
+
+function numericDateEventRole(value, fact) {
+  const date = String(fact || "").match(/^date:([a-z]+)-(\d+)(?:-(\d{4}))?$/);
+  if (!date) return "";
+  const text = normalizeText(value);
+  const datePattern = new RegExp(`\\b${date[1]}\\s+${Number(date[2])}\\b`, "g");
+  const dateMatches = Array.from(text.matchAll(datePattern));
+  if (!dateMatches.length) return "";
+  const roles = [
+    { role: "due_date", pattern: /\b(?:deadline|due|submit|submits|submitted|submission|file|files|filed|filing|complete|completes|completed|completion)\b/g },
+    { role: "start_date", pattern: /\b(?:open|opens|opened|opening|start|starts|started|starting|begin|begins|began|beginning|commence|commences|commenced|commencing)\b/g },
+    { role: "end_date", pattern: /\b(?:close|closes|closed|closing|end|ends|ended|ending|finish|finishes|finished|finishing)\b/g },
+    { role: "arrival_date", pattern: /\b(?:arrive|arrives|arrived|arrival|check in|move in)\b/g },
+    { role: "departure_date", pattern: /\b(?:depart|departs|departed|departure|leave|leaves|leaving|check out|move out)\b/g },
+    { role: "registration_date", pattern: /\b(?:register|registers|registered|registration|enroll|enrolls|enrolled|enrollment)\b/g }
+  ];
+  let best = null;
+  for (const dateMatch of dateMatches) {
+    const dateStart = dateMatch.index;
+    const dateEnd = dateStart + dateMatch[0].length;
+    for (const { role, pattern } of roles) {
+      for (const roleMatch of text.matchAll(pattern)) {
+        const roleStart = roleMatch.index;
+        const roleEnd = roleStart + roleMatch[0].length;
+        const distance = roleEnd <= dateStart
+          ? dateStart - roleEnd
+          : roleStart >= dateEnd
+            ? roleStart - dateEnd
+            : 0;
+        if (distance > 64) continue;
+        const followsDate = roleStart >= dateEnd ? 1 : 0;
+        if (
+          !best || distance < best.distance ||
+          (distance === best.distance && followsDate < best.followsDate)
+        ) {
+          best = { role, distance, followsDate };
+        }
+      }
+    }
+  }
+  return best?.role || "";
+}
+
+function numericRelationKey(value, fact) {
+  const text = normalizeText(value);
+  const local = numericFactLocalText(text, fact);
+  const factText = String(fact || "");
+  if (/^(?:money|range:money):/.test(factText)) {
+    if (/\b(?:fare|subway|metro|bus|ride hailing|taxi|transport)\b/.test(local)) return "fare";
+    if (/\b(?:fee|cost|price|charge|spend|budget)\b/.test(local)) return "cost";
+    return "money";
+  }
+  if (/^time:/.test(factText)) {
+    if (/\b(?:subway|metro|bus|service|operate|operating|runs?|open|close)\b/.test(local)) return "operating_time";
+    if (/\b(?:arrive|arrival|depart|departure|deadline|due|check in|check out)\b/.test(local)) return "event_time";
+    if (/\b(?:go|visit|morning|evening|experience|park|temple)\b/.test(local)) return "visit_time";
+    return "time";
+  }
+  const measure = factText.match(/^measure:[^:]+:([^:]+)$/) ||
+    factText.match(/^range:measure:[^:]+:[^:]+:([^:]+)$/);
+  if (measure) {
+    const unit = measure[1];
+    if (/^(?:kilograms|grams|pounds)$/.test(unit) &&
+        /\b(?:bag|baggage|luggage|checked|carry on|weight)\b/.test(local)) return "baggage_weight";
+    if (unit === "days" && /\b(?:reserve|reservation|book|booking|ahead|advance)\b/.test(local)) {
+      return "reservation_lead";
+    }
+    if (/^(?:hours|minutes|days|weeks|months|years)$/.test(unit) &&
+        /\b(?:take|takes|spend|allow|require|requires|duration|last|lasts|inside|visit|session|trip|route)\b/.test(local)) {
+      return "duration";
+    }
+    return "measure:" + unit;
+  }
+  if (/^date:/.test(factText)) {
+    const eventRole = numericDateEventRole(text, factText);
+    if (eventRole) return eventRole;
+    if (/\b(?:deadline|due|submit|submission|by|before|after|arrive|depart|start|begin)\b/.test(local)) return "event_date";
+    return "date";
+  }
+  if (/^(?:count|range:count):/.test(factText)) {
+    if (/\b(?:bag|baggage|luggage|checked|carry on|allowance)\b/.test(local)) return "baggage_count";
+    return "count";
+  }
+  if (/^(?:percent|range:percent):/.test(factText)) return "percent";
+  if (/^number:/.test(factText)) {
+    if (/\b(?:subway|metro|transit)\s+lines?\b|\blines?\b/.test(local)) return "transit_lines";
+    if (/\bstations?\b/.test(local)) return "transit_stations";
+    if (/\b(?:police|ambulance|fire|emergency)\b/.test(local)) return "emergency_phone";
+    if (/\b(?:building|room|desk|gate|terminal)\b/.test(local)) return "location_identifier";
+  }
+  return "";
+}
+
+function numericRelationCompatible(left, right) {
+  if (!left || !right) return true;
+  if (left === right) return true;
+  if (new Set([left, right]).size === 2 && [left, right].every((value) => value === "fare" || value === "cost")) {
+    return true;
+  }
+  const generic = new Set(["money", "time", "date", "event_date", "count", "percent"]);
+  return generic.has(left) || generic.has(right);
+}
+
+function numericClaimIdentity(fragment, userProvidedText) {
+  const queryAnchors = numericQueryEntityAnchors(userProvidedText);
+  const fragmentAnchors = numericEntityAnchors(fragment);
+  const anchors = queryAnchors.filter((anchor) => numericTextMatchesAnchor(fragment, anchor));
+  if (anchors.length) return { anchors, allAnchors: queryAnchors, terms: [] };
+  if (fragmentAnchors.length) {
+    return {
+      anchors: fragmentAnchors,
+      allAnchors: Array.from(new Set([...queryAnchors, ...fragmentAnchors])),
+      terms: []
+    };
+  }
+  const allAnchors = queryAnchors;
+  const ignored = new Set([
+    "about", "advance", "ahead", "allow", "allows", "approximately", "around", "at", "cost", "costs",
+    "daily", "day", "days", "duration", "early", "fare", "fares", "four", "from", "hour", "hours",
+    "inside", "january", "february", "march", "april", "may", "june", "july", "august", "september",
+    "october", "november", "december", "least", "maximum", "minimum", "minute", "minutes", "money", "morning", "night", "operate",
+    "operates", "price", "prices", "recommend", "recommended", "require", "requires", "reserve", "reserved",
+    "spend", "take", "takes", "three", "time", "times", "two", "until", "visit", "visiting", "weigh",
+    "weighing", "weight", "with", "yuan"
+  ]);
+  const terms = groundingClauseIdentityTokens(fragment)
+    .map(polarityTokenStem)
+    .map((term) => term.length > 5 ? term.replace(/ly$/, "") : term)
+    .filter((term) => term.length >= 3 && !STOP_WORDS.has(term) && !ignored.has(term) && !/^\d/.test(term));
+  return { anchors: [], allAnchors, terms: Array.from(new Set(terms)).slice(0, 12) };
+}
+
+function numericClaimBindings(claim, userProvidedText = "") {
+  const fragments = numericEvidenceClauses(claim);
+  const bindings = [];
+  for (const fragment of fragments.length ? fragments : [claim]) {
+    const identity = numericClaimIdentity(fragment, userProvidedText);
+    for (const fact of canonicalNumericFacts(stripTranscriptTimingMetadata(fragment))) {
+      const relation = numericRelationKey(fragment, fact);
+      if (!isStructuredExactEvidenceFact(fact) && !(/^number:/.test(fact) && relation)) continue;
+      bindings.push({
+        fact,
+        dimension: canonicalNumericFactDimension(fact) || (/^number:/.test(fact) ? "number" : ""),
+        relation,
+        fragment,
+        ...identity
+      });
+    }
+  }
+  return bindings;
+}
+
+const numericEvidenceSourceCache = new WeakMap();
+
+function numericEvidenceMentions(sourceText) {
+  const clauses = numericEvidenceClauses(sourceText);
+  const clauseFacts = clauses.map((clause) => canonicalNumericFacts(clause));
+  const mentions = [];
+  const mentionsByDimension = new Map();
+  const dimensionClauseIndices = new Map();
+  clauses.forEach((clause, clauseIndex) => {
+    for (const fact of clauseFacts[clauseIndex]) {
+      const relation = numericRelationKey(clause, fact);
+      if (!isStructuredExactEvidenceFact(fact) && !(/^number:/.test(fact) && relation)) continue;
+      const dimension = canonicalNumericFactDimension(fact) || (/^number:/.test(fact) ? "number" : "");
+      const start = Math.max(0, clauseIndex - 6);
+      const end = Math.min(clauses.length, clauseIndex + 7);
+      const mention = {
+        fact,
+        dimension,
+        relation,
+        clauseIndex,
+        clause,
+        neighborhood: clauses.slice(start, end).join(" ")
+      };
+      mentions.push(mention);
+      if (!mentionsByDimension.has(dimension)) mentionsByDimension.set(dimension, []);
+      mentionsByDimension.get(dimension).push(mention);
+      if (!dimensionClauseIndices.has(dimension)) dimensionClauseIndices.set(dimension, new Set());
+      dimensionClauseIndices.get(dimension).add(clauseIndex);
+    }
+  });
+  const sourceAnchorsByDimension = new Map();
+  for (const [dimension, clauseIndices] of dimensionClauseIndices) {
+    const dimensionText = Array.from(clauseIndices, (index) => clauses[index]).join(" ");
+    sourceAnchorsByDimension.set(dimension, numericEntityAnchors(dimensionText));
+  }
+  return {
+    clauses,
+    mentions,
+    clauseFacts,
+    mentionsByDimension,
+    sourceAnchorsByDimension,
+    anchorPositionCache: new Map(),
+    bindingMentionCache: new Map(),
+    neighborhoodFactsCache: new Map(),
+    cacheStats: {
+      clause_fact_parses: clauses.length,
+      anchor_clause_scans: 0
+    }
+  };
+}
+
+function numericEvidenceForSource(source) {
+  const sourceText = answerEvidenceTextForSource(source);
+  if (!source || typeof source !== "object") return numericEvidenceMentions(sourceText);
+  const cached = numericEvidenceSourceCache.get(source);
+  if (cached?.sourceText === sourceText) return cached.evidence;
+  const evidence = numericEvidenceMentions(sourceText);
+  numericEvidenceSourceCache.set(source, { sourceText, evidence });
+  return evidence;
+}
+
+function numericEvidenceAnchorInfo(evidence, anchor) {
+  const key = normalizeText(anchor);
+  if (!key) return { positions: [], positionSet: new Set(), sectionPositions: [] };
+  const cached = evidence.anchorPositionCache.get(key);
+  if (cached) return cached;
+  const positions = [];
+  const sectionPositions = [];
+  evidence.clauses.forEach((clause, index) => {
+    if (!numericTextMatchesAnchor(clause, anchor)) return;
+    positions.push(index);
+    if (numericAnchorIntroducesSection(clause, anchor)) sectionPositions.push(index);
+  });
+  const result = { positions, positionSet: new Set(positions), sectionPositions };
+  evidence.anchorPositionCache.set(key, result);
+  evidence.cacheStats.anchor_clause_scans += evidence.clauses.length;
+  return result;
+}
+
+function numericNearestPositionDistance(positions, target) {
+  if (!positions.length) return Number.POSITIVE_INFINITY;
+  let low = 0;
+  let high = positions.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (positions[middle] < target) low = middle + 1;
+    else high = middle;
+  }
+  let distance = Number.POSITIVE_INFINITY;
+  if (low < positions.length) distance = Math.min(distance, Math.abs(positions[low] - target));
+  if (low > 0) distance = Math.min(distance, Math.abs(positions[low - 1] - target));
+  return distance;
+}
+
+function numericLastPositionInRange(positions, start, end) {
+  let low = 0;
+  let high = positions.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (positions[middle] <= end) low = middle + 1;
+    else high = middle;
+  }
+  const candidate = low > 0 ? positions[low - 1] : -1;
+  return candidate >= start ? candidate : -1;
+}
+
+function numericAnchorDistance(evidence, clauseIndex, anchor) {
+  return numericNearestPositionDistance(
+    numericEvidenceAnchorInfo(evidence, anchor).positions,
+    clauseIndex
+  );
+}
+
+function numericAnchorIntroducesSection(value, anchor) {
+  if (!numericTextMatchesAnchor(value, anchor)) return false;
+  const text = normalizeText(value);
+  if (/^(?:okay\s+)?(?:and\s+)?(?:now|next|first|second|third|lastly)\b/.test(text)) return true;
+  if (/^and\s+(?:the\s+)?/.test(text)) {
+    const prefix = text.slice(0, 120);
+    return numericTextMatchesAnchor(prefix, anchor);
+  }
+  const anchorTerms = numericAnchorTerms(anchor);
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length <= anchorTerms.length + 2 &&
+    anchorTerms.every((term) => answerSupportTextHasTerm(text, term));
+}
+
+function numericMentionMatchesIdentity(binding, mention, evidence) {
+  if (binding.anchors.length) {
+    const sourceAnchors = evidence.sourceAnchorsByDimension.get(binding.dimension) || [];
+    const universe = Array.from(new Set([
+      ...(binding.allAnchors.length ? binding.allAnchors : binding.anchors),
+      ...sourceAnchors
+    ]));
+    const directAnchors = universe.filter((anchor) =>
+      numericEvidenceAnchorInfo(evidence, anchor).positionSet.has(mention.clauseIndex)
+    );
+    if (directAnchors.length) {
+      return directAnchors.some((anchor) => binding.anchors.includes(anchor));
+    }
+    const sectionUniverse = binding.allAnchors.length ? binding.allAnchors : binding.anchors;
+    const sectionMatches = sectionUniverse.map((anchor) => ({
+      anchor,
+      position: numericLastPositionInRange(
+        numericEvidenceAnchorInfo(evidence, anchor).sectionPositions,
+        Math.max(0, mention.clauseIndex - 30),
+        mention.clauseIndex - 1
+      )
+    })).filter((item) => item.position >= 0);
+    if (sectionMatches.length) {
+      const nearestSection = Math.max(...sectionMatches.map((item) => item.position));
+      return sectionMatches.some((item) =>
+        item.position === nearestSection && binding.anchors.includes(item.anchor)
+      );
+    }
+    const distances = universe.map((anchor) => ({
+      anchor,
+      distance: numericAnchorDistance(evidence, mention.clauseIndex, anchor)
+    }));
+    const nearest = Math.min(...distances.map((item) => item.distance));
+    if (Number.isFinite(nearest) && nearest <= 6) {
+      return distances.some((item) =>
+        item.distance === nearest && binding.anchors.includes(item.anchor)
+      );
+    }
+    return binding.anchors.some((anchor) => numericTextMatchesAnchor(mention.neighborhood, anchor));
+  }
+  if (!binding.terms.length) return true;
+  const text = normalizeText(mention.clause);
+  return binding.terms.some((term) => answerSupportTextHasTerm(text, term));
+}
+
+function numericBindingMatchCacheKey(binding) {
+  return JSON.stringify([
+    binding.dimension,
+    binding.relation,
+    [...binding.anchors].sort(),
+    [...binding.allAnchors].sort(),
+    [...binding.terms].sort()
+  ]);
+}
+
+function numericEvidenceNeighborhoodFacts(evidence, clauseIndex) {
+  if (evidence.neighborhoodFactsCache.has(clauseIndex)) {
+    return evidence.neighborhoodFactsCache.get(clauseIndex);
+  }
+  const facts = new Set();
+  const start = Math.max(0, clauseIndex - 6);
+  const end = Math.min(evidence.clauses.length, clauseIndex + 7);
+  for (let index = start; index < end; index += 1) {
+    for (const fact of evidence.clauseFacts[index]) facts.add(fact);
+  }
+  evidence.neighborhoodFactsCache.set(clauseIndex, facts);
+  return facts;
+}
+
+function numericMentionSupportsFact(binding, mention, evidence) {
+  const mentionFacts = new Set(evidence.clauseFacts[mention.clauseIndex]);
+  return sourceSupportsCanonicalNumericFact(mentionFacts, binding.fact, mention.clause);
+}
+function numericRelativeDateCompatible(fact, sourceText) {
+  const match = String(fact || "").match(/^date:([a-z]+)-/);
+  if (!match) return false;
+  return new RegExp("\\b(?:after|before|following|starting|starts?|beginning|begins?)\\s+(?:on\\s+)?" + match[1] + "\\b", "i")
+    .test(normalizeText(sourceText));
+}
+
+function citedNumericClaimConflict(claim, citedSources, userProvidedText = "") {
+  const bindings = numericClaimBindings(claim, userProvidedText);
+  if (!bindings.length) return false;
+  const evidenceBySource = (Array.isArray(citedSources) ? citedSources : []).map((source) =>
+    numericEvidenceForSource(source)
+  );
+
+  for (const binding of bindings) {
+    const boundMentions = evidenceBySource.flatMap((evidence) =>
+      numericBindingBoundMentions(binding, evidence).map((mention) => ({ mention, evidence }))
+    );
+    if (!boundMentions.length) continue;
+    if (boundMentions.some(({ mention, evidence }) =>
+      numericMentionSupportsFact(binding, mention, evidence)
+    )) continue;
+    if (boundMentions.some(({ mention }) =>
+      numericRelativeDateCompatible(binding.fact, mention.neighborhood)
+    )) continue;
+    if (boundMentions.some(({ mention }) => mention.fact !== binding.fact)) return true;
+  }
+  return false;
+}
+
+function numericBindingBoundMentions(binding, evidence) {
+  const cacheKey = numericBindingMatchCacheKey(binding);
+  if (evidence.bindingMentionCache.has(cacheKey)) {
+    return evidence.bindingMentionCache.get(cacheKey);
+  }
+  const candidates = evidence.mentionsByDimension.get(binding.dimension) || [];
+  const matches = candidates.filter((mention) =>
+    numericRelationCompatible(binding.relation, mention.relation) &&
+    numericMentionMatchesIdentity(binding, mention, evidence)
+  );
+  evidence.bindingMentionCache.set(cacheKey, matches);
+  return matches;
+}
+
+function numericBindingSupportedByEvidence(binding, evidence) {
+  return numericBindingBoundMentions(binding, evidence).some((mention) => {
+    if (binding.fact.startsWith("date:")) {
+      if (binding.anchors.length && !binding.anchors.some((anchor) =>
+        numericTextMatchesAnchor(mention.clause, anchor)
+      )) return false;
+      if (!binding.anchors.length && binding.terms.length) {
+        const clauseText = normalizeText(mention.clause);
+        if (!binding.terms.some((term) => answerSupportTextHasTerm(clauseText, term))) return false;
+      }
+      return sourceSupportsCanonicalNumericFact(
+        new Set(evidence.clauseFacts[mention.clauseIndex]),
+        binding.fact,
+        mention.clause
+      );
+    }
+    return numericMentionSupportsFact(binding, mention, evidence);
+  });
+}
+
+const NUMERIC_CITATION_LEXICAL_IGNORED_TERMS = new Set([
+  "about", "according", "answer", "based", "beijing", "could", "early", "from", "guidance", "indexed",
+  "main", "option", "options", "practical", "recommend", "recommended", "resource", "should", "source",
+  "three", "time", "use", "using", "visitor", "webinar", "with", "would"
+]);
+
+function numericPreparedAnswerBlock(block) {
+  const claim = String(block || "").replace(/\[(\d+)\]/g, " ");
+  const anchors = numericEntityAnchors(claim);
+  const terms = Array.from(new Set(
+    groundingClauseIdentityTokens(claim)
+      .map(polarityTokenStem)
+      .filter((term) =>
+        term.length >= 3 &&
+        !STOP_WORDS.has(term) &&
+        !NUMERIC_CITATION_LEXICAL_IGNORED_TERMS.has(term) &&
+        !/^\d/.test(term)
+      )
+  ));
+  return { block, claim, anchors, terms };
+}
+
+function numericSourceCitationSupportContext(source) {
+  const sourceText = answerEvidenceTextForSource(source);
+  return {
+    source,
+    sourceText,
+    normalizedText: normalizeText(sourceText),
+    evidence: numericEvidenceForSource(source)
+  };
+}
+
+function numericAnswerCitationSupportContext(text, userProvidedText = "") {
+  const blocks = answerClaimBlocks(text);
+  return {
+    directBindings: numericClaimBindings(text, userProvidedText),
+    bindings: blocks.flatMap((block) =>
+      splitSentences(block.replace(/\[(\d+)\]/g, " ")).flatMap((claim) =>
+        numericClaimBindings(claim, userProvidedText)
+      )
+    ),
+    usedQueryAnchors: numericEntityAnchors(userProvidedText)
+      .filter((anchor) => numericTextMatchesAnchor(text, anchor)),
+    blocks: blocks.map(numericPreparedAnswerBlock)
+  };
+}
+
+function sourceSupportsPreparedAnswerBlockLexically(preparedBlock, sourceContext) {
+  const text = sourceContext.normalizedText;
+  if (!text) return false;
+  if (preparedBlock.anchors.length && !preparedBlock.anchors.every((anchor) =>
+    numericTextMatchesAnchor(text, anchor)
+  )) return false;
+  if (!preparedBlock.terms.length) return preparedBlock.anchors.length > 0;
+  const hits = preparedBlock.terms.filter((term) => answerSupportTextHasTerm(text, term)).length;
+  const requiredHits = preparedBlock.terms.length <= 2
+    ? preparedBlock.terms.length
+    : Math.min(4, Math.max(2, Math.ceil(preparedBlock.terms.length * 0.4)));
+  return hits >= requiredHits && hits / preparedBlock.terms.length >= 0.4;
+}
+
+function sourceSupportsAnswerBlockLexically(block, source, sourceContext = null) {
+  return sourceSupportsPreparedAnswerBlockLexically(
+    numericPreparedAnswerBlock(block),
+    sourceContext || numericSourceCitationSupportContext(source)
+  );
+}
+
+function sourceSupportsAnswerBlockPolarity(block, source) {
+  return splitSentences(String(block || "").replace(/\[(\d+)\]/g, " "))
+    .filter(Boolean)
+    .every((claim) => {
+      const evidence = deterministicRelevantSourceEvidence(claim, source);
+      return !evidence.hasRelevantClauses ||
+        !claimSourcePolarityContradiction(claim, evidence.relevantBody);
+    });
+}
+
+function sourceSupportsWholeAnswerCitationBinding(
+  text,
+  source,
+  userProvidedText = "",
+  answerContext = null,
+  sourceContext = null
+) {
+  const answerSupport = answerContext || numericAnswerCitationSupportContext(text, userProvidedText);
+  if (!answerSupport.bindings.length) return false;
+  const sourceSupport = sourceContext || numericSourceCitationSupportContext(source);
+  if (!answerSupport.bindings.every((binding) =>
+    numericBindingSupportedByEvidence(binding, sourceSupport.evidence)
+  )) return false;
+  if (answerSupport.usedQueryAnchors.length && !answerSupport.usedQueryAnchors.every((anchor) =>
+    numericTextMatchesAnchor(sourceSupport.sourceText, anchor)
+  )) return false;
+  return answerSupport.blocks.every((block) =>
+    sourceSupportsPreparedAnswerBlockLexically(block, sourceSupport) &&
+    sourceSupportsAnswerBlockPolarity(block.block, source)
+  );
+}
+
+function exactBindingsForAnswerBlock(block, userProvidedText = "") {
+  const claims = splitSentences(String(block || "").replace(/\[(\d+)\]/g, " ")).filter(Boolean);
+  if (!claims.length) return [];
+  const bindingsByClaim = claims.map((claim) => numericClaimBindings(claim, userProvidedText));
+  if (bindingsByClaim.some((bindings) => !bindings.length)) return [];
+  return bindingsByClaim.flat();
+}
+
+function sourceSupportsExactAnswerBlockCitationBinding(
+  block,
+  source,
+  userProvidedText = "",
+  sourceContext = null,
+  bindings = null
+) {
+  const exactBindings = bindings || exactBindingsForAnswerBlock(block, userProvidedText);
+  if (!exactBindings.length) return false;
+  const sourceSupport = sourceContext || numericSourceCitationSupportContext(source);
+  if (!exactBindings.every((binding) =>
+    numericBindingSupportedByEvidence(binding, sourceSupport.evidence)
+  )) return false;
+  const usedQueryAnchors = numericEntityAnchors(userProvidedText)
+    .filter((anchor) => numericTextMatchesAnchor(block, anchor));
+  if (usedQueryAnchors.some((anchor) =>
+    !numericTextMatchesAnchor(sourceSupport.sourceText, anchor)
+  )) return false;
+  return sourceSupportsAnswerBlockLexically(block, source, sourceSupport) &&
+    sourceSupportsAnswerBlockPolarity(block, source);
+}
+
+function answerSourceIdentity(source) {
+  return String(
+    source?.source_pack_document_id ||
+    source?.resource_id ||
+    sourceDedupeKey(source) ||
+    ""
+  );
+}
+
+function repairUniqueAnswerCitationBinding(text, sources, userProvidedText = "") {
+  const value = String(text || "");
+  const sourceList = Array.isArray(sources) ? sources : [];
+  const citationNumbers = Array.from(new Set(
+    Array.from(value.matchAll(/\[(\d+)\]/g), (match) => Number(match[1]))
+  )).filter((number) => number >= 1 && number <= sourceList.length);
+  const answerContext = numericAnswerCitationSupportContext(value, userProvidedText);
+  if (!citationNumbers.length || !answerContext.directBindings.length) {
+    return { text: value, rebound: null };
+  }
+  const sourceContexts = new Array(sourceList.length);
+  const getSourceContext = (index) => {
+    if (!sourceContexts[index]) {
+      sourceContexts[index] = numericSourceCitationSupportContext(sourceList[index]);
+    }
+    return sourceContexts[index];
+  };
+  const sourceAtIndexSupportsAnswer = (index) => sourceSupportsWholeAnswerCitationBinding(
+    value,
+    sourceList[index],
+    userProvidedText,
+    answerContext,
+    getSourceContext(index)
+  );
+  if (citationNumbers.length === 1) {
+    const currentIndex = citationNumbers[0] - 1;
+    if (sourceAtIndexSupportsAnswer(currentIndex)) {
+      return { text: value, rebound: null };
+    }
+    const candidates = sourceList
+      .map((source, index) => ({ source, index }))
+      .filter((item) => item.index !== currentIndex && sourceAtIndexSupportsAnswer(item.index));
+    if (candidates.length === 1) {
+      const target = candidates[0];
+      return {
+        text: value.replace(/\[(\d+)\]/g, "[" + (target.index + 1) + "]"),
+        rebound: {
+          from_source_ids: citationNumbers,
+          to_source_id: target.index + 1,
+          to_document_id: answerSourceIdentity(target.source).slice(0, 160)
+        }
+      };
+    }
+  }
+
+  const replacements = [];
+  for (const entry of answerClaimBlockEntries(value)) {
+    const blockCitationNumbers = Array.from(new Set(
+      Array.from(entry.block.matchAll(/\[(\d+)\]/g), (match) => Number(match[1]))
+    )).filter((number) => number >= 1 && number <= sourceList.length);
+    if (blockCitationNumbers.length !== 1) continue;
+    const exactBindings = exactBindingsForAnswerBlock(entry.block, userProvidedText);
+    if (!exactBindings.length) continue;
+    const currentIndex = blockCitationNumbers[0] - 1;
+    if (sourceSupportsExactAnswerBlockCitationBinding(
+      entry.block,
+      sourceList[currentIndex],
+      userProvidedText,
+      getSourceContext(currentIndex),
+      exactBindings
+    )) continue;
+    const blockCandidates = sourceList
+      .map((source, index) => ({ source, index }))
+      .filter((item) => item.index !== currentIndex)
+      .filter((item) => sourceSupportsExactAnswerBlockCitationBinding(
+        entry.block,
+        item.source,
+        userProvidedText,
+        getSourceContext(item.index),
+        exactBindings
+      ));
+    if (blockCandidates.length !== 1) continue;
+    const target = blockCandidates[0];
+    replacements.push({
+      start: entry.start,
+      end: entry.end,
+      text: entry.raw.replace(/\[(\d+)\]/g, "[" + (target.index + 1) + "]"),
+      change: {
+        block_index: entry.blockIndex,
+        from_source_ids: blockCitationNumbers,
+        to_source_id: target.index + 1,
+        to_document_id: answerSourceIdentity(target.source).slice(0, 160)
+      }
+    });
+  }
+  if (!replacements.length) return { text: value, rebound: null };
+  let repaired = value;
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    repaired = repaired.slice(0, replacement.start) + replacement.text + repaired.slice(replacement.end);
+  }
+  return {
+    text: repaired,
+    rebound: {
+      mode: "per_block",
+      changes: replacements
+        .slice()
+        .sort((left, right) => left.start - right.start)
+        .map((replacement) => replacement.change)
+    }
+  };
+}
+function requestedNumericRangeQuestion(value) {
+  const text = String(value || "");
+  if (/\b(?:lower\s+(?:and|to)\s+upper|minimum\s+(?:and|to)\s+maximum|min(?:imum)?\s*(?:and|to|\/)\s*max(?:imum)?)\b/i.test(text)) {
+    return true;
+  }
+  const normalized = normalizeText(text);
+  const hasQuantityIntent = /\b(?:amount|amounts|date|dates|time|times|deadline|deadlines|fare|fares|cost|costs|price|prices|fee|fees|percent|percentage|rate|duration|weight|allowance|how many|how much|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years|kilogram|kilograms|kg|gram|grams|pound|pounds|lb|bag|bags|page|pages|form|forms|document|documents|copy|copies|guest|guests|student|students|participant|participants)\b/.test(normalized);
+  const hasBareRangeQuantityIntent = /\b(?:amount|amounts|date|dates|time|times|deadline|deadlines|fare|fares|cost|costs|price|prices|fee|fees|percent|percentage|rate|duration|weight|allowance|how many|how much|number|numbers|count|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years|kilogram|kilograms|kg|gram|grams|pound|pounds|lb)\b/.test(normalized);
+  if (/\brange\b/.test(normalized)) return hasBareRangeQuantityIntent;
+  if (!hasQuantityIntent) return false;
+  const endpoint = "(?:\\d+(?:\\.\\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)";
+  return new RegExp(
+    "\\bfrom\\s+(?:[a-z]{2,4}\\s+)?" + endpoint + "\\b.{0,24}\\bto\\s+(?:[a-z]{2,4}\\s+)?" + endpoint + "\\b|" +
+    "\\bbetween\\s+(?:[a-z]{2,4}\\s+)?" + endpoint + "\\b.{0,24}\\band\\s+(?:[a-z]{2,4}\\s+)?" + endpoint + "\\b",
+    "i"
+  ).test(normalized);
+}
+
+function numericRangeFactMatchesQueryKind(fact, query) {
+  const text = normalizeText(query);
+  if (/\b(?:fare|fares|cost|costs|price|prices|yuan|rmb|money|fee|fees)\b/.test(text)) {
+    return /^range:money:/.test(fact);
+  }
+  if (/\b(?:percent|percentage|rate)\b/.test(text)) return /^range:percent:/.test(fact);
+  if (/\b(?:bag|bags|page|pages|form|forms|document|documents|copy|copies|guest|guests|student|students|people|participant|participants|course|courses|class|classes)\b/.test(text)) {
+    return /^range:count:/.test(fact);
+  }
+  if (/\b(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years|kilogram|kilograms|kg|gram|grams|pound|pounds|lb|duration|weight)\b/.test(text)) {
+    return /^range:measure:/.test(fact);
+  }
+  return true;
+}
+
+function missingRequestedNumericRangeReasons(query, answerText, sources) {
+  if (!requestedNumericRangeQuestion(query)) return [];
+  const answerRanges = new Set(
+    canonicalNumericFacts(answerText).filter((fact) => /^range:/.test(fact))
+  );
+  const queryAnchors = numericQueryEntityAnchors(query);
+  const sourceRanges = new Set();
+  for (const source of Array.isArray(sources) ? sources : []) {
+    const evidence = numericEvidenceForSource(source);
+    for (const mention of evidence.mentions) {
+      if (!/^range:/.test(mention.fact) || !numericRangeFactMatchesQueryKind(mention.fact, query)) continue;
+      const requestedRelation = numericRelationKey(query, mention.fact);
+      if (!numericRelationCompatible(requestedRelation, mention.relation)) continue;
+      if (queryAnchors.length && !queryAnchors.some((anchor) =>
+        numericTextMatchesAnchor(mention.neighborhood, anchor)
+      )) continue;
+      sourceRanges.add(mention.fact);
+    }
+  }
+  if (sourceRanges.size !== 1) return [];
+  const expectedRange = Array.from(sourceRanges)[0];
+  if (answerRanges.has(expectedRange)) return [];
+  return [
+    "The question requested a numeric range, but the answer omitted or changed the uniquely supported ordered range: " +
+      readableExactEvidenceFact(expectedRange) + "."
+  ];
 }
 
 function deterministicNamedTerms(value) {
@@ -7248,12 +8267,8 @@ function deterministicClaimVetoReasons(text, sources, userProvidedText = "") {
       const relevantEvidence = citedSources.map((source) => deterministicRelevantSourceEvidence(claim, source));
       const relevantSourceText = relevantEvidence.filter((item) => item.hasRelevantClauses).map((item) => item.relevantBody).join("\n");
       const namedSourceText = relevantEvidence.map((item) => item.namedEvidence).filter(Boolean).join("\n");
-      if (relevantSourceText) {
-        const sourceFacts = new Set(canonicalNumericFacts(relevantSourceText));
-        const claimFacts = canonicalNumericFacts(claim);
-        if (canonicalNumericFactsConflict(claimFacts, sourceFacts, relevantSourceText)) {
-          reasons.push("A cited claim conflicts with the only comparable number, date, time, amount, or count in its cited excerpt.");
-        }
+      if (citedNumericClaimConflict(claim, citedSources, userProvidedText)) {
+        reasons.push("A cited claim conflicts with the only comparable number, date, time, amount, or count in its cited excerpt.");
       }
 
       const missingNames = deterministicNamedTerms(claim).filter((term) =>
@@ -7331,6 +8346,7 @@ function citedAnswerValidation(
     }
     const staleEvidenceReason = staleOnlyCurrentEvidenceReason(query, text, sourceList, citationNumbers);
     if (staleEvidenceReason) reasons.push(staleEvidenceReason);
+    reasons.push(...missingRequestedNumericRangeReasons(query, text, sourceList));
     const deterministicVetoReasons = deterministicClaimVetoReasons(text, sourceList, userProvidedText);
     polarityConflictDetected = deterministicVetoReasons.some((reason) =>
       /reverses an explicit negation, permission, obligation, or availability condition/i.test(reason)
@@ -7372,12 +8388,26 @@ function citedAnswerValidation(
 function isUsableCitedAnswer(query, answer, fallbackSources = [], retrievalQuery = query) {
   return citedAnswerValidation(query, answer, fallbackSources, retrievalQuery).ok;
 }
+function answerClaimBlockEntries(text) {
+  const entries = Array.from(String(text || "").matchAll(/[^\r\n]+/g))
+    .map((match) => ({
+      raw: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+      block: match[0].replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim()
+    }))
+    .filter((entry) =>
+      entry.block &&
+      !/:$/.test(entry.block) &&
+      entry.block.replace(/\[(\d+)\]/g, "").split(/\s+/).filter(Boolean).length >= 2
+    );
+  return entries
+    .filter((entry, index) => !isAnswerFramingBlock(entry.block, index, entries.length))
+    .map((entry, blockIndex) => ({ ...entry, blockIndex }));
+}
+
 function answerClaimBlocks(text) {
-  const blocks = String(text || "")
-    .split(/\n+/)
-    .map((block) => block.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
-    .filter((block) => block && !/:$/.test(block) && block.replace(/\[(\d+)\]/g, "").split(/\s+/).filter(Boolean).length >= 2);
-  return blocks.filter((block, index) => !isAnswerFramingBlock(block, index, blocks.length));
+  return answerClaimBlockEntries(text).map((entry) => entry.block);
 }
 
 function isAnswerFramingBlock(block, index, blockCount) {
@@ -7944,7 +8974,8 @@ function groundedAnswerPolicyInstruction() {
     "When sources do not conflict, combine complementary facts without implying that community material is official. " +
     "Use each source's document_coverage field literally. For full_indexed_document, the entire indexed parent document was supplied; broad summaries must cover its distinct substantive topics. " +
     "For query_focused_parent_excerpts, the complete indexed parent was scanned locally but only query-relevant excerpts were supplied; answer those details without claiming an exhaustive document summary. " +
-    "For selected_excerpts or available_indexed_document, answer supported details but never imply the response exhaustively covers the parent document. "
+    "For selected_excerpts or available_indexed_document, answer supported details but never imply the response exhaustively covers the parent document. " +
+    "When a complete indexed parent document is supplied and the user asks whether a field is listed, state that it is not listed only after checking the full supplied parent, then state the closest related information the document does provide. "
   );
 }
 
@@ -7960,34 +8991,164 @@ function structuredAnswerContractInstruction() {
   );
 }
 
-function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
-  const parsed = strictJsonObject(responseText);
-  if (!parsed || !objectHasOnlyKeys(parsed, ["answer_blocks", "not_found"])) return "";
-  if (typeof parsed.not_found !== "boolean" || !Array.isArray(parsed.answer_blocks)) return "";
-  if (parsed.not_found) return parsed.answer_blocks.length === 0 ? CLEAN_INDEXED_NOT_FOUND_ANSWER : "";
-  // The contract asks for at most eight blocks. Accept a bounded over-segmented
-  // response only when adjacent blocks can be safely coalesced without changing
-  // their source bindings; this prevents a correct long list from failing closed.
-  if (!parsed.answer_blocks.length || parsed.answer_blocks.length > 16) return "";
+function structuredJsonObjectEnvelope(responseText) {
+  const raw = String(responseText || "");
+  const clean = raw.trim();
+  const responseChars = raw.length;
+  const failure = (failureCode, envelope = "") => ({
+    ok: false,
+    parsed: null,
+    envelope,
+    failure_code: failureCode,
+    response_chars: responseChars,
+    top_level_keys: [],
+    answer_block_count: null
+  });
+  const success = (parsed, envelope) => ({
+    ok: true,
+    parsed,
+    envelope,
+    failure_code: "",
+    response_chars: responseChars,
+    top_level_keys: parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? Object.keys(parsed).sort().slice(0, 12)
+      : [],
+    answer_block_count: Array.isArray(parsed?.answer_blocks) ? parsed.answer_blocks.length : null
+  });
+  const parseObject = (value) => {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch (_error) {
+      return null;
+    }
+  };
+  const scanObjects = (value) => {
+    const slices = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let unmatchedClose = false;
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === "{") {
+        if (depth === 0) start = index;
+        depth += 1;
+      } else if (character === "}") {
+        if (depth === 0) {
+          unmatchedClose = true;
+          continue;
+        }
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          slices.push(value.slice(start, index + 1));
+          start = -1;
+        }
+      }
+    }
+    return { slices, unbalanced: depth !== 0 || inString || unmatchedClose };
+  };
+
+  if (!clean) return failure("provider_empty");
+  try {
+    const direct = JSON.parse(clean);
+    if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+      return success(direct, "direct");
+    }
+    return failure("top_level_json_type_invalid", "direct");
+  } catch (_error) {
+    // A non-JSON wrapper may still contain one complete unambiguous object.
+  }
+
+  if (clean.startsWith("```")) {
+    const fenced = clean.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
+    if (fenced) {
+      try {
+        const parsed = JSON.parse(fenced[1].trim());
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return success(parsed, "fenced");
+        }
+        return failure("top_level_json_type_invalid", "fenced");
+      } catch (_error) {
+        // Fall through to the bounded structural diagnostic below.
+      }
+      const scannedFence = scanObjects(fenced[1]);
+      return failure(scannedFence.unbalanced ? "json_unbalanced" : "json_syntax_invalid", "fenced");
+    }
+  }
+
+  const scanned = scanObjects(clean);
+  if (scanned.unbalanced) return failure("json_unbalanced");
+  if (!scanned.slices.length) return failure("json_not_found");
+  if (scanned.slices.length !== 1) return failure("json_ambiguous");
+  const parsed = parseObject(scanned.slices[0]);
+  return parsed ? success(parsed, "prose_wrapped") : failure("json_syntax_invalid", "prose_wrapped");
+}
+
+function structuredCitedAnswerParseResult(responseText, sourceCount = 0) {
+  const envelopeResult = structuredJsonObjectEnvelope(responseText);
+  const fail = (failureCode) => ({
+    ...envelopeResult,
+    ok: false,
+    answer: "",
+    failure_code: failureCode
+  });
+  if (!envelopeResult.ok) return { ...envelopeResult, answer: "" };
+
+  const parsed = envelopeResult.parsed;
+  if (!objectHasOnlyKeys(parsed, ["answer_blocks", "not_found"])) return fail("top_level_schema_invalid");
+  if (typeof parsed.not_found !== "boolean" || !Array.isArray(parsed.answer_blocks)) {
+    return fail("top_level_schema_invalid");
+  }
+  if (parsed.not_found) {
+    return parsed.answer_blocks.length === 0
+      ? { ...envelopeResult, ok: true, answer: CLEAN_INDEXED_NOT_FOUND_ANSWER }
+      : fail("not_found_contract_invalid");
+  }
+  if (!parsed.answer_blocks.length || parsed.answer_blocks.length > 16) {
+    return fail("answer_block_count_invalid");
+  }
 
   const maximumSourceId = Math.max(0, Math.min(8, Math.floor(Number(sourceCount) || 0)));
-  if (!maximumSourceId) return "";
+  if (!maximumSourceId) return fail("source_ids_invalid");
   const normalizedBlocks = [];
   for (const block of parsed.answer_blocks) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) return "";
-    if (!objectHasOnlyKeys(block, ["source_ids", "text"])) return "";
-    if (typeof block.text !== "string" || !Array.isArray(block.source_ids)) return "";
+    if (
+      !block || typeof block !== "object" || Array.isArray(block) ||
+      !objectHasOnlyKeys(block, ["source_ids", "text"]) ||
+      typeof block.text !== "string" || !Array.isArray(block.source_ids)
+    ) {
+      return fail("answer_block_schema_invalid");
+    }
     const sourceIds = Array.from(new Set(block.source_ids));
     if (
       !sourceIds.length || sourceIds.length > 3 || sourceIds.length !== block.source_ids.length ||
       sourceIds.some((id) => !Number.isInteger(id) || id < 1 || id > maximumSourceId)
-    ) return "";
-    if (/\[\d+\]/.test(block.text)) return "";
+    ) {
+      return fail("source_ids_invalid");
+    }
+    if (/\[\d+\]/.test(block.text)) return fail("inline_citation_invalid");
     const blockText = cleanAnswerText(block.text, 0)
       .replace(/^\s*(?:[-*]|\d+[.)])\s*/, "")
       .replace(/\s+/g, " ")
       .trim();
-    if (!blockText || isCouldNotFindAnswer(blockText) || looksLikeReviewerLeak(blockText) || looksLikeRawEvidenceDump(blockText)) return "";
+    if (
+      !blockText || isCouldNotFindAnswer(blockText) ||
+      looksLikeReviewerLeak(blockText) || looksLikeRawEvidenceDump(blockText)
+    ) {
+      return fail("unsafe_answer_text");
+    }
     normalizedBlocks.push({ text: blockText, sourceIds });
   }
 
@@ -8005,7 +9166,7 @@ function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
       }
     }
     answerBlocks = coalesced;
-    if (answerBlocks.length > 8) return "";
+    if (answerBlocks.length > 8) return fail("answer_block_count_invalid");
   }
 
   const renderedBlocks = answerBlocks.map((block) => {
@@ -8015,12 +9176,89 @@ function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
       ? block.text.slice(0, -1).trimEnd() + " " + citationText + terminalPunctuation
       : block.text + " " + citationText;
   });
-  return cleanAnswerText(
+  const answer = cleanAnswerText(
     renderedBlocks.length === 1
       ? renderedBlocks[0]
       : renderedBlocks.map((block) => "- " + block).join("\n"),
     maximumSourceId
   );
+  return answer
+    ? { ...envelopeResult, ok: true, answer }
+    : fail("unsafe_answer_text");
+}
+
+function structuredCitedAnswerFromResponse(responseText, sourceCount = 0) {
+  return structuredCitedAnswerParseResult(responseText, sourceCount).answer;
+}
+
+function structuredAnswerParseFailureResult(failureCode = "structured_output_invalid") {
+  return {
+    ok: false,
+    parsed: null,
+    answer: "",
+    envelope: "",
+    failure_code: failureCode,
+    response_chars: 0,
+    top_level_keys: [],
+    answer_block_count: null
+  };
+}
+
+function coerceStructuredStageResult(value) {
+  if (value && typeof value === "object" && typeof value.ok === "boolean" && typeof value.answer === "string") {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return {
+      ok: true,
+      parsed: null,
+      answer: value,
+      envelope: "rendered_compat",
+      failure_code: "",
+      response_chars: value.length,
+      top_level_keys: [],
+      answer_block_count: null
+    };
+  }
+  return structuredAnswerParseFailureResult();
+}
+
+function structuredOutputDiagnostic(phase, parseResult) {
+  const result = parseResult || structuredAnswerParseFailureResult();
+  return {
+    phase,
+    accepted: false,
+    deterministic_ok: null,
+    semantic_verifier_called: false,
+    reason_codes: Array.from(new Set(["structured_output_invalid", result.failure_code].filter(Boolean))),
+    structured_output: {
+      ok: Boolean(result.ok),
+      envelope: String(result.envelope || "").slice(0, 40),
+      failure_code: String(result.failure_code || "").slice(0, 80),
+      response_chars: Math.max(0, Number(result.response_chars) || 0),
+      top_level_keys: (Array.isArray(result.top_level_keys) ? result.top_level_keys : []).map(String).slice(0, 12),
+      answer_block_count: Number.isInteger(result.answer_block_count) ? result.answer_block_count : null
+    }
+  };
+}
+
+function attachStructuredOutputDiagnostic(diagnostic, parseResult) {
+  const metadata = structuredOutputDiagnostic(diagnostic?.phase || "", parseResult).structured_output;
+  return { ...diagnostic, structured_output: metadata };
+}
+
+function structuredOutputCandidateEvaluation(phase, parseResult) {
+  const result = parseResult || structuredAnswerParseFailureResult();
+  return {
+    accepted: false,
+    answer: { text: "", sources: [] },
+    validation: {
+      ok: false,
+      reasons: ["Structured answer output failed validation: " + String(result.failure_code || "structured_output_invalid") + "."]
+    },
+    verdict: null,
+    diagnostic: structuredOutputDiagnostic(phase, result)
+  };
 }
 function objectHasOnlyKeys(value, allowedKeys) {
   const keys = Object.keys(value || {}).sort();
@@ -9236,7 +10474,7 @@ async function selectSemanticEvidenceForApi(
   }
 }
 
-async function buildApiAnswer(query, results, memory = [], retrievalQuery = query, queryPlan = null) {
+async function buildApiAnswer(query, results, memory = [], retrievalQuery = query, queryPlan = null, options = null) {
   const context = answerPromptSources(results, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
@@ -9282,9 +10520,9 @@ async function buildApiAnswer(query, results, memory = [], retrievalQuery = quer
     maxTokens: 1400,
     temperature: 0
   });
-  const answer = structuredCitedAnswerFromResponse(response, context.length);
-  if (!answer) console.warn("Answer generator returned invalid structured output.");
-  return answer;
+  const parseResult = structuredCitedAnswerParseResult(response, context.length);
+  if (!parseResult.ok) console.warn("Answer generator returned invalid structured output.");
+  return options?.includeParseResult ? parseResult : parseResult.answer;
 }
 function shouldUseLlmQueryPlanner(query, memory = []) {
   return hasConversationHistory(memory) && requiresConversationResolution(query);
@@ -9716,7 +10954,8 @@ async function reviewApiAnswer(
   memory = [],
   retrievalQuery = query,
   queryPlan = null,
-  validationFeedback = ""
+  validationFeedback = "",
+  options = null
 ) {
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
@@ -9755,16 +10994,17 @@ async function reviewApiAnswer(
       maxTokens: 1200,
       temperature: 0
     });
-    const reviewedAnswer = structuredCitedAnswerFromResponse(response, sourceList.length);
-    if (reviewedAnswer) return reviewedAnswer;
-    console.warn("Grounding repair writer returned invalid structured output.");
+    const parseResult = structuredCitedAnswerParseResult(response, sourceList.length);
+    if (!parseResult.ok) console.warn("Grounding repair writer returned invalid structured output.");
+    return options?.includeParseResult ? parseResult : parseResult.answer;
   } catch (error) {
     console.warn("Grounding repair failed.", error);
+    const failure = structuredAnswerParseFailureResult("provider_or_runtime_error");
+    return options?.includeParseResult ? failure : "";
   }
-  return "";
 }
 
-async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery = query, queryPlan = null, validationFeedback = "") {
+async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery = query, queryPlan = null, validationFeedback = "", options = null) {
   const promptQuery = resolvedQuestionForRag(query, queryPlan, memory);
   const promptRetrievalQuery = clampText(retrievalQuery, MAX_QUERY_CHARS);
   const sourceList = answerPromptSources(sources, 5, MAX_ANSWER_SOURCE_TEXT_CHARS);
@@ -9799,9 +11039,9 @@ async function recoverReviewedAnswer(query, sources, memory = [], retrievalQuery
     maxTokens: 1100,
     temperature: 0
   });
-  const answer = structuredCitedAnswerFromResponse(response, sourceList.length);
-  if (!answer) console.warn("Final-answer recovery returned invalid structured output.");
-  return answer;
+  const parseResult = structuredCitedAnswerParseResult(response, sourceList.length);
+  if (!parseResult.ok) console.warn("Final-answer recovery returned invalid structured output.");
+  return options?.includeParseResult ? parseResult : parseResult.answer;
 }
 function clampText(value, limit) {
   const text = String(value || "").replace(/\s+/g, " ").trim();

@@ -216,6 +216,52 @@ if (
   throw new Error("Structured answer contract accepted an invalid source binding or mixed citation channel.");
 }
 
+const directStructuredParse = context.structuredCitedAnswerParseResult(JSON.stringify({
+  not_found: false,
+  answer_blocks: [{ text: "Call police at 110.", source_ids: [1] }]
+}), 1);
+const fencedStructuredParse = context.structuredCitedAnswerParseResult(
+  '```json\n{"not_found":false,"answer_blocks":[{"text":"Call an ambulance at 120.","source_ids":[1]}]}\n```',
+  1
+);
+const wrappedStructuredParse = context.structuredCitedAnswerParseResult(
+  'Here is the requested JSON:\n{"not_found":false,"answer_blocks":[{"text":"Call the fire service at 119.","source_ids":[1]}]}\nEnd of response.',
+  1
+);
+if (
+  !directStructuredParse.ok || directStructuredParse.envelope !== "direct" ||
+  !fencedStructuredParse.ok || fencedStructuredParse.envelope !== "fenced" ||
+  !wrappedStructuredParse.ok || wrappedStructuredParse.envelope !== "prose_wrapped" ||
+  !/110 \[1\]/.test(directStructuredParse.answer) ||
+  !/120 \[1\]/.test(fencedStructuredParse.answer) ||
+  !/119 \[1\]/.test(wrappedStructuredParse.answer)
+) {
+  throw new Error("A complete unambiguous structured answer envelope was not normalized safely: " + JSON.stringify({
+    directStructuredParse,
+    fencedStructuredParse,
+    wrappedStructuredParse
+  }));
+}
+
+const rejectedStructuredShapes = [
+  ["no JSON here", "json_not_found"],
+  ['[{"not_found":true,"answer_blocks":[]}]', "top_level_json_type_invalid"],
+  ['{"not_found":false,"answer_blocks":[', "json_unbalanced"],
+  ['{"not_found":false,"answer_blocks":[,]}', "json_syntax_invalid"],
+  ['{"not_found":true,"answer_blocks":[]} {"not_found":true,"answer_blocks":[]}', "json_ambiguous"],
+  [JSON.stringify({ not_found: false, answer_blocks: [{ text: "Valid", source_ids: [1] }], reason: "extra" }), "top_level_schema_invalid"],
+  [JSON.stringify({ not_found: false, answer_blocks: [{ text: "Invalid source", source_ids: [2] }] }), "source_ids_invalid"]
+];
+for (const [response, expectedFailureCode] of rejectedStructuredShapes) {
+  const parsed = context.structuredCitedAnswerParseResult(response, 1);
+  if (parsed.ok || parsed.failure_code !== expectedFailureCode || parsed.answer) {
+    throw new Error("A malformed or ambiguous structured answer was not rejected with the expected reason: " + JSON.stringify({
+      expectedFailureCode,
+      parsed
+    }));
+  }
+}
+
 
 const oversegmentedFundingResponse = context.structuredCitedAnswerFromResponse(JSON.stringify({
   not_found: false,
@@ -233,10 +279,11 @@ function validation(query, answer, sources) {
   return context.citedAnswerValidation(query, { text: answer, sources }, sources, query);
 }
 
-async function runLadder(query, sources, responses) {
+async function runLadder(query, sources, responses, { adaptStructured = true } = {}) {
   context.__groundingQuery = query;
   context.__groundingSources = sources;
   context.__groundingResponses = [...responses];
+  context.__groundingAdaptStructured = adaptStructured;
   context.__groundingStages = [];
   context.__groundingRequests = [];
   vm.runInContext(String.raw`
@@ -272,7 +319,7 @@ async function runLadder(query, sources, responses) {
       globalThis.__groundingStages.push(stage);
       const response = globalThis.__groundingResponses.shift();
       if (typeof response !== "string") throw new Error("Missing mock response at " + stage);
-      return __adaptStructuredAnswerMock(response, system);
+      return globalThis.__groundingAdaptStructured ? __adaptStructuredAnswerMock(response, system) : response;
     };
     globalThis.__groundingPromise = generateVerifiedApiAnswer(
       globalThis.__groundingQuery,
@@ -289,6 +336,65 @@ async function runLadder(query, sources, responses) {
     requests: [...context.__groundingRequests],
     remaining: [...context.__groundingResponses]
   };
+}
+
+const emergencyQuery =
+  "What are the police, ambulance, and fire numbers, and what language-access warning accompanies them?";
+const emergencySources = [
+  source("transport-distractor", "Beijing transportation workshop", "Use the subway, ride-hailing, shared bikes, and buses for daily travel."),
+  source(
+    "survival-emergency",
+    "Schwarzman Scholars Survival Guide",
+    "Emergency services: police 110, ambulance 120, and fire 119. Operators may not speak English, so keep a Chinese speaker or your address in Chinese ready."
+  ),
+  source("beijing-distractor", "Discovering Beijing webinar", "Reserve museum visits in advance.")
+];
+const emergencyAnswerBlock = {
+  not_found: false,
+  answer_blocks: [{
+    text: "Call police at 110, an ambulance at 120, or the fire service at 119. Operators may not speak English, so keep a Chinese speaker or your address in Chinese ready.",
+    source_ids: [2]
+  }]
+};
+const emergencyWrappedRepair = await runLadder(
+  emergencyQuery,
+  emergencySources,
+  [
+    '{"not_found":false,"answer_blocks":[,]}',
+    "Here is the requested JSON:\n" + JSON.stringify(emergencyAnswerBlock) + "\nEnd of response.",
+    supportedVerdict
+  ],
+  { adaptStructured: false }
+);
+if (
+  emergencyWrappedRepair.stages.join(",") !== "answer,reviewer,final-verifier" ||
+  !/police at 110.*ambulance at 120.*fire service at 119/i.test(emergencyWrappedRepair.answer.text) ||
+  emergencyWrappedRepair.answer.pipeline_diagnostics?.[0]?.structured_output?.failure_code !== "json_syntax_invalid" ||
+  emergencyWrappedRepair.answer.pipeline_diagnostics?.[1]?.structured_output?.envelope !== "prose_wrapped"
+) {
+  throw new Error("A real-source-order emergency answer did not recover from a malformed draft through one complete wrapped JSON envelope: " + JSON.stringify(emergencyWrappedRepair, null, 2));
+}
+
+const emergencyAllInvalid = await runLadder(
+  emergencyQuery,
+  emergencySources,
+  [
+    '{"not_found":false,"answer_blocks":[,]}',
+    "No JSON object was returned.",
+    '{"not_found":false,"answer_blocks":['
+  ],
+  { adaptStructured: false }
+);
+const invalidCodes = (emergencyAllInvalid.answer.pipeline_diagnostics || []).map((item) =>
+  item.structured_output?.failure_code || ""
+);
+if (
+  emergencyAllInvalid.stages.join(",") !== "answer,reviewer,recovery" ||
+  emergencyAllInvalid.answer.text !== "I could not produce a reliable cited answer from the indexed resources. Please try again." ||
+  invalidCodes.join(",") !== "json_syntax_invalid,json_not_found,json_unbalanced" ||
+  emergencyAllInvalid.answer.sources.length
+) {
+  throw new Error("Malformed structured outputs were not diagnosed precisely and failed closed: " + JSON.stringify(emergencyAllInvalid, null, 2));
 }
 
 const eventSource = source(
@@ -803,6 +909,192 @@ if (threeSiteExactnessReasons.length) {
   throw new Error("An unrelated guest-policy clock contaminated the exact three-site answer: " + JSON.stringify(threeSiteExactnessReasons));
 }
 
+const q22ProductionOrderSources = [
+  source("q22-transport", "Beijing transportation workshop", "Use the subway, ride-hailing, shared bikes, and buses."),
+  source("q22-survival", "Survival guide", "Keep emergency contacts and your address in Chinese ready."),
+  source("q22-logistics", "International logistics webinar", "Confirm inbound travel arrangements."),
+  source(
+    "q22-discovering",
+    "Discovering Beijing webinar",
+    "Get an English tour guide for the Forbidden City. If you go to the Temple of Heaven at 6.30 a.m., you can see the early-morning park activities. Reserve the National Museum of China up to seven days in advance and allow at least four hours inside."
+  ),
+  source("q22-life", "Life in China webinar", "Use local map and payment apps.")
+];
+const miscitedThreeSiteAnswer = exactThreeSiteAnswer.replace("[1]", "[1]");
+const q22CitationRepairRun = await runLadder(
+  threeSiteQuery,
+  q22ProductionOrderSources,
+  [miscitedThreeSiteAnswer, supportedVerdict]
+);
+if (
+  q22CitationRepairRun.stages.join(",") !== "answer,verifier" ||
+  q22CitationRepairRun.answer.sources?.[0]?.resource_id !== "q22-discovering" ||
+  q22CitationRepairRun.answer.pipeline_diagnostics?.[0]?.citation_rebound?.to_source_id !== 4
+) {
+  throw new Error("A uniquely supported q22 answer was not rebound from the distractor citation before semantic verification: " + JSON.stringify(q22CitationRepairRun));
+}
+
+const multiSourceCitationQuery =
+  "Reconcile the Blackboard Home snapshot with the mandatory Capstone survey deadline.";
+const multiSourceCitationSources = [
+  source(
+    "citation-home",
+    "Blackboard Home snapshot",
+    "Snapshot June 19, 2026: Due Today shows 0 items."
+  ),
+  source(
+    "citation-todo",
+    "Blackboard To Do",
+    "The mandatory Capstone Preliminary Interest Survey is due June 23, 2026 at 23:59 UTC+8."
+  )
+];
+const correctMultiSourceCitationAnswer =
+  "At the June 19, 2026 snapshot, the dashboard showed 0 items due that day [1].\n" +
+  "The mandatory Capstone survey is due June 23, 2026 at 23:59 UTC+8 [2].";
+const swappedMultiSourceCitationAnswer =
+  correctMultiSourceCitationAnswer.replace("[1]", "[swap]").replace("[2]", "[1]").replace("[swap]", "[2]");
+const repairedMultiSourceCitations = context.repairUniqueAnswerCitationBinding(
+  swappedMultiSourceCitationAnswer,
+  multiSourceCitationSources,
+  multiSourceCitationQuery
+);
+const alignedMultiSourceCitations = context.alignAnswerCitations(
+  repairedMultiSourceCitations.text,
+  multiSourceCitationSources
+);
+if (
+  repairedMultiSourceCitations.text !== correctMultiSourceCitationAnswer ||
+  repairedMultiSourceCitations.rebound?.mode !== "per_block" ||
+  repairedMultiSourceCitations.rebound?.changes?.length !== 2 ||
+  alignedMultiSourceCitations.sources.map((item) => item.resource_id).join(",") !== "citation-home,citation-todo" ||
+  !validation(
+    multiSourceCitationQuery,
+    repairedMultiSourceCitations.text,
+    multiSourceCitationSources
+  ).ok
+) {
+  throw new Error("Exact multi-source citations were not repaired independently and safely: " + JSON.stringify({
+    repairedMultiSourceCitations,
+    alignedSourceIds: alignedMultiSourceCitations.sources.map((item) => item.resource_id),
+    validation: validation(multiSourceCitationQuery, repairedMultiSourceCitations.text, multiSourceCitationSources)
+  }));
+}
+const correctMultiSourceCitationRepair = context.repairUniqueAnswerCitationBinding(
+  correctMultiSourceCitationAnswer,
+  multiSourceCitationSources,
+  multiSourceCitationQuery
+);
+if (correctMultiSourceCitationRepair.text !== correctMultiSourceCitationAnswer || correctMultiSourceCitationRepair.rebound) {
+  throw new Error("Already-correct multi-source citations were unnecessarily rewritten.");
+}
+const multiSourceCitationRun = await runLadder(
+  multiSourceCitationQuery,
+  multiSourceCitationSources,
+  [swappedMultiSourceCitationAnswer, supportedVerdict]
+);
+if (
+  multiSourceCitationRun.stages.join(",") !== "answer,verifier" ||
+  multiSourceCitationRun.answer.text.replace(/^- /gm, "") !== correctMultiSourceCitationAnswer ||
+  multiSourceCitationRun.answer.pipeline_diagnostics?.[0]?.citation_rebound?.mode !== "per_block"
+) {
+  throw new Error("The production ladder did not repair block-level citations before verification: " + JSON.stringify(multiSourceCitationRun));
+}
+const broadAggregatorSource = source(
+  "citation-aggregator",
+  "Combined schedule summary",
+  "Snapshot June 19, 2026: Due Today shows 0 items. The mandatory Capstone Preliminary Interest Survey is due June 23, 2026 at 23:59 UTC+8."
+);
+const correctMultiSourceWithAggregator = context.repairUniqueAnswerCitationBinding(
+  correctMultiSourceCitationAnswer,
+  [...multiSourceCitationSources, broadAggregatorSource],
+  multiSourceCitationQuery
+);
+if (correctMultiSourceWithAggregator.text !== correctMultiSourceCitationAnswer || correctMultiSourceWithAggregator.rebound) {
+  throw new Error("A broad aggregate source overwrote already-valid multi-source citations.");
+}
+const unrelatedNearbyDateRepair = context.repairUniqueAnswerCitationBinding(
+  "The Capstone survey is due June 23, 2026 [2].",
+  [
+    source(
+      "citation-nearby-date",
+      "Mixed dates",
+      "The Capstone survey is due June 19, 2026. Housing begins June 23, 2026."
+    ),
+    source("citation-no-deadline", "Task list", "The task list names the Capstone survey but prints no deadline.")
+  ],
+  "When is the Capstone survey due?"
+);
+if (unrelatedNearbyDateRepair.rebound || !/\[2\]/.test(unrelatedNearbyDateRepair.text)) {
+  throw new Error("Automatic citation repair borrowed an unrelated nearby date: " + JSON.stringify({ repair: unrelatedNearbyDateRepair, bindings: context.numericClaimBindings("The Capstone survey is due June 23, 2026 [2].", "When is the Capstone survey due?"), evidence: context.numericEvidenceMentions("The Capstone survey is due June 19, 2026. Housing begins June 23, 2026.") }));
+}
+
+const sameSentenceDateQuery = "When does the Capstone survey open and when is it due?";
+const sameSentenceDateSource = source(
+  "citation-same-sentence-dates",
+  "Capstone survey dates",
+  "The Capstone survey opens June 19, 2026 and is due June 23, 2026."
+);
+for (const wrongAnswer of [
+  "The Capstone survey is due June 19, 2026 [1].",
+  "The Capstone survey opens June 23, 2026 [1]."
+]) {
+  const wrongGuard = validation(sameSentenceDateQuery, wrongAnswer, [sameSentenceDateSource]);
+  if (wrongGuard.ok || !wrongGuard.reasons.some((reason) => /comparable number/i.test(reason))) {
+    throw new Error("A same-sentence event date borrowed the other event role: " + JSON.stringify({ wrongAnswer, wrongGuard }));
+  }
+}
+const sameSentenceWrongDateRepair = context.repairUniqueAnswerCitationBinding(
+  "The Capstone survey is due June 19, 2026 [2].",
+  [
+    sameSentenceDateSource,
+    source("citation-same-sentence-no-date", "Task list", "The task list names the Capstone survey but prints no date.")
+  ],
+  sameSentenceDateQuery
+);
+if (sameSentenceWrongDateRepair.rebound || !/\[2\]/.test(sameSentenceWrongDateRepair.text)) {
+  throw new Error("Citation repair rebound a date to the wrong same-sentence event role: " + JSON.stringify(sameSentenceWrongDateRepair));
+}
+const sameSentenceCorrectDateRepair = context.repairUniqueAnswerCitationBinding(
+  "The Capstone survey is due June 23, 2026 [2].",
+  [
+    sameSentenceDateSource,
+    source("citation-same-sentence-no-date-correct", "Task list", "The task list names the Capstone survey but prints no date.")
+  ],
+  sameSentenceDateQuery
+);
+if (
+  sameSentenceCorrectDateRepair.rebound?.to_source_id !== 1 ||
+  !/\[1\]/.test(sameSentenceCorrectDateRepair.text)
+) {
+  throw new Error("Citation repair failed to bind the correct same-sentence event date: " + JSON.stringify(sameSentenceCorrectDateRepair));
+}
+const qualitativeOnlySwap =
+  "Partners may visit Beijing but cannot live in the College [2].\n" +
+  "Program funding covers tuition and room and board [1].";
+const qualitativeOnlyRepair = context.repairUniqueAnswerCitationBinding(
+  qualitativeOnlySwap,
+  [
+    source("citation-partner", "Partner policy", "A partner may visit Beijing but cannot live in the College."),
+    source("citation-funding", "Funding package", "Program funding covers tuition and room and board.")
+  ],
+  "Compare partner housing and program funding."
+);
+if (qualitativeOnlyRepair.text !== qualitativeOnlySwap || qualitativeOnlyRepair.rebound) {
+  throw new Error("Qualitative-only claims were auto-rebound without an exact deterministic identity.");
+}
+const ambiguousExactRepair = context.repairUniqueAnswerCitationBinding(
+  "At the June 19, 2026 snapshot, the dashboard showed 0 items due that day [2].",
+  [
+    multiSourceCitationSources[0],
+    multiSourceCitationSources[1],
+    source("citation-home-duplicate", "Duplicate Home snapshot", "Snapshot June 19, 2026: Due Today shows 0 items.")
+  ],
+  multiSourceCitationQuery
+);
+if (ambiguousExactRepair.rebound || !/\[2\]/.test(ambiguousExactRepair.text)) {
+  throw new Error("Ambiguous exact support was guessed instead of remaining fail-closed.");
+}
+
 const fundingPackageQuery =
   "Which major costs and equipment does the program funding include, and can a partner live with me in the College?";
 const fundingPackageAnswer =
@@ -1102,6 +1394,46 @@ if (!visitorScheduleGuard.ok) {
   throw new Error("A logically equivalent relative date and compact time paraphrase tripped the hard numeric veto: " + JSON.stringify(visitorScheduleGuard));
 }
 
+if (!context.requestedSpecificAnswerKinds("What is the museum reservation and time commitment?").has("temporal")) {
+  throw new Error("The phrase time commitment did not request an exact temporal value.");
+}
+
+const museumIsolationSource = source(
+  "museum-duration-isolation",
+  "Three Beijing historical attractions",
+  "The Forbidden City main route takes about three hours. The National Museum of China requires advance booking and at least four hours inside."
+);
+const supportedMuseumDurations =
+  "The Forbidden City main route takes about three hours, while the National Museum requires at least four hours [1].";
+const supportedMuseumDurationGuard = validation(
+  "Compare the Forbidden City and National Museum of China time commitments.",
+  supportedMuseumDurations,
+  [museumIsolationSource]
+);
+if (!supportedMuseumDurationGuard.ok) {
+  throw new Error("Entity-bound duration validation rejected two supported venue durations: " + JSON.stringify(supportedMuseumDurationGuard));
+}
+const wrongMuseumDuration = "The National Museum requires at least three hours [1].";
+const wrongMuseumDurationGuard = validation(
+  "What time commitment does the National Museum of China require?",
+  wrongMuseumDuration,
+  [museumIsolationSource]
+);
+if (wrongMuseumDurationGuard.ok || !wrongMuseumDurationGuard.reasons.some((reason) => /comparable number/i.test(reason))) {
+  throw new Error("An unrelated Forbidden City duration masked the wrong National Museum duration: " + JSON.stringify({ guard: wrongMuseumDurationGuard, bindings: context.numericClaimBindings(wrongMuseumDuration, "What time commitment does the National Museum of China require?"), evidence: context.numericEvidenceMentions(museumIsolationSource.text), conflict: context.citedNumericClaimConflict(wrongMuseumDuration, [museumIsolationSource], "What time commitment does the National Museum of China require?") }));
+}
+
+const multiEntityDurationQuery = "Compare the Forbidden City and National Museum of China time commitments.";
+for (const [label, wrongAnswer] of [
+  ["National Museum", "The National Museum of China requires at least three hours [1]."],
+  ["Forbidden City", "The Forbidden City main route takes about four hours [1]."]
+]) {
+  const wrongGuard = validation(multiEntityDurationQuery, wrongAnswer, [museumIsolationSource]);
+  if (wrongGuard.ok || !wrongGuard.reasons.some((reason) => /comparable number/i.test(reason))) {
+    throw new Error(`The multi-entity comparison let ${label} borrow the other venue's duration: ${JSON.stringify(wrongGuard)}`);
+  }
+}
+
 const baggageSource = source(
   "baggage-policy",
   "Checked baggage allowance",
@@ -1111,6 +1443,276 @@ const baggageConflict = "The ticket includes one checked bag weighing up to 20 k
 const baggageConflictGuard = validation("What is my checked baggage allowance?", baggageConflict, [baggageSource]);
 if (baggageConflictGuard.ok || !baggageConflictGuard.reasons.some((reason) => /comparable number/i.test(reason))) {
   throw new Error("A clear 20-kilogram versus 23-kilogram contradiction escaped the numeric veto: " + JSON.stringify(baggageConflictGuard));
+}
+
+const rangeFactCases = [
+  {
+    label: "currency",
+    source: source("subway-fare-range", "Subway fare range", "The Beijing subway fare is 3 to 10 yuan."),
+    query: "What is the Beijing subway fare range?",
+    correct: "The Beijing subway fare is 3 to 10 yuan [1].",
+    wrongLower: "The Beijing subway fare is 4 to 10 yuan [1].",
+    wrongUpper: "The Beijing subway fare is 3 to 20 yuan [1].",
+    wrongReversed: "The Beijing subway fare is 10 to 3 yuan [1].",
+    expectedFacts: ["money:3:cny", "money:10:cny", "range:money:3:10:cny"]
+  },
+  {
+    label: "measure",
+    source: source("route-duration-range", "Route duration range", "Depending on traffic, the airport route takes 2-5 hours."),
+    query: "How long can the airport route take?",
+    correct: "The airport route takes 2 to 5 hours [1].",
+    wrongLower: "The airport route takes 3 to 5 hours [1].",
+    wrongUpper: "The airport route takes 2 to 6 hours [1].",
+    expectedFacts: ["measure:2:hours", "measure:5:hours", "range:measure:2:5:hours"]
+  },
+  {
+    label: "count",
+    source: source("visitor-bag-range", "Visitor bag range", "Visitors may bring one through two bags."),
+    query: "How many bags may visitors bring?",
+    correct: "Visitors may bring one to two bags [1].",
+    wrongLower: "Visitors may bring zero to two bags [1].",
+    wrongUpper: "Visitors may bring one to three bags [1].",
+    expectedFacts: ["count:1:bag", "count:2:bag", "range:count:1:2:bag"]
+  },
+  {
+    label: "percent",
+    source: source("rate-percent-range", "Rate percentage range", "The applicable rate is 10 to 20%."),
+    query: "What is the applicable percentage range?",
+    correct: "The applicable rate is 10 to 20% [1].",
+    wrongLower: "The applicable rate is 15 to 20% [1].",
+    wrongUpper: "The applicable rate is 10 to 25% [1].",
+    wrongReversed: "The applicable rate is 20 to 10% [1].",
+    expectedFacts: ["percent:10", "percent:20", "range:percent:10:20"]
+  }
+];
+for (const item of rangeFactCases) {
+  const sourceFacts = new Set(context.canonicalNumericFacts(item.source.text));
+  for (const expectedFact of item.expectedFacts) {
+    if (!sourceFacts.has(expectedFact)) {
+      throw new Error(`${item.label} range omitted endpoint ${expectedFact}: ${JSON.stringify([...sourceFacts])}`);
+    }
+  }
+  const correctGuard = validation(item.query, item.correct, [item.source]);
+  if (!correctGuard.ok) {
+    throw new Error(`A supported ${item.label} range failed numeric validation: ${JSON.stringify(correctGuard)}`);
+  }
+  for (const wrongAnswer of [item.wrongLower, item.wrongUpper, item.wrongReversed].filter(Boolean)) {
+    const wrongGuard = validation(item.query, wrongAnswer, [item.source]);
+    if (wrongGuard.ok || !wrongGuard.reasons.some((reason) => /comparable number/i.test(reason))) {
+      throw new Error(`A changed ${item.label} range endpoint escaped the numeric veto: ${JSON.stringify({ wrongAnswer, wrongGuard })}`);
+    }
+  }
+}
+
+const incompleteFareRangeGuard = validation(
+  "What is the Beijing subway fare range?",
+  "The Beijing subway fare starts at 3 yuan [1].",
+  [rangeFactCases[0].source]
+);
+if (incompleteFareRangeGuard.ok || !incompleteFareRangeGuard.reasons.some((reason) => /ordered range/i.test(reason))) {
+  throw new Error("A singleton fare endpoint satisfied a requested range: " + JSON.stringify(incompleteFareRangeGuard));
+}
+
+// Range intent must not mistake ordinary route wording for a request to repeat
+// an incidental numeric range from the cited source.
+const airportRouteSource = source(
+  "airport-campus-route",
+  "Airport to campus route",
+  "Take the Airport Express from the airport to Dongzhimen, then transfer to Line 2 for campus. Taxi fares may range from 80 to 120 yuan."
+);
+for (const routeQuery of [
+  "How do I travel from the airport to campus?",
+  "How do I travel between the airport and campus?"
+]) {
+  if (context.requestedNumericRangeQuestion(routeQuery)) {
+    throw new Error("Nonnumeric route wording was misclassified as a requested numeric range: " + routeQuery);
+  }
+  const routeGuard = validation(
+    routeQuery,
+    "Take the Airport Express to Dongzhimen, then transfer to Line 2 for campus [1].",
+    [airportRouteSource]
+  );
+  if (!routeGuard.ok) {
+    throw new Error("A grounded route answer was forced to repeat an incidental fare range: " + JSON.stringify(routeGuard));
+  }
+}
+
+const implicitFareRangeSource = source(
+  "implicit-fare-range",
+  "Fare boundaries",
+  "The fare falls between 3 and 10 yuan."
+);
+const implicitFareRangeQuery = "Does the fare fall between 3 and 10 yuan?";
+if (!context.requestedNumericRangeQuestion(implicitFareRangeQuery)) {
+  throw new Error("A quantity-bound between-X-and-Y question was not recognized as a numeric range request.");
+}
+const implicitIncompleteGuard = validation(
+  implicitFareRangeQuery,
+  "The fare starts at 3 yuan [1].",
+  [implicitFareRangeSource]
+);
+if (implicitIncompleteGuard.ok || !implicitIncompleteGuard.reasons.some((reason) => /ordered range/i.test(reason))) {
+  throw new Error("A singleton endpoint satisfied an implicit numeric range request: " + JSON.stringify(implicitIncompleteGuard));
+}
+
+if (context.requestedNumericRangeQuestion("What range of student clubs and activities can I join?")) {
+  throw new Error("A qualitative range-of-options question was misclassified as a numeric range request.");
+}
+
+const calendarBody =
+  "Current Location: Course Calendar. The list of courses has been released. Students can review the academic calendar, course offerings, modules, and class schedule.";
+const completeCalendarSource = source("complete-calendar", "Blackboard Course Calendar", calendarBody, {
+  document_context_scope: "full_indexed_document",
+  document_context_complete: true,
+  document_parent_scanned_complete: true
+});
+const incompleteCalendarSource = source("incomplete-calendar", "Blackboard Course Calendar", calendarBody, {
+  document_context_scope: "query_focused_parent_excerpts",
+  document_context_complete: false,
+  document_parent_scanned_complete: true
+});
+const calendarWithVenueSource = source(
+  "calendar-with-venue",
+  "Blackboard Course Calendar",
+  calendarBody + " Leadership Seminar — Venue: A101.",
+  {
+    document_context_scope: "full_indexed_document",
+    document_context_complete: true,
+    document_parent_scanned_complete: true
+  }
+);
+const roomAssignmentQueries = [
+  "Which classroom is assigned to every course in the released calendar?",
+  "Give me the room number for each course from the Blackboard Course Calendar.",
+  "Does the indexed calendar specify individual classroom assignments?"
+];
+for (const query of roomAssignmentQueries) {
+  if (!context.isCourseRoomAssignmentQuestion(query) || !context.isCourseListQuery(query)) {
+    throw new Error("A real course-room assignment wording no longer uses calendar routing: " + query);
+  }
+  if (!context.isDocumentWideSynthesisQuery(query, [], null)) {
+    throw new Error("A room-assignment question did not request complete parent-document coverage: " + query);
+  }
+}
+const dormVisitorQuery = "Which course resource explains dorm-room visitor rules?";
+if (context.isCourseRoomAssignmentQuestion(dormVisitorQuery) || context.isCourseListQuery(dormVisitorQuery)) {
+  throw new Error("A dorm-room visitor-resource query was incorrectly hard-routed to course calendars.");
+}
+if (!context.sourceSupportsQualifiedCourseRoomAnswer(completeCalendarSource)) {
+  throw new Error("A verified-complete calendar without room fields did not support a qualified limitation answer.");
+}
+if (context.sourceSupportsQualifiedCourseRoomAnswer(incompleteCalendarSource)) {
+  throw new Error("A focused/incomplete calendar excerpt was allowed to prove that room assignments are absent.");
+}
+if (context.sourceSupportsQualifiedCourseRoomAnswer(calendarWithVenueSource)) {
+  throw new Error("A complete calendar with a Venue field was incorrectly described as omitting room assignments.");
+}
+
+const extendedOrderedRangeCases = [
+  {
+    label: "prefix-repeated USD",
+    sourceText: "The fare is USD 3 to USD 10.",
+    query: "What is the fare range?",
+    correct: "The fare is USD 3 to USD 10 [1].",
+    reversed: "The fare is USD 10 to USD 3 [1].",
+    incomplete: "The fare starts at USD 3 [1].",
+    expectedRange: "range:money:3:10:usd"
+  },
+  {
+    label: "prefix-repeated dollar",
+    sourceText: "The fare is $3 to $10.",
+    query: "What is the fare range?",
+    correct: "The fare is $3 to $10 [1].",
+    reversed: "The fare is $10 to $3 [1].",
+    incomplete: "The fare starts at $3 [1].",
+    expectedRange: "range:money:3:10:usd"
+  },
+  {
+    label: "between money",
+    sourceText: "The fare is between 3 and 10 yuan.",
+    query: "What is the fare range?",
+    correct: "The fare is between 3 and 10 yuan [1].",
+    reversed: "The fare is between 10 and 3 yuan [1].",
+    incomplete: "The fare starts at 3 yuan [1].",
+    expectedRange: "range:money:3:10:cny"
+  },
+  {
+    label: "between measure",
+    sourceText: "The route takes between 2 hours and 5 hours.",
+    query: "What is the route duration range?",
+    correct: "The route takes between 2 and 5 hours [1].",
+    reversed: "The route takes between 5 and 2 hours [1].",
+    incomplete: "The route takes at least 2 hours [1].",
+    expectedRange: "range:measure:2:5:hours"
+  },
+  {
+    label: "between count",
+    sourceText: "Visitors may bring between one and two bags.",
+    query: "What is the visitor bag-count range?",
+    correct: "Visitors may bring between one and two bags [1].",
+    reversed: "Visitors may bring between two and one bags [1].",
+    incomplete: "Visitors may bring one bag [1].",
+    expectedRange: "range:count:1:2:bag"
+  },
+  {
+    label: "between percent",
+    sourceText: "The applicable rate is between 10% and 20%.",
+    query: "What is the applicable percentage range?",
+    correct: "The applicable rate is between 10% and 20% [1].",
+    reversed: "The applicable rate is between 20% and 10% [1].",
+    incomplete: "The applicable rate starts at 10% [1].",
+    expectedRange: "range:percent:10:20"
+  }
+];
+for (const item of extendedOrderedRangeCases) {
+  const itemSource = source("ordered-range-" + item.label.replace(/\s+/g, "-"), item.label, item.sourceText);
+  const sourceFacts = new Set(context.canonicalNumericFacts(item.sourceText));
+  if (!sourceFacts.has(item.expectedRange)) {
+    throw new Error(`The ${item.label} syntax omitted its ordered range: ${JSON.stringify([...sourceFacts])}`);
+  }
+  const correctGuard = validation(item.query, item.correct, [itemSource]);
+  if (!correctGuard.ok) {
+    throw new Error(`The supported ${item.label} syntax failed validation: ${JSON.stringify(correctGuard)}`);
+  }
+  for (const wrongAnswer of [item.reversed, item.incomplete]) {
+    const wrongGuard = validation(item.query, wrongAnswer, [itemSource]);
+    if (
+      wrongGuard.ok ||
+      !wrongGuard.reasons.some((reason) => /(?:ordered range|comparable number)/i.test(reason))
+    ) {
+      throw new Error(`The ${item.label} syntax accepted an invalid range answer: ${JSON.stringify({ wrongAnswer, wrongGuard })}`);
+    }
+  }
+}
+const repeatedAnchoredRangeText = Array.from(
+  { length: 400 },
+  () => "The National Museum of China visitor fee is 3 to 10 yuan."
+).join("\n");
+const cachedRangeEvidence = context.numericEvidenceMentions(repeatedAnchoredRangeText);
+const cachedRangeBindings = context.numericClaimBindings(
+  "The National Museum of China visitor fee is 3 to 10 yuan.",
+  "What is the National Museum of China visitor fee range?"
+);
+if (cachedRangeBindings.length !== 3) {
+  throw new Error("The range cache fixture did not produce two endpoint bindings plus one ordered range binding: " + JSON.stringify(cachedRangeBindings));
+}
+for (const binding of cachedRangeBindings) context.numericBindingBoundMentions(binding, cachedRangeEvidence);
+const scansAfterFirstPass = cachedRangeEvidence.cacheStats.anchor_clause_scans;
+for (let iteration = 0; iteration < 20; iteration += 1) {
+  for (const binding of cachedRangeBindings) context.numericBindingBoundMentions(binding, cachedRangeEvidence);
+}
+if (
+  cachedRangeEvidence.cacheStats.anchor_clause_scans !== scansAfterFirstPass ||
+  cachedRangeEvidence.bindingMentionCache.size !== 2 ||
+  cachedRangeEvidence.cacheStats.clause_fact_parses !== cachedRangeEvidence.clauses.length
+) {
+  throw new Error("Numeric evidence rescanned the full source for repeated endpoint checks: " + JSON.stringify({
+    scansAfterFirstPass,
+    finalScans: cachedRangeEvidence.cacheStats.anchor_clause_scans,
+    bindingCacheSize: cachedRangeEvidence.bindingMentionCache.size,
+    clauseFactParses: cachedRangeEvidence.cacheStats.clause_fact_parses,
+    clauses: cachedRangeEvidence.clauses.length
+  }));
 }
 
 const diningMixedSource = source(

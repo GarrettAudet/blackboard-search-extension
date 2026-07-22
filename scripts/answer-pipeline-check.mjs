@@ -478,7 +478,16 @@ for (const testCase of answerCases) {
         supported: context.sourceSupportsNamedTerm(citedText, term)
       }));
     });
-    throw new Error("A content question bypassed or failed the LLM route: " + JSON.stringify({ testCase, result, namedTermDiagnostics }, null, 2));
+        const numericDiagnostics = context.answerClaimBlocks(testCase.draft).flatMap((block) => {
+      const citationNumbers = Array.from(block.matchAll(/\[(\d+)\]/g), (match) => Number(match[1]));
+      const citedSources = citationNumbers.map((number) => result.draftValidation?.sourceList?.[number - 1]).filter(Boolean);
+      return context.splitSentences(block.replace(/\[(\d+)\]/g, " ")).map((claim) => ({
+        claim,
+        bindings: context.numericClaimBindings(claim, testCase.query),
+        conflict: context.citedNumericClaimConflict(claim, citedSources, testCase.query)
+      }));
+    });
+    throw new Error("A content question bypassed or failed the LLM route: " + JSON.stringify({ testCase, result, namedTermDiagnostics, numericDiagnostics }, null, 2));
   }
   for (let index = 0; index < testCase.expectedSources.length; index += 1) {
     if (result.documentIds[index] !== testCase.expectedSources[index]) {
