@@ -21,8 +21,8 @@ const MAX_CONTENT_CHARS = 500000;
 // GPT-4.1 mini can accept substantially more context than this. These are
 // application safety ceilings, not retrieval targets: ordinary selected
 // documents should be supplied in full whenever they fit below them.
-const MAX_ANSWER_SOURCE_TEXT_CHARS = 1500000;
-const MAX_ANSWER_CONTEXT_TEXT_CHARS = 2500000;
+const MAX_ANSWER_SOURCE_TEXT_CHARS = 120000;
+const MAX_ANSWER_CONTEXT_TEXT_CHARS = 240000;
 const MAX_PROMPT_SAFETY_SCAN_CHARS = MAX_ANSWER_SOURCE_TEXT_CHARS;
 const LOCAL_RESOURCE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 const LOCAL_RESOURCE_MAX_PREFLIGHT_FILES = 24;
@@ -6613,7 +6613,7 @@ function shouldUseLlm(query, results) {
 
 function isCouldNotFindAnswer(text) {
   const value = cleanAnswerText(text).trim();
-  return /^(?:i\s+)?(?:could not find|couldn't find|did not find|no relevant|no matching)\b|^(?:the\s+)?indexed resources?\s+(?:do not|does not|did not)\s+(?:contain|include|provide|have)\b/i.test(value);
+  return /^(?:i\s+)?(?:could not find|couldn't find|could not produce|did not find|no relevant|no matching)\b|^(?:the\s+)?indexed resources?\s+(?:do not|does not|did not)\s+(?:contain|include|provide|have)\b/i.test(value);
 }
 
 function looksLikeReviewerLeak(text) {
@@ -6633,7 +6633,7 @@ function isCleanNotFoundAnswer(text) {
   const value = cleanAnswerText(text);
   if (!value || value.length > 240 || value.split(/\n+/).length > 2) return false;
   if (looksLikeReviewerLeak(value) || looksLikeRawEvidenceDump(value)) return false;
-  return /^(?:i\s+)?(?:could not find|couldn't find|no relevant|no matching)\b/i.test(value);
+  return /^(?:i\s+)?(?:could not find|couldn't find|could not produce|no relevant|no matching)\b/i.test(value);
 }
 
 function reliableCitedAnswerFailure() {
@@ -8272,7 +8272,7 @@ function deterministicClaimVetoReasons(text, sources, userProvidedText = "") {
       }
 
       const missingNames = deterministicNamedTerms(claim).filter((term) =>
-        !userProvidedNames.has(term) && !sourceSupportsNamedTerm(namedSourceText, term)
+        !userProvidedNames.has(term) && !sourceSupportsNamedTerm([namedSourceText, relevantSourceText].filter(Boolean).join("\n"), term)
       );
       if (missingNames.length) reasons.push("A cited claim introduced a named entity that is absent from its cited excerpt.");
 

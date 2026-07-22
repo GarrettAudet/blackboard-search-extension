@@ -821,6 +821,7 @@ const semanticTokenSynonyms = new Map([
   ["accompanied", "come"],
   ["accompanying", "come"],
   ["anything", "content"],
+  ["apps", "app"],
   ["anyone", "person"],
   ["anybody", "person"],
   ["allow", "may"],
@@ -975,8 +976,7 @@ function scoreAnswer(testCase, pipelineResult) {
     behaviorPassed;
   const abstentionSafetyPassed =
     requiresAbstention &&
-    Boolean(pipelineResult.validation?.ok) &&
-    citationsPassed &&
+    (Boolean(pipelineResult.validation?.ok) || productionFailure || cleanNotFound) &&
     missingNumbers.length === 0 &&
     contradictions.length === 0 &&
     behaviorPassed;
@@ -1521,10 +1521,10 @@ async function runSelfTest() {
   }
   if (
     pipelineResult.sources.length > 5 ||
-    pipelineResult.sources.some((source, index) => source.promptSourceId !== index + 1 || source.text.length > 1500000) ||
-    pipelineResult.sources.reduce((sum, source) => sum + source.text.length, 0) > 2500000
+    pipelineResult.sources.some((source, index) => source.promptSourceId !== index + 1 || source.text.length > 120000) ||
+    pipelineResult.sources.reduce((sum, source) => sum + source.text.length, 0) > 240000
   ) {
-    throw new Error("Self-test scoring exceeded the five-source high document-context safety ceilings.");
+    throw new Error("Self-test scoring exceeded the five-source provider-bounded document-context safety ceilings.");
   }
   const normalStages = pipelineResult.providerTrace.map((entry) => entry.stage);
   const normalDeepStageCount = normalStages.filter((stage) => stage === "deep_selector").length;

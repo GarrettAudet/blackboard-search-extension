@@ -1141,11 +1141,11 @@ if (
 const safetyBoundedSource = source(
   "safety-bounded",
   "Safety-bounded source",
-  "x".repeat(1500100) + "HARD_SAFETY_CEILING_SENTINEL"
+  "x".repeat(120100) + "HARD_SAFETY_CEILING_SENTINEL"
 );
 const safetyBoundedPrompt = context.answerPromptSources([safetyBoundedSource])[0].text;
-if (safetyBoundedPrompt.length !== 1500000 || /HARD_SAFETY_CEILING_SENTINEL/.test(safetyBoundedPrompt)) {
-  throw new Error("The expanded answer context exceeded its high hard safety ceiling.");
+if (safetyBoundedPrompt.length !== 120000 || /HARD_SAFETY_CEILING_SENTINEL/.test(safetyBoundedPrompt)) {
+  throw new Error("The expanded answer context exceeded its provider-bounded safety ceiling.");
 }
 
 const unknownProvenance = context.answerPromptSources([source("unknown", "Unknown authority", "Evidence", {
