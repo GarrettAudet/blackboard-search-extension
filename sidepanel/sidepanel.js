@@ -5236,7 +5236,9 @@ async function evaluateGroundedAnswerCandidate(
       };
     }
   }
-  if (!validation.ok) {
+  const semanticResolvableNumericOnly = !cleanAbstention && !validation.ok && validation.reasons.length > 0 &&
+    validation.reasons.every((reason) => /comparable number, date, time, amount, or count/i.test(reason));
+  if (!validation.ok && !semanticResolvableNumericOnly) {
     return {
       accepted: false,
       answer: aligned,
@@ -5251,6 +5253,9 @@ async function evaluateGroundedAnswerCandidate(
         citation_rebound: citationRepair.rebound
       }
     };
+  }
+  if (semanticResolvableNumericOnly) {
+    validation = { ...validation, ok: true, reasons: [] };
   }
 
   const verifierSources = cleanAbstention ? answerSources : aligned.sources;

@@ -1045,8 +1045,15 @@ if (alignedCitations.sources.length !== 2 || alignedCitations.sources[1].title !
 if (/https?:\/\//i.test(strippedLinkAnswer) || /Links to the relevant Blackboard courses/i.test(strippedLinkAnswer)) {
   throw new Error(`Answer cleanup should remove raw Blackboard link sections.\n\n${strippedLinkAnswer}`);
 }
+const repairedChineseSublevelAnswer = context.cleanAnswerText(
+  "There are a total of nine Chinese placement sub-levels: beginning levels are 1A, 1B, and 1C; intermediate levels are 2A and 2B; advanced levels are 3A and 3B [1]. The written test is sent in early July, while the speaking and reading test happens during orientation [1].",
+  1
+);
 if (!strippedLinkAnswer.includes("These resources help students study Chinese [1], [2].")) {
   throw new Error(`Answer cleanup should preserve the actual answer text and citations.\n\n${strippedLinkAnswer}`);
+}
+if (/\b1A\b|\b2A\b|\b3A\b/.test(repairedChineseSublevelAnswer) || !/nine Chinese placement sub-levels \[1\]/i.test(repairedChineseSublevelAnswer)) {
+  throw new Error(`Chinese placement cleanup should not preserve an incomplete level enumeration beside the nine-sublevel claim.\n\n${repairedChineseSublevelAnswer}`);
 }
 
 if (!/example\.com\/feedback/.test(feedbackFormUrl) || !/bot_suggestions=The\+packing\+answer\+missed\+medications/.test(feedbackFormUrl) || !/software_issues=/.test(feedbackFormUrl) || !/version=test-version/.test(feedbackFormUrl) || !/resource_count=/.test(feedbackFormUrl) || !/searchable_bodies=/.test(feedbackFormUrl) || !/sent_at=/.test(feedbackFormUrl)) {
