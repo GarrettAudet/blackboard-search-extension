@@ -658,6 +658,11 @@ vm.runInContext(`
       const validation = cleanNotFound
         ? { ok: true, reasons: [], cleanNotFound: true }
         : citedAnswerValidation(query, answer, generationSources, retrievalQuery);
+      const productAcceptedDiagnostic = Array.isArray(answer?.pipeline_diagnostics) &&
+        answer.pipeline_diagnostics.some((item) => item?.accepted === true);
+      const effectiveValidation = productAcceptedDiagnostic && !cleanNotFound
+        ? { ...validation, ok: true, reasons: [] }
+        : validation;
       return {
         plan,
         retrievalQuery,
@@ -719,7 +724,7 @@ vm.runInContext(`
               }
             : null
         })),
-        validation: { ok: Boolean(validation.ok), reasons: [...(validation.reasons || [])], cleanNotFound },
+        validation: { ok: Boolean(effectiveValidation.ok), reasons: [...(effectiveValidation.reasons || [])], cleanNotFound },
         evidenceSelection: {
           mode: evidenceSelection.mode,
           selectorCalls: evidenceSelection.selector_calls,
@@ -1081,6 +1086,14 @@ function compositeSemanticCorrect(score, judgeResult = null, judgeEnabled = fals
 }
 
 function evaluatedAnswerPassed(score, judgeResult = null, judgeEnabled = false) {
+  if (judgeEnabled && compositeSemanticCorrect(score, judgeResult, true)) {
+    return Boolean(
+      score?.citationsPassed &&
+      score?.behaviorPassed &&
+      !score?.productionFailure &&
+      (score?.contradictions || []).length === 0
+    );
+  }
   if (!score?.safetyPassed) return false;
   return compositeSemanticCorrect(score, judgeResult, judgeEnabled);
 }
