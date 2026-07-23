@@ -10519,7 +10519,7 @@ async function selectSemanticEvidenceForApi(
       const selectedCount = selectedChunksPerParent.get(requestedParentKey) || 0;
       const unresolvedParent = unresolvedParentKeys.has(requestedParentKey);
       if (selectedCount >= SEMANTIC_EVIDENCE_LIMITS.maxCombinedPerParent && !unresolvedParent) continue;
-      if (!selection.insufficient && !unresolvedParent) continue;
+      if (!unresolvedParent) continue;
       const batches = semanticDeepReadBatches(safeRetrievalResults, requestedCandidate, retrievalQuery, deepFacets)
         .map((batch) => batch.filter((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys)))
         .filter((batch) => batch.length);

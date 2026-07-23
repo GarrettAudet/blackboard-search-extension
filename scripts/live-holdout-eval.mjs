@@ -1196,13 +1196,19 @@ async function runJudge(question, answer, answerKey) {
   let lastParsed = null;
   let lastContract = { valid: false, errors: ["judge_result_not_attempted"] };
   const contractAttempts = [];
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    vm.runInContext("globalThis.__liveJudgePromise = __runLiveJudge(globalThis.__liveJudgePayload);", context);
-    const response = await context.__liveJudgePromise;
-    lastParsed = normalizeJudgePayload(parseJsonObject(response));
-    lastContract = validateJudgeContract(lastParsed);
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      vm.runInContext("globalThis.__liveJudgePromise = __runLiveJudge(globalThis.__liveJudgePayload);", context);
+      const response = await context.__liveJudgePromise;
+      lastParsed = normalizeJudgePayload(parseJsonObject(response));
+      lastContract = validateJudgeContract(lastParsed);
+    } catch (error) {
+      lastParsed = null;
+      lastContract = { valid: false, errors: [`judge_provider_error:${redact(error).slice(0, 180)}`] };
+    }
     contractAttempts.push({ attempt, valid: lastContract.valid, errors: lastContract.errors });
     if (lastContract.valid) break;
+    if (attempt < 4) await wait(350 * attempt);
   }
   return {
     rawPayload: lastParsed,
