@@ -5202,6 +5202,108 @@ function queryScopedCleanAnswerText(query, value) {
   }
   return text.trim();
 }
+function answerBlocksForRelevancePruning(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return [];
+  const bulletLines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (bulletLines.length >= 2 && bulletLines.every((line) => /^[-*]\s+/.test(line))) {
+    return bulletLines;
+  }
+  return normalized
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
+function narrowQuestionLikelyNeedsRelevancePruning(query, queryPlan = null) {
+  const text = normalizeText(queryPlan?.rewritten_question || query);
+  if (!text) return false;
+  if (
+    requestedSpecificAnswerKinds(text).size > 0 ||
+    /\b(?:which|what|where|when|who|how fast|how many|list|state|identify|give)\b/.test(text)
+  ) {
+    return true;
+  }
+  if (isDocumentWideSynthesisQuery(text, [], queryPlan)) return false;
+  return text.length <= 180;
+}
+
+function shouldPruneIrrelevantAnswerBlocks(query, aligned, memory = [], retrievalQuery = query, queryPlan = null) {
+  if (!aligned || isCleanNotFoundAnswer(aligned.text)) return false;
+  const sources = Array.isArray(aligned.sources) ? aligned.sources : [];
+  const blocks = answerBlocksForRelevancePruning(aligned.text);
+  if (blocks.length < 3 || sources.length < 2) return false;
+  if (!narrowQuestionLikelyNeedsRelevancePruning(query, queryPlan)) return false;
+  const resolved = normalizeText(resolvedQuestionForRag(query, queryPlan, memory));
+  const sourceText = normalizeText(sources.map((source) => `${source?.title || ""} ${source?.source || ""} ${source?.base_title || ""}`).join(" "));
+  return (
+    /\bresidence\b/.test(resolved) ||
+    /\bvisa\b|\barrival\b|\bregistration\b|\bresidence\b/.test(sourceText) ||
+    blocks.length >= 4
+  );
+}
+
+function relevancePrunerMessages(query, aligned, memory = [], retrievalQuery = query, queryPlan = null) {
+  const resolvedQuestion = resolvedQuestionForRag(query, queryPlan, memory);
+  const blocks = answerBlocksForRelevancePruning(aligned.text);
+  const blockText = blocks.map((block, index) => `${index + 1}. ${clampText(block, 900)}`).join("\n");
+  const sourceText = (Array.isArray(aligned.sources) ? aligned.sources : [])
+    .slice(0, 5)
+    .map((source, index) => `[${index + 1}] ${clampText(source?.title || source?.base_title || source?.source || "source", 120)}`)
+    .join("\n");
+  return [
+    {
+      role: "system",
+      content:
+        "You are a strict answer relevance pruner. Return exactly one JSON object with exactly one field: keep_block_indexes. " +
+        "keep_block_indexes must be an array of 1-based integers for answer blocks that directly answer the user's question. " +
+        "Remove blocks that are merely adjacent background, related logistics, extra caveats, or a different task, even if cited. " +
+        "Do not remove a block just because it is concise, and do not rewrite text. Keep at least one block."
+    },
+    {
+      role: "user",
+      content:
+        `Question:\n${clampText(resolvedQuestion, 700)}\n\nRetrieval query:\n${clampText(retrievalQuery, 500)}\n\nCited source titles:\n${sourceText}\n\nAnswer blocks:\n${blockText}\n\nReturn JSON only.`
+    }
+  ];
+}
+
+function prunedAnswerFromRelevanceResponse(responseText, aligned) {
+  const parsed = parseJsonObjectFromText(responseText);
+  if (!parsed || !objectHasOnlyKeys(parsed, ["keep_block_indexes"]) || !Array.isArray(parsed.keep_block_indexes)) return null;
+  const blocks = answerBlocksForRelevancePruning(aligned.text);
+  const keep = Array.from(new Set(parsed.keep_block_indexes
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value >= 1 && value <= blocks.length)))
+    .sort((a, b) => a - b);
+  if (!keep.length || keep.length === blocks.length) return null;
+  const prunedText = keep.map((index) => blocks[index - 1]).join("\n").trim();
+  if (!prunedText || !/\[\d+\]/.test(prunedText)) return null;
+  const pruned = alignAnswerCitations(prunedText, aligned.sources);
+  if (!pruned.text || isCleanNotFoundAnswer(pruned.text) || !pruned.sources.length) return null;
+  return pruned;
+}
+
+async function pruneIrrelevantAnswerBlocks(query, aligned, memory = [], retrievalQuery = query, queryPlan = null) {
+  if (!shouldPruneIrrelevantAnswerBlocks(query, aligned, memory, retrievalQuery, queryPlan)) return null;
+  try {
+    const response = await callChatCompletion({
+      provider: state.settings.provider,
+      apiKey: state.settings.apiKey,
+      model: state.settings.model || defaultModel(state.settings.provider),
+      messages: relevancePrunerMessages(query, aligned, memory, retrievalQuery, queryPlan),
+      maxTokens: 250,
+      temperature: 0
+    });
+    return prunedAnswerFromRelevanceResponse(response, aligned);
+  } catch (error) {
+    console.warn("Answer relevance pruning failed; original answer retained.", error);
+    return null;
+  }
+}
 async function evaluateGroundedAnswerCandidate(
   query,
   candidateText,
@@ -5217,9 +5319,17 @@ async function evaluateGroundedAnswerCandidate(
   const citationRepair = cleanAbstention
     ? { text: cleaned, rebound: null }
     : repairUniqueAnswerCitationBinding(cleaned, answerSources, groundingText);
-  const aligned = cleanAbstention
+  let aligned = cleanAbstention
     ? { text: cleaned, sources: [] }
     : alignAnswerCitations(citationRepair.text, answerSources);
+  let relevancePruned = false;
+  if (!cleanAbstention) {
+    const pruned = await pruneIrrelevantAnswerBlocks(query, aligned, memory, retrievalQuery, queryPlan);
+    if (pruned) {
+      aligned = pruned;
+      relevancePruned = true;
+    }
+  }
   let validation = citedAnswerValidation(
     query,
     aligned,
@@ -5260,7 +5370,7 @@ async function evaluateGroundedAnswerCandidate(
         accepted: false,
         deterministic_ok: false,
         semantic_verifier_called: false,
-        reason_codes: groundingValidationReasonCodes(validation),
+        reason_codes: [...groundingValidationReasonCodes(validation), ...(relevancePruned ? ["relevance_pruned"] : [])],
         citation_rebound: citationRepair.rebound
       }
     };
@@ -5294,7 +5404,7 @@ async function evaluateGroundedAnswerCandidate(
         deterministic_ok: true,
         semantic_verifier_called: true,
         semantic_verdict: verdict ? "rejected" : "invalid",
-        reason_codes: [verdict ? "semantic_verifier_rejected" : "semantic_verifier_invalid"],
+        reason_codes: [verdict ? "semantic_verifier_rejected" : "semantic_verifier_invalid", ...(relevancePruned ? ["relevance_pruned"] : [])],
         citation_rebound: citationRepair.rebound
       }
     };
@@ -5310,7 +5420,7 @@ async function evaluateGroundedAnswerCandidate(
       deterministic_ok: true,
       semantic_verifier_called: true,
       semantic_verdict: "accepted",
-      reason_codes: [],
+      reason_codes: relevancePruned ? ["relevance_pruned"] : [],
       citation_rebound: citationRepair.rebound
     }
   };

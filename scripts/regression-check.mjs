@@ -1056,6 +1056,33 @@ if (/\b1A\b|\b2A\b|\b3A\b/.test(repairedChineseSublevelAnswer) || !/nine Chinese
   throw new Error(`Chinese placement cleanup should not preserve an incomplete level enumeration beside the nine-sublevel claim.\n\n${repairedChineseSublevelAnswer}`);
 }
 
+const residenceRegistrationAnswerWithSpillover = {
+  text: "- International students must re-register their residence when moving in, changing rooms, changing or extending a visa or residence permit, re-entering China, or spending any night away from the College [1].\n" +
+    "- Residence re-registration is handled at Zijing Building #19, general service desk, up one floor, open approximately 8:00 to 22:45 daily; bring your passport [1].\n" +
+    "- If away overnight, tell staff ?????? so they can update the new arrival date and keep the PSB record accurate [1].\n" +
+    "- Students are advised not to enter China before August 21 because early arrival affects residence-permit conversion [2], [3].",
+  sources: [
+    { title: "Survival Guide", source_pack_document_id: "survival-guide" },
+    { title: "International Logistics Webinar", source_pack_document_id: "international-logistics-webinar" },
+    { title: "Student Life Webinar", source_pack_document_id: "student-life-webinar" }
+  ]
+};
+if (!context.shouldPruneIrrelevantAnswerBlocks("Which changes force an international student to re-register residence, and where and when is that handled?", residenceRegistrationAnswerWithSpillover)) {
+  throw new Error("Residence-registration spillover answer should trigger relevance pruning.");
+}
+const prunedResidenceRegistrationAnswer = context.prunedAnswerFromRelevanceResponse(
+  JSON.stringify({ keep_block_indexes: [1, 2, 3] }),
+  residenceRegistrationAnswerWithSpillover
+);
+if (
+  !prunedResidenceRegistrationAnswer ||
+  /August 21|early arrival|residence-permit conversion/i.test(prunedResidenceRegistrationAnswer.text) ||
+  !/Zijing Building #19/i.test(prunedResidenceRegistrationAnswer.text) ||
+  prunedResidenceRegistrationAnswer.sources.length !== 1 ||
+  prunedResidenceRegistrationAnswer.sources[0].source_pack_document_id !== "survival-guide"
+) {
+  throw new Error(`Residence-registration relevance pruning did not remove adjacent arrival guidance cleanly.\n\n${JSON.stringify(prunedResidenceRegistrationAnswer, null, 2)}`);
+}
 if (!/example\.com\/feedback/.test(feedbackFormUrl) || !/bot_suggestions=The\+packing\+answer\+missed\+medications/.test(feedbackFormUrl) || !/software_issues=/.test(feedbackFormUrl) || !/version=test-version/.test(feedbackFormUrl) || !/resource_count=/.test(feedbackFormUrl) || !/searchable_bodies=/.test(feedbackFormUrl) || !/sent_at=/.test(feedbackFormUrl)) {
   throw new Error(`Expected feedback command to build a pre-filled feedback form URL with context.\n\n${feedbackFormUrl}`);
 }
