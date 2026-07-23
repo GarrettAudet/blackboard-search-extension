@@ -10351,7 +10351,8 @@ async function selectSemanticEvidenceForApi(
     const explicitlyRequested = candidatePool.find((candidate) => candidate.id === selection.deepReadCandidateId);
     const rankedSelected = [...selectedCandidates]
       .sort((a, b) => deepReadRank(b) - deepReadRank(a) || a.sourceIndex - b.sourceIndex);
-    const rankedFallback = selection.insufficient || policyOrYesNo
+    const policyOrYesNoNeedsDeepRead = policyOrYesNo && (selection.insufficient || missingFacets.length > 0);
+    const rankedFallback = selection.insufficient || policyOrYesNoNeedsDeepRead
       ? [...candidatePool].sort((a, b) => deepReadRank(b) - deepReadRank(a) || a.sourceIndex - b.sourceIndex)
       : [];
     const parentCandidates = [];
@@ -10387,7 +10388,7 @@ async function selectSemanticEvidenceForApi(
       const selectedCount = selectedChunksPerParent.get(requestedParentKey) || 0;
       const unresolvedParent = unresolvedParentKeys.has(requestedParentKey);
       if (selectedCount >= SEMANTIC_EVIDENCE_LIMITS.maxCombinedPerParent && !unresolvedParent) continue;
-      if (!selection.insufficient && !policyOrYesNo && !isCuratedPackResult(requestedCandidate.result) && !unresolvedParent) continue;
+      if (!selection.insufficient && !policyOrYesNoNeedsDeepRead && !isCuratedPackResult(requestedCandidate.result) && !unresolvedParent) continue;
       const batches = semanticDeepReadBatches(safeRetrievalResults, requestedCandidate, retrievalQuery, deepFacets)
         .map((batch) => batch.filter((candidate) => semanticCandidateHasUnseenChunk(candidate, deepSelectedChunkKeys)))
         .filter((batch) => batch.length);

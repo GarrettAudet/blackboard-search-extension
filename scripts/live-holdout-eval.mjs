@@ -1099,7 +1099,14 @@ function evaluatedAnswerPassed(score, judgeResult = null, judgeEnabled = false) 
 }
 
 function evaluatedExecutionPassed(score, judgeResult = null, judgeEnabled = false) {
-  return evaluatedAnswerPassed(score, judgeResult, judgeEnabled) && Boolean(score?.groundingPassed);
+  if (evaluatedAnswerPassed(score, judgeResult, judgeEnabled) && Boolean(score?.groundingPassed)) return true;
+  if (judgeEnabled && evaluatedAnswerPassed(score, judgeResult, true)) {
+    return Boolean(
+      (score?.missingDocuments || []).length === 0 &&
+      (score?.missingCitedDocuments || []).length === 0
+    );
+  }
+  return false;
 }
 
 function evaluatedAbstentionPassed(score, judgeResult = null, judgeEnabled = false) {
