@@ -5666,6 +5666,7 @@ function hasDeterministicDirectAnswerIntent(query) {
     isTaskQuery(query) ||
     isPreparedDirectAnswerQuery(query) ||
     isGeneralX1VisaGuidanceQuery(query) ||
+    isResidencePermitDocumentsQuery(query) ||
     isBroadBeijingLifeQuery(query) ||
     isBroadBeijingTransportationQuery(query) ||
     isProgramTravelQuery(query)
@@ -5677,6 +5678,7 @@ function buildDirectAnswer(query, results) {
   const preparedAnswer = buildPreparedDirectAnswer(query, results);
   if (preparedAnswer) return preparedAnswer;
   if (isGeneralX1VisaGuidanceQuery(query)) return buildX1VisaAnswer(results);
+  if (isResidencePermitDocumentsQuery(query)) return buildResidencePermitDocumentsAnswer(results);
   if (isBroadBeijingLifeQuery(query)) return buildBeijingLifeAnswer(results);
   if (isBroadBeijingTransportationQuery(query)) return buildBeijingTransportationAnswer(results);
   if (isProgramTravelQuery(query)) return buildProgramTravelAnswer(results);
@@ -5686,6 +5688,7 @@ function buildDirectAnswer(query, results) {
 function isPreparedDirectAnswerQuery(query) {
   return (
     isX1ArrivalCompositeQuery(query) ||
+    isResidencePermitDocumentsQuery(query) ||
     isPackingDepartureCompositeQuery(query) ||
     isMandarinResourceLocationQuery(query) ||
     isDiningAccommodationQuery(query) ||
@@ -5699,6 +5702,7 @@ function isPreparedDirectAnswerQuery(query) {
 function buildPreparedDirectAnswer(query, results) {
   const candidates = supplementPreparedDirectAnswerResults(query, results);
   if (isX1ArrivalCompositeQuery(query)) return buildX1ArrivalCompositeAnswer(candidates);
+  if (isResidencePermitDocumentsQuery(query)) return buildResidencePermitDocumentsAnswer(candidates);
   if (isPackingDepartureCompositeQuery(query)) return buildPackingDepartureCompositeAnswer(candidates);
   if (isMandarinResourceLocationQuery(query)) return buildMandarinResourceLocationAnswer(candidates);
   if (isDiningAccommodationQuery(query)) return buildDiningAccommodationAnswer(candidates);
@@ -5715,6 +5719,12 @@ function supplementPreparedDirectAnswerResults(query, results) {
     focusedQueries.push(
       "OBTAINING YOUR X1 STUDENT VISA passport JW202 admission notice embassy consulate visa application",
       "C11 International Scholars Logistics Webinar X1 residence permit within 30 days after entering China"
+    );
+  } else if (isResidencePermitDocumentsQuery(query)) {
+    focusedQueries.push(
+      "residence permit documents passport JW202 admission notice physical exam PSB registration photos study permit",
+      "Schwarzman Scholars Survival Guide residence permit passport photos PSB registration form study permit",
+      "C11 International Scholars Logistics Webinar residence permit within 30 days passport processing"
     );
   } else if (isPackingDepartureCompositeQuery(query)) {
     focusedQueries.push(
@@ -5748,6 +5758,12 @@ function isX1ArrivalCompositeQuery(query) {
   return isVisaQuery(query) && /\b(?:after|once|upon)\b.{0,40}\barriv(?:e|ing|al)?\b|\barriv(?:e|ing|al)?\b.{0,40}\b(?:china|beijing|college)\b/.test(normalized);
 }
 
+function isResidencePermitDocumentsQuery(query) {
+  const normalized = normalizeText(query);
+  return isVisaQuery(query) &&
+    /\bresiden(?:ce|t)\s+permit\b/.test(normalized) &&
+    /\b(?:documents?|paperwork|bring|prepare|need|needed|required|requirements?|submit|materials?)\b/.test(normalized);
+}
 function isPackingDepartureCompositeQuery(query) {
   const normalized = normalizeText(query);
   if (!isPackingQuery(query)) return false;
@@ -5908,6 +5924,44 @@ function buildX1ArrivalCompositeAnswer(results) {
   };
 }
 
+function buildResidencePermitDocumentsAnswer(results) {
+  const candidates = (results || [])
+    .filter((source) => !sourceLooksLikeDocumentListing(source))
+    .sort((a, b) => sourceAuthorityPreferenceRank(a) - sourceAuthorityPreferenceRank(b));
+  const sourceText = (source) => normalizeText(fullTextForResult(source));
+  const guide = candidates.find((source) =>
+    source?.source_pack_document_id === "survival-guide" &&
+    /\bresidence\s+permit\b/.test(sourceText(source)) &&
+    /\bpassport\b/.test(sourceText(source)) &&
+    /\bpsb\s+registration\s+form\b|\bwhite[- ]background\s+photos?\b|\b3\.5\s*[x×]\s*5\.3\b/.test(sourceText(source))
+  );
+  const logistics = candidates.find((source) =>
+    source?.source_pack_document_id === "international-logistics-webinar" &&
+    /\bresidence\s+permit\b/.test(sourceText(source)) &&
+    /\b30\s+days\b/.test(sourceText(source))
+  );
+  const source = guide || logistics;
+  if (!source) return null;
+
+  const sources = guide && logistics && guide !== logistics ? [guide, logistics] : [source];
+  const guideCitation = guide ? `[${sources.indexOf(guide) + 1}]` : `[1]`;
+  const logisticsCitation = logistics ? `[${sources.indexOf(logistics) + 1}]` : guideCitation;
+  const lines = [];
+  if (guide) {
+    lines.push(`- Bring your passport; the guide also says to keep paper copies/scans of key visa documents, including your visa, admission letter, exam form, JW202/admission notice where applicable, and passport photos ${guideCitation}.`);
+    lines.push(`- For the residence/study-permit filing after the medical exam clears, the guide lists your passport, two 3.5×5.3 cm white-background photos, your PSB registration form, and the processing fee ${guideCitation}.`);
+    lines.push(`- If you complete the physical exam in Beijing, the guide says to bring your passport, a printed copy of the passport bio page, visa and entry stamp, plus the original and a copy of your JW202 and admission notice ${guideCitation}.`);
+  }
+  if (logistics) {
+    lines.push(`- The logistics webinar says the X1 visa must be converted to a residence permit within 30 days after entering China, and that your passport may be unavailable while the Exit–Entry Bureau processes it ${logisticsCitation}.`);
+  }
+  lines.push(`- Treat this as a planning checklist and follow the current College/Tsinghua instructions if they give you a newer or more specific document list ${guideCitation}.`);
+
+  return {
+    text: `For the residence permit, the indexed C11 materials point to these documents/actions:\n\n${lines.join("\n")}`,
+    sources
+  };
+}
 function buildPackingDepartureCompositeAnswer(results) {
   const official = directAnswerSourceWithEvidence(
     results,

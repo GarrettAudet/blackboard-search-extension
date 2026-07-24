@@ -425,7 +425,7 @@ const answerCases = [
   },
   {
     name: "resident permit documents typo",
-    query: "Are there any documents i need to bring for the resident permit",
+    query: "Are there any documents i need to bring for the residence permit",
     retrieval: "resident permit residence permit documents passport JW202 admission notice physical exam PSB registration photos",
     searchQueries: [
       "resident permit documents to bring",
