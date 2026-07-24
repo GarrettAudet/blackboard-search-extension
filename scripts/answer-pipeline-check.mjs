@@ -424,6 +424,20 @@ const answerCases = [
     evidence: [/checked bag/i, /23 kilograms/i]
   },
   {
+    name: "resident permit documents typo",
+    query: "Are there any documents i need to bring for the resident permit",
+    retrieval: "resident permit residence permit documents passport JW202 admission notice physical exam PSB registration photos",
+    searchQueries: [
+      "resident permit documents to bring",
+      "residence permit passport JW202 admission notice physical exam PSB registration photos"
+    ],
+    expectedSources: ["international-logistics-webinar"],
+    draft:
+      "For the residence permit process, bring/prepare your passport and the Tsinghua visa documents, including your JW202 form and Admission Notice. The C11 guidance also says the X1 visa must be converted to a residence permit within 30 days after entering China, and that your passport may be held during processing [1].",
+    phrases: [/residence permit/i, /passport/i, /JW202/i],
+    evidence: [/residence permit/i, /passport/i, /JW202/i]
+  },
+  {
     name: "event funding holdout",
     query: "What approvals and documentation do I need before spending money on a student event?",
     retrieval: "student event funding approval documentation before spending reimbursement",
