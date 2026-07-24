@@ -4671,7 +4671,7 @@ async function handleAsk(event) {
   }
 
   retrievalQuery = enhanceRetrievalQueryForIntent(query, retrievalQuery, queryPlan);
-  const retrievalQueries = retrievalQueriesForPlan(
+  let retrievalQueries = retrievalQueriesForPlan(
     query,
     baseRetrievalQuery,
     retrievalQuery,
@@ -4680,7 +4680,7 @@ async function handleAsk(event) {
   );
   let results = searchAcrossRetrievalQueries(retrievalQueries);
 
-  const hydrationResult = await hydrateLikelyResourceContentForQuery(query, results, {
+  let hydrationResult = await hydrateLikelyResourceContentForQuery(query, results, {
     retrievalQuery,
     queryPlan
   });
@@ -4688,6 +4688,22 @@ async function handleAsk(event) {
     results = searchAcrossRetrievalQueries(retrievalQueries);
   }
 
+  const intentRecovery = intentRecoveryPlanForWeakRetrieval(query, results, retrievalQueries, retrievalQuery, queryPlan, contextMemory);
+  if (intentRecovery.queries.length) {
+    if (canUseApiPipeline) setStatus("Generating answer: retrying with inferred source terminology...");
+    retrievalQueries = intentRecovery.queries;
+    retrievalQuery = intentRecovery.primaryRetrievalQuery;
+    queryPlan = intentRecovery.queryPlan;
+    results = searchAcrossRetrievalQueries(retrievalQueries);
+    const recoveredHydration = await hydrateLikelyResourceContentForQuery(query, results, {
+      retrievalQuery,
+      queryPlan
+    });
+    hydrationResult = mergeHydrationResults(hydrationResult, recoveredHydration);
+    if (recoveredHydration.hydrated) {
+      results = searchAcrossRetrievalQueries(retrievalQueries);
+    }
+  }
   const legacyTruncationIssue = legacyTruncationIssueForResults(results);
   if (legacyTruncationIssue) {
     appendMessage("assistant", legacyTruncationIssue.text, legacyTruncationIssue.sources);
@@ -10926,6 +10942,142 @@ function searchAcrossRetrievalQueries(queries = []) {
   const retainedKeys = new Set(ranked.slice(0, 30).map((entry) => entry.key));
   routeTopKeys.forEach((key) => retainedKeys.add(key));
   return ranked.filter((entry) => retainedKeys.has(entry.key)).map((entry) => entry.result);
+}
+function dedupeBy(items = [], keyFn = (item) => item) {
+  const seen = new Set();
+  const output = [];
+  for (const item of items || []) {
+    const key = String(keyFn(item) || '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+function mergeHydrationResults(primary = {}, secondary = {}) {
+  return {
+    ...primary,
+    ...secondary,
+    hydrated: (Number(primary?.hydrated) || 0) + (Number(secondary?.hydrated) || 0),
+    failed: (Number(primary?.failed) || 0) + (Number(secondary?.failed) || 0),
+    candidates: dedupeBy(
+      [...(primary?.candidates || []), ...(secondary?.candidates || [])],
+      (resource) => documentCandidateKey(resource)
+    )
+  };
+}
+
+function intentRecoveryPlanForWeakRetrieval(
+  query,
+  results = [],
+  retrievalQueries = [],
+  retrievalQuery = query,
+  queryPlan = null,
+  memory = []
+) {
+  const recoveryQueries = intentRecoveryQueries(query, queryPlan);
+  if (!recoveryQueries.length) return { queries: [], primaryRetrievalQuery: retrievalQuery, queryPlan };
+
+  const normalizedExisting = new Set((retrievalQueries || []).map((item) => normalizeText(item)).filter(Boolean));
+  const newQueries = recoveryQueries.filter((item) => item && !normalizedExisting.has(normalizeText(item)));
+  if (!newQueries.length) return { queries: [], primaryRetrievalQuery: retrievalQuery, queryPlan };
+
+  const currentSources = prepareAnswerSources(results, retrievalQuery);
+  const hasConcreteEvidence = currentSources.length && selectedEvidenceSupportsConcreteAnswer(query, currentSources, retrievalQuery, queryPlan, memory);
+  const topScore = Math.max(0, ...(results || []).map((result) => Number(result?.score) || 0));
+  const weak = !currentSources.length || !hasConcreteEvidence || topScore < 180;
+  if (!weak) return { queries: [], primaryRetrievalQuery: retrievalQuery, queryPlan };
+
+  const primaryRetrievalQuery = clampText(
+    Array.from(new Set([retrievalQuery, ...newQueries].map((item) => String(item || '').trim()).filter(Boolean))).join(' '),
+    1400
+  ) || retrievalQuery || query;
+  const mergedQueries = [];
+  const seen = new Set();
+  for (const candidate of [...(retrievalQueries || []), ...newQueries, primaryRetrievalQuery]) {
+    const value = clampText(String(candidate || '').replace(/\s+/g, ' ').trim(), 1400);
+    const key = normalizeText(value);
+    if (!value || !key || seen.has(key)) continue;
+    seen.add(key);
+    mergedQueries.push(value);
+    if (mergedQueries.length >= 14) break;
+  }
+  const mergedPlan = {
+    ...(queryPlan || defaultRagPlan(query, retrievalQuery)),
+    retrieval_query: primaryRetrievalQuery,
+    search_queries: Array.from(new Set([...(queryPlan?.search_queries || []), ...newQueries])).slice(0, 8),
+    source_preferences: Array.from(new Set([...(queryPlan?.source_preferences || []), ...intentRecoverySourcePreferences(query)])).slice(0, 10)
+  };
+  return { queries: mergedQueries, primaryRetrievalQuery, queryPlan: mergedPlan };
+}
+
+function intentRecoveryQueries(query, queryPlan = null) {
+  const normalized = normalizeText([query, queryPlan?.rewritten_question, queryPlan?.retrieval_query].filter(Boolean).join(' '));
+  const queries = [];
+  const add = (...items) => {
+    for (const item of items) {
+      const value = clampText(String(item || '').replace(/\s+/g, ' ').trim(), 360);
+      if (value) queries.push(value);
+    }
+  };
+
+  if (/\b(?:resident|residence|permit|x1|visa|jw202|jw201|passport|embassy|consulate|immigration|psb|public security)\b/.test(normalized)) {
+    add(
+      `${query} residence permit X1 visa JW202 admission notice passport physical exam PSB registration within 30 days`,
+      'residence permit documents passport JW202 Tsinghua Admission Notice physical exam PSB registration photos X1 visa',
+      'international scholars logistics webinar residence permit within 30 days passport held during processing'
+    );
+  }
+  if (/\b(?:subway|metro|transport|transportation|transit|didi|taxi|alipay|wechatpay|beijing\s+bus|navigate|get around)\b/.test(normalized)) {
+    add(
+      `${query} Beijing transportation workshop Alipay transport QR code subway metro Didi taxi transit card`,
+      'Beijing Transportation Workshop subway metro Alipay QR code transit card Didi taxi Amap'
+    );
+  }
+  if (/\b(?:pack|packing|bring|luggage|baggage|checked|carry\s*on|medicine|medication|prescription|departure)\b/.test(normalized)) {
+    add(
+      `${query} packing list bring passport documents prescriptions original packaging checked bag 23 kilograms carry-on`,
+      'official packing list passport visa paperwork admission notice JW202 prescription medication original packaging baggage allowance'
+    );
+  }
+  if (/\b(?:visitor|guest|residence hall|dorm|housing|room|move\s*in|tap|access|building)\b/.test(normalized)) {
+    add(
+      `${query} student life webinar residence hall visitor guest rules orientation housing room access`,
+      'Student Life Webinar guests visitors residence halls orientation August 26 September 12 10:30 p.m.'
+    );
+  }
+  if (/\b(?:mandarin|chinese|language|grammar|vocabulary|placement|hsk)\b/.test(normalized)) {
+    add(
+      `${query} Chinese Language Learning Resources Mandarin grammar structures vocabulary placement levels survival Chinese`,
+      'Chinese language learning resources key vocabulary grammar structures placement test Mandarin levels'
+    );
+  }
+  if (/\b(?:capstone|course|courses|curriculum|module|class|academic|degree|advisor|adviser|registration|lottery|shopping)\b/.test(normalized)) {
+    add(
+      `${query} academic webinar curriculum courses course registration capstone faculty adviser modules`,
+      'C11 Academic Webinar course registration lottery shopping period capstone faculty adviser curriculum'
+    );
+  }
+  if (/\b(?:insurance|hospital|health|medical|clinic|fapiao|reimbursement|claim|doctor|prescription)\b/.test(normalized)) {
+    add(
+      `${query} health insurance hospital reimbursement fapiao prescription doctor diagnosis direct billing`,
+      'Tsinghua University Hospital fapiao prescription doctor notes MSH Beijing United Family Oasis direct billing'
+    );
+  }
+
+  return Array.from(new Set(queries.map((item) => clampText(item, 360)).filter(Boolean))).slice(0, 6);
+}
+
+function intentRecoverySourcePreferences(query) {
+  const normalized = normalizeText(query);
+  const preferences = [];
+  if (/\b(?:resident|residence|permit|x1|visa|jw202|passport)\b/.test(normalized)) {
+    preferences.push('International Scholars Logistics Webinar', 'Visa FAQ', 'Schwarzman Scholars Survival Guide');
+  }
+  if (/\b(?:transport|subway|metro|didi|taxi|alipay)\b/.test(normalized)) preferences.push('Beijing Transportation Workshop');
+  if (/\b(?:student life|visitor|guest|housing|room|packing)\b/.test(normalized)) preferences.push('Student Life Webinar');
+  if (/\b(?:academic|course|capstone|curriculum)\b/.test(normalized)) preferences.push('Academic Webinar');
+  return preferences;
 }
 function evidenceChunkKey(result) {
   const resourceId = String(result?.resource_id || "");
