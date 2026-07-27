@@ -80,8 +80,7 @@
             <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Stored locally in Chrome" />
 
             <p class="setup-note">
-              API answering sends your question and bounded matched excerpts from your indexed sources—including My resources—to the selected provider.
-              Raw files, file blobs, and local paths are never sent.
+              API answering sends your question and bounded matched excerpts from your indexed Blackboard and optional-pack sources to the selected provider.
               For OpenRouter, use a sub-model like openai/gpt-4.1-mini or deepseek/deepseek-chat.
             </p>
 
@@ -102,7 +101,7 @@
           </div>
         </section>
 
-        <section id="localResourcesPanel" class="panel local-resources-panel" aria-labelledby="localResourcesHeading" aria-busy="false">
+        <section id="localResourcesPanel" class="panel local-resources-panel" aria-labelledby="localResourcesHeading" aria-busy="false" hidden>
           <div class="panel-heading">
             <h2 id="localResourcesHeading">My resources</h2>
             <span id="localResourceCount">0 files</span>

@@ -168,7 +168,13 @@ function sendMessage(type, payload = {}) {
   return chrome.runtime.sendMessage({ type, payload });
 }
 
+function isUserImportedResource(resource) {
+  return String(resource?.collection_kind || "").toLowerCase() === "user_import" ||
+    String(resource?.content_origin || "").toLowerCase() === "user_import";
+}
+
 function isLaunchSearchResource(resource) {
+  if (isUserImportedResource(resource)) return false;
   const type = String(resource?.type || resource?.kind || "").toLowerCase();
   return !/^(audio|video|video_embed|video_transcript)$/.test(type);
 }
@@ -1253,7 +1259,7 @@ async function removeLocalResource(resourceId) {
 }
 
 async function clearIndex() {
-  if (!confirm("Clear all indexed Blackboard, optional-pack, and My resources content from this browser?")) return;
+  if (!confirm("Clear all indexed Blackboard and optional-pack content from this browser?")) return;
   const response = await sendMessage("CLEAR_INDEX");
   if (!response.ok) throw new Error(response.error || "Clear failed");
   await refreshAll();
@@ -4344,7 +4350,7 @@ async function handleIndexCommand(query = "/index") {
   const pending = appendMessage(
     "assistant",
     isFullReindex
-      ? "Starting a fresh transactional Blackboard reindex. The current active index, My resources, and optional packs remain available unless the replacement index completes and is promoted."
+      ? "Starting a fresh transactional Blackboard reindex. The current active index and optional packs remain available unless the replacement index completes and is promoted."
       : "Updating the Blackboard index. Keep Blackboard open and stay logged in while it runs."
   );
   try {
