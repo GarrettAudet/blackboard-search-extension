@@ -133,7 +133,6 @@ The default provider is OpenRouter, but the extension also supports OpenAI and D
 Recommended model examples:
 
 ```text
-openrouter/auto
 openai/gpt-4.1-mini
 deepseek-chat
 ```

@@ -226,7 +226,37 @@ if (
   throw new Error("Truncation at the token cap should fail without retrying: " + JSON.stringify({ cappedLengthError, calls: requests.length - cappedLengthStart }));
 }
 
-for (const finishReason of ["content_filter", "error", "tool_calls", "unknown_provider_reason"]) {
+retryDelays.length = 0;
+let providerFinishErrorCalls = 0;
+const providerFinishErrorStart = requests.length;
+fetchImplementation = async () => {
+  providerFinishErrorCalls += 1;
+  return providerFinishErrorCalls < 3
+    ? success("This transient provider-error content must not be returned.", "error")
+    : success("Recovered after provider finish error [1].");
+};
+const recoveredAfterFinishError = await call();
+if (
+  recoveredAfterFinishError !== "Recovered after provider finish error [1]." ||
+  requests.length - providerFinishErrorStart !== 3 ||
+  retryDelays.join(",") !== "250,500"
+) {
+  throw new Error("finish_reason error was not retried as a bounded transient provider failure: " + JSON.stringify({ recoveredAfterFinishError, calls: requests.length - providerFinishErrorStart, retryDelays }));
+}
+
+retryDelays.length = 0;
+const repeatedProviderFinishErrorStart = requests.length;
+fetchImplementation = async () => success("This repeated provider-error content must not be returned.", "error");
+const repeatedProviderFinishErrorMessage = await errorMessage(() => call());
+if (
+  repeatedProviderFinishErrorMessage !== "Provider returned an unusable completion (finish_reason: error)." ||
+  requests.length - repeatedProviderFinishErrorStart !== 3 ||
+  retryDelays.join(",") !== "250,500"
+) {
+  throw new Error("Repeated finish_reason error did not fail closed after bounded retries: " + JSON.stringify({ repeatedProviderFinishErrorMessage, calls: requests.length - repeatedProviderFinishErrorStart, retryDelays }));
+}
+
+for (const finishReason of ["content_filter", "tool_calls", "unknown_provider_reason"]) {
   retryDelays.length = 0;
   const start = requests.length;
   fetchImplementation = async () => success("This content must not be returned.", finishReason);
@@ -268,4 +298,4 @@ if (malformedError !== "Provider returned malformed answer content." || requests
   throw new Error("Non-string completion content was retried or accepted: " + JSON.stringify({ malformedError, calls: requests.length - malformedStart }));
 }
 
-console.log("llm-client-check passed (bounded transient retries, Retry-After/backoff, auth/client no-retry, timeout/network exhaustion, truncation recovery/failure, fail-closed finish reasons, malformed output, JSON-object mode, source escaping)");
+console.log("llm-client-check passed (bounded transient retries, Retry-After/backoff, auth/client no-retry, timeout/network exhaustion, truncation recovery/failure, bounded provider-error finish retries, fail-closed safety finish reasons, malformed output, JSON-object mode, source escaping)");

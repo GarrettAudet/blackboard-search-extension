@@ -91,7 +91,7 @@ const state = {
   conversation: [],
   settings: {
     provider: "openrouter",
-    model: "openrouter/auto",
+    model: "openai/gpt-4.1-mini",
     hasApiKey: false
   }
 };
@@ -360,7 +360,7 @@ async function loadSettings() {
   const saved = data[SETTINGS_KEY] || {};
   return {
     provider: saved.provider || "openrouter",
-    model: saved.model || defaultModel(saved.provider || "openrouter"),
+    model: normalizeModelSetting(saved.provider || "openrouter", saved.model),
     hasApiKey: Boolean(saved.apiKey),
     apiKey: saved.apiKey || ""
   };
@@ -368,7 +368,7 @@ async function loadSettings() {
 
 async function saveSettings() {
   const provider = els.providerSelect.value;
-  const model = els.modelInput.value.trim() || defaultModel(provider);
+  const model = normalizeModelSetting(provider, els.modelInput.value.trim());
   const apiKey = els.apiKeyInput.value.trim() || state.settings.apiKey || "";
   await chrome.storage.local.set({
     [SETTINGS_KEY]: {
@@ -386,7 +386,16 @@ async function saveSettings() {
 function defaultModel(provider) {
   if (provider === "openai") return "gpt-4.1-mini";
   if (provider === "deepseek") return "deepseek-chat";
-  return "openrouter/auto";
+  return "openai/gpt-4.1-mini";
+}
+
+function normalizeModelSetting(provider, model) {
+  const value = String(model || "").trim();
+  if (!value) return defaultModel(provider);
+  if (provider === "openrouter" && value.toLowerCase() === "openrouter/auto") {
+    return defaultModel(provider);
+  }
+  return value;
 }
 
 async function scanActiveTab() {
