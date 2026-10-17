@@ -14,6 +14,7 @@ const checks = [
   ["node", ["scripts/index-lifecycle-check.mjs"]],
   ["node", ["scripts/local-resource-import-ui-check.mjs"]],
   ["node", ["scripts/llm-client-check.mjs"]],
+  ["node", ["scripts/settings-privacy-check.mjs"]],
   ["node", ["scripts/guard-routing-check.mjs"]],
   ["node", ["scripts/answer-pipeline-check.mjs"]],
   ["node", ["scripts/answer-grounding-check.mjs"]],
