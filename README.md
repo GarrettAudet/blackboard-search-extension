@@ -1,14 +1,35 @@
 # Blackboard Search Extension
 
-Blackboard Search Extension is a Chrome side-panel extension for searching Blackboard course materials and asking grounded questions about them. It indexes the Blackboard pages and files a signed-in user can already access, stores that searchable index locally in Chrome, and answers questions from the best-matching sources using a user-configured API provider.
+Find course information across Blackboard pages and attachments from one Chrome side panel. The extension indexes materials your signed-in account can access and uses your chosen AI provider to answer questions with source links you can check.
 
-The project is intentionally built as a local-first browser extension: there is no shared application server, no central Blackboard corpus, and no attempt to bypass institutional access controls.
+The search index stays in Chrome storage. AI-powered answers send your question and selected excerpts to the configured provider.
+
+## Current Status
+
+The repository's current extension version is **1.0.16**. It uses Chrome Manifest V3 and can be loaded locally without a frontend build step. Blackboard access depends on the domains configured in [manifest.json](manifest.json) and your existing account permissions.
+
+Use the local installation steps below. See [License](#license) for the repository's current licensing status.
 
 ## Demo
 
 ![Blackboard Search Extension demo](docs/demo/blackboard-search-demo.gif)
 
 The demo shows the core flow: index Blackboard content, ask a question, get an answer grounded in matched resources, expand the source list, and open the original Blackboard page or file.
+
+## Install Locally
+
+1. Download or clone this repository.
+2. Open `chrome://extensions` in Chrome.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the repository folder.
+6. Open Blackboard and sign in normally.
+7. Open the Blackboard Search side panel.
+8. Run `/index` to build the local resource index.
+9. Open **Setup** and configure the API provider, model, and API key.
+10. Ask questions about indexed Blackboard materials.
+
+After pulling updates, reload the unpacked extension from `chrome://extensions` before testing again.
 
 ## What It Does
 
@@ -30,35 +51,6 @@ The demo shows the core flow: index Blackboard content, ask a question, get an a
 - It does not claim affiliation with Blackboard, Anthology, or any institution.
 - The `main` branch is focused on text and document search. Experimental video/transcript work should stay isolated until it does not degrade the core search experience.
 
-## Tech Stack
-
-- **Chrome Extension Manifest V3** for packaging, permissions, background service worker, content scripts, action icon, and side panel.
-- **Chrome Side Panel API** for the chat and setup UI.
-- **Vanilla JavaScript, HTML, and CSS** for the extension interface. There is no frontend build step.
-- **Chrome storage APIs** for local settings, API-key presence state, resource metadata, extracted content, and indexing state.
-- **Content scripts** for reading Blackboard pages from the user's authenticated browser context.
-- **Background service worker** for indexing, document fetching, extraction coordination, and storage updates.
-- **PDF.js** for browser-side PDF text extraction.
-- **Local retrieval logic** in `lib/search-index.js` for normalization, fused query routing, chunk ranking, source deduplication, and candidate pooling.
-- **RAG orchestration** in `sidepanel/sidepanel.js` for query planning, semantic evidence selection, bounded nominated-document reading, cited synthesis, validation, and repair.
-- **Provider client logic** in `lib/llm-client.js` for OpenAI-compatible chat completion calls.
-- **Node.js scripts** for syntax checks, regression tests, prepublish checks, and store asset generation.
-- **Python + Pillow** for generated Chrome Web Store artwork.
-
-## How It Works
-
-1. The user logs in to Blackboard normally in Chrome.
-2. Before indexing or optional pack installation, the extension verifies that Blackboard session with a credentialed request.
-3. The extension indexes configured Blackboard domains using the user's existing browser session.
-4. Resource metadata is stored in `resource_index`.
-5. Extracted searchable text is stored in `content_store`.
-6. A user question is normalized and searched through fused local retrieval routes.
-7. A bounded candidate-evidence set is sent to the selected API provider for semantic evidence selection. If the evidence is incomplete or requires careful policy interpretation, the provider may nominate at most one parent document for a bounded additional read.
-8. Evidence from at most five parent documents is sent for synthesized answer generation, citation validation, and bounded repair when needed.
-9. The side panel renders the final cited answer and one expandable source card per parent document.
-
-The result is a retrieval-augmented workflow that keeps Blackboard discovery local while still letting the user ask natural-language questions.
-
 ## Privacy Model
 
 The extension is designed around local control.
@@ -71,21 +63,6 @@ The extension is designed around local control.
 - Blackboard access remains governed by the user's existing Blackboard session and permissions.
 
 For the user-facing policy, see [PRIVACY.md](PRIVACY.md).
-
-## Install Locally
-
-1. Download or clone this repository.
-2. Open `chrome://extensions` in Chrome.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the repository folder.
-6. Open Blackboard and sign in normally.
-7. Open the Blackboard Search side panel.
-8. Run `/index` to build the local resource index.
-9. Open **Setup** and configure the API provider, model, and API key.
-10. Ask questions about indexed Blackboard materials.
-
-After pulling updates, reload the unpacked extension from `chrome://extensions` before testing again.
 
 ## Chat Commands
 
@@ -158,6 +135,35 @@ Use only public form URLs or safe field identifiers. Never embed private write t
 ### Host Permissions
 
 The manifest controls which Blackboard or institution domains the extension can access. Before publishing or forking publicly, review `host_permissions` in [manifest.json](manifest.json) and keep them limited to the domains the extension actually needs.
+
+## Tech Stack
+
+- **Chrome Extension Manifest V3** for packaging, permissions, background service worker, content scripts, action icon, and side panel.
+- **Chrome Side Panel API** for the chat and setup UI.
+- **Vanilla JavaScript, HTML, and CSS** for the extension interface. There is no frontend build step.
+- **Chrome storage APIs** for local settings, API-key presence state, resource metadata, extracted content, and indexing state.
+- **Content scripts** for reading Blackboard pages from the user's authenticated browser context.
+- **Background service worker** for indexing, document fetching, extraction coordination, and storage updates.
+- **PDF.js** for browser-side PDF text extraction.
+- **Local retrieval logic** in `lib/search-index.js` for normalization, fused query routing, chunk ranking, source deduplication, and candidate pooling.
+- **RAG orchestration** in `sidepanel/sidepanel.js` for query planning, semantic evidence selection, bounded nominated-document reading, cited synthesis, validation, and repair.
+- **Provider client logic** in `lib/llm-client.js` for OpenAI-compatible chat completion calls.
+- **Node.js scripts** for syntax checks, regression tests, prepublish checks, and store asset generation.
+- **Python + Pillow** for generated Chrome Web Store artwork.
+
+## How It Works
+
+1. The user logs in to Blackboard normally in Chrome.
+2. Before indexing or optional pack installation, the extension verifies that Blackboard session with a credentialed request.
+3. The extension indexes configured Blackboard domains using the user's existing browser session.
+4. Resource metadata is stored in `resource_index`.
+5. Extracted searchable text is stored in `content_store`.
+6. A user question is normalized and searched through fused local retrieval routes.
+7. A bounded candidate-evidence set is sent to the selected API provider for semantic evidence selection. If the evidence is incomplete or requires careful policy interpretation, the provider may nominate at most one parent document for a bounded additional read.
+8. Evidence from at most five parent documents is sent for synthesized answer generation, citation validation, and bounded repair when needed.
+9. The side panel renders the final cited answer and one expandable source card per parent document.
+
+The result is a retrieval-augmented workflow that keeps Blackboard discovery local while still letting the user ask natural-language questions.
 
 ## Repository Structure
 
@@ -232,9 +238,9 @@ This README is written for a public repository. Before publishing a fork or rele
 
 ## Branch Strategy
 
-- `main`: production-oriented text and document search for Chrome Web Store packaging.
+- `main`: text and document search intended for Chrome Web Store packaging.
 - Feature branches: isolate experimental indexing, transcript, or retrieval behavior until regression checks and manual QA show no degradation to the core text/PDF workflow.
 
 ## License
 
-Add a license before distributing this repository publicly if one has not already been selected.
+This repository does not currently include a project-level LICENSE file.
