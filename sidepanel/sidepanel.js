@@ -132,6 +132,7 @@ const els = {
   apiKeyInput: document.getElementById("apiKeyInput"),
   autoTranscribeInput: document.getElementById("autoTranscribeInput"),
   saveSettingsBtn: document.getElementById("saveSettingsBtn"),
+  removeApiKeyBtn: document.getElementById("removeApiKeyBtn"),
   setupState: document.getElementById("setupState"),
   crawlState: document.getElementById("crawlState"),
   resourceCount: document.getElementById("resourceCount"),
@@ -340,7 +341,11 @@ function legacyTruncationIssueForResults(results) {
     sources: riskyMatches
   };
 }
+let settingsRevision = 0;
+let settingsWriteInProgress = false;
+
 async function refreshAll() {
+  const revision = settingsRevision;
   const [indexResponse, settings] = await Promise.all([sendMessage("GET_INDEX"), loadSettings()]);
   if (!indexResponse.ok) throw new Error(indexResponse.error || "Unable to load index");
   state.resources = (indexResponse.resources || []).filter(isLaunchSearchResource);
@@ -356,7 +361,7 @@ async function refreshAll() {
   invalidateSearchIndexCache();
   state.meta = { ...(indexResponse.meta || {}), ignored_media_count: indexResponse.ignored_media_count || indexResponse.ignoredMediaCount || 0 };
   state.legacyTruncatedResourceIds = legacyTruncationRiskIds(state.meta, state.contentStore, state.resources);
-  state.settings = settings;
+  if (!settingsWriteInProgress && revision === settingsRevision) state.settings = settings;
   render();
   hydrateMissingSearchableContent().catch((error) => console.warn("Content hydration failed", error));
 }
@@ -372,21 +377,59 @@ async function loadSettings() {
   };
 }
 
+function setSettingsWriteInProgress(busy) {
+  settingsWriteInProgress = busy;
+  settingsRevision += 1;
+  for (const input of [els.providerSelect, els.modelInput, els.apiKeyInput, els.saveSettingsBtn]) {
+    input.disabled = busy;
+  }
+  els.removeApiKeyBtn.disabled = busy || !state.settings.hasApiKey;
+}
+
 async function saveSettings() {
+  if (settingsWriteInProgress) return;
   const provider = els.providerSelect.value;
   const model = normalizeModelSetting(provider, els.modelInput.value.trim());
-  const apiKey = els.apiKeyInput.value.trim() || state.settings.apiKey || "";
-  await chrome.storage.local.set({
-    [SETTINGS_KEY]: {
-      provider,
-      model,
-      apiKey
-    }
-  });
-  state.settings = { provider, model, apiKey, hasApiKey: Boolean(apiKey) };
+  // A saved key belongs to its saved provider, never to a newly selected provider.
+  const savedApiKey = provider === state.settings.provider ? state.settings.apiKey : "";
+  const apiKey = els.apiKeyInput.value.trim() || savedApiKey || "";
+  setSettingsWriteInProgress(true);
+  try {
+    await chrome.storage.local.set({ [SETTINGS_KEY]: { provider, model, apiKey } });
+    state.settings = { provider, model, apiKey, hasApiKey: Boolean(apiKey) };
+    els.apiKeyInput.value = "";
+    renderSettings();
+    setStatus("Setup saved locally.");
+  } finally {
+    setSettingsWriteInProgress(false);
+  }
+}
+
+async function removeApiKey() {
+  if (settingsWriteInProgress) return;
+  const { provider, model } = state.settings;
+  setSettingsWriteInProgress(true);
+  try {
+    await chrome.storage.local.set({ [SETTINGS_KEY]: { provider, model, apiKey: "" } });
+    state.settings = { provider, model, apiKey: "", hasApiKey: false };
+    els.apiKeyInput.value = "";
+    renderSettings();
+    setStatus("API key removed here. Reload other open extension panels to clear their cached key.");
+  } finally {
+    setSettingsWriteInProgress(false);
+  }
+}
+
+function handleProviderChange() {
+  if (settingsWriteInProgress) {
+    renderSettings();
+    return;
+  }
+  els.modelInput.value = defaultModel(els.providerSelect.value);
+  // Discard an unsaved key too: it may have been typed for the previous provider.
   els.apiKeyInput.value = "";
-  renderSettings();
-  setStatus("Setup saved locally.");
+  const hasMatchingKey = els.providerSelect.value === state.settings.provider && state.settings.hasApiKey;
+  els.apiKeyInput.placeholder = hasMatchingKey ? "Saved; enter a new key to replace" : "Enter a key for this provider";
 }
 
 function defaultModel(provider) {
@@ -1285,9 +1328,12 @@ function render() {
 }
 
 function renderSettings() {
+  // Background refreshes may reset a draft provider: never carry its typed key over.
+  if (els.providerSelect.value !== (state.settings.provider || "openrouter")) els.apiKeyInput.value = "";
   els.providerSelect.value = state.settings.provider || "openrouter";
   els.modelInput.value = state.settings.model || defaultModel(els.providerSelect.value);
   els.setupState.textContent = state.settings.hasApiKey ? "API key saved" : "local search only";
+  els.removeApiKeyBtn.disabled = settingsWriteInProgress || !state.settings.hasApiKey;
   els.apiKeyInput.placeholder = state.settings.hasApiKey ? "Saved; enter a new key to replace" : "Stored locally in Chrome";
   if (els.restoreDismissedBtn) {
     const ignoredCount = Number(state.meta.ignored_media_count || 0);
@@ -12068,9 +12114,7 @@ els.setupViewBtn.addEventListener("click", () => setView("setup"));
 [els.chatViewBtn, els.setupViewBtn, els.refreshBtn].filter(Boolean).forEach((button) => {
   button.addEventListener("dblclick", resetToDefaultView);
 });
-els.providerSelect.addEventListener("change", () => {
-  els.modelInput.value = defaultModel(els.providerSelect.value);
-});
+els.providerSelect.addEventListener("change", handleProviderChange);
 els.localResourcePickerBtn.addEventListener("click", () => openLocalResourcePicker());
 els.localResourceFileInput.addEventListener("change", () => {
   const target = localResourceReplacementTarget;
@@ -12104,6 +12148,7 @@ els.localResourceDropzone.addEventListener("keydown", (event) => {
 });
 els.addLocalResourcesBtn.addEventListener("click", () => commitLocalResourcePreflight().catch(reportError));
 els.saveSettingsBtn.addEventListener("click", () => saveSettings().catch(reportError));
+els.removeApiKeyBtn.addEventListener("click", () => removeApiKey().catch(reportError));
 els.scanBtn.addEventListener("click", () => scanActiveTab().catch(reportError));
 els.crawlBtn.addEventListener("click", () =>
   crawlSite({ fullReindex: true })
