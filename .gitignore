@@ -6,3 +6,11 @@ dist/
 build/
 *.zip
 .env
+
+# Local dependencies, caches, and credentials
+__pycache__/
+*.py[cod]
+.venv/
+.env.*
+!.env.example
+!.env.sample
